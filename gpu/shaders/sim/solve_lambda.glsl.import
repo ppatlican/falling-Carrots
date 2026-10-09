@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dkch0nokrhkh0"
+path="res://.godot/imported/solve_lambda.glsl-448a4b9d7d7ac8e150dc53d6d441cbd2.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/solve_lambda.glsl"
+dest_files=["res://.godot/imported/solve_lambda.glsl-448a4b9d7d7ac8e150dc53d6d441cbd2.res"]
+
+[params]
+

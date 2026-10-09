@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://du6rcdfv3qt4h"
+path="res://.godot/imported/brush_spawn.glsl-73e8c4e758a253edc15d1bb550029e8b.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/brush_spawn.glsl"
+dest_files=["res://.godot/imported/brush_spawn.glsl-73e8c4e758a253edc15d1bb550029e8b.res"]
+
+[params]
+

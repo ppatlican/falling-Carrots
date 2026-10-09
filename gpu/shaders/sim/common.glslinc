@@ -1,0 +1,188 @@
+// Shared by every particle sim shader: buffer bindings, push constants, helpers.
+// Included after "#version 450". Every shader binds the same uniform set layout
+// (gpu/particle_sim.gd builds it), so a new pass only needs a new .glsl file.
+//
+// Particles are a fixed pool of params.cap slots (struct of arrays). A slot is
+// live when ALIVE is set in mat_flags. Free slots sit on the free_stack.
+// Units: art pixels, seconds. y grows downward.
+//
+// Two index spaces:
+//   slot i    stable particle id, used by brush, predict and hash (pos, pred, vel, mat_flags).
+//   sorted t  position in the cell-sorted list, 0..live-1. hash_scatter copies each live
+//             particle's state into the s_* arrays at its sorted index, so neighbours in
+//             a cell sit next to each other in memory. The solver and velocity passes work
+//             only on s_* arrays; velocity_commit writes the results back to the slots.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// --- Particle state ---------------------------------------------------------------
+layout(set = 0, binding = 0, std430) buffer Pos { vec2 pos[]; };        // position at frame start
+layout(set = 0, binding = 1, std430) buffer Pred { vec2 pred[]; };      // predicted / solved position
+layout(set = 0, binding = 2, std430) buffer Vel { vec2 vel[]; };
+layout(set = 0, binding = 3, std430) buffer MatFlags { uint mat_flags[]; };  // material id | ALIVE
+
+// --- Pool -------------------------------------------------------------------------
+layout(set = 0, binding = 4, std430) buffer FreeStack { uint free_stack[]; };
+// counters[0] free slot count, counters[1] live count (cap - free). Read back for the meter.
+layout(set = 0, binding = 5, std430) buffer Counters { uint counters[]; };
+
+// --- Spatial hash (grid of H-sized cells, rebuilt every frame) ----------------------
+layout(set = 0, binding = 6, std430) buffer CellCount { uint cell_count[]; };  // n_cells + 1
+layout(set = 0, binding = 7, std430) buffer CellStart { uint cell_start[]; };  // exclusive prefix sum
+layout(set = 0, binding = 8, std430) buffer BlockSums { uint block_sums[]; };  // prefix-sum scratch
+layout(set = 0, binding = 9, std430) buffer ParticleCell { uint particle_cell[]; };
+layout(set = 0, binding = 10, std430) buffer ParticleRank { uint particle_rank[]; };  // slot within its cell
+layout(set = 0, binding = 11, std430) buffer Sorted { uint sorted_ids[]; };  // sorted t -> slot i
+
+// --- Solver scratch (sorted index) ------------------------------------------------------
+layout(set = 0, binding = 12, std430) buffer Lambda { float lambda[]; };
+layout(set = 0, binding = 13, std430) buffer Scratch { vec2 scratch[]; };  // position delta, new velocity
+
+// --- Material table (cpu_ref/material_table.gd pack_gpu, 64 bytes each) -------------
+struct Material {
+	vec4 color;
+	vec4 phys;   // density, friction, viscosity, drag
+	vec4 extra;  // wind_coupling, stiffness, conductivity, heat_capacity (later milestones)
+	uvec4 info;  // class, unused x3
+};
+layout(set = 0, binding = 14, std430) buffer Materials { Material materials[]; };
+
+// --- Particle state in sorted order (written by hash_scatter) --------------------------
+layout(set = 0, binding = 15, std430) buffer SPred { vec2 s_pred[]; };
+layout(set = 0, binding = 16, std430) buffer SPos { vec2 s_pos[]; };
+layout(set = 0, binding = 17, std430) buffer SVel { vec2 s_vel[]; };
+layout(set = 0, binding = 18, std430) buffer SMat { uint s_mat[]; };
+
+// --- Output -------------------------------------------------------------------------
+layout(set = 0, binding = 19, rgba8) uniform image2D out_image;
+
+// Same layout as ParticleSim._push() in gpu/particle_sim.gd. 96 bytes.
+layout(push_constant, std430) uniform Params {
+	vec2 brush_pos;
+	float brush_radius;
+	uint brush_count;     // particles requested this frame
+	uint brush_op;        // BRUSH_*
+	uint brush_material;
+	uint block_cols;      // BRUSH_BLOCK: particles per row
+	uint cap;             // pool size
+	vec2 world_size;
+	uint grid_w;
+	uint grid_h;
+	float dt;
+	float gravity;
+	float max_step;       // largest move per step
+	float rest_density;   // kernel sum at rest spacing
+	uint frame;
+	uint view_flags;      // VIEW_*
+	float h;              // kernel radius and cell size
+	float spacing;        // rest spacing and contact distance
+	float lambda_eps;
+	float scorr_k;
+	float contact_relax;
+	uint n_cells;         // grid_w * grid_h
+} params;
+
+const uint ALIVE = 0x100u;
+const uint MAT_MASK = 0xFFu;
+
+const uint CLASS_LIQUID = 0u;
+const uint CLASS_POWDER = 1u;
+
+const uint BRUSH_NONE = 0u;
+const uint BRUSH_CIRCLE = 1u;
+const uint BRUSH_BLOCK = 2u;
+const uint BRUSH_ERASE = 3u;
+
+const uint VIEW_HASH = 1u;
+
+// Prefix sum: 64 threads x 4 elements per workgroup.
+const uint SCAN_BLOCK = 256u;
+
+const float PI = 3.14159265;
+const float MIN_DIST = 1e-4;
+
+// Slot space.
+bool is_alive(uint i) { return (mat_flags[i] & ALIVE) != 0u; }
+
+// Sorted space.
+uint s_material(uint t) { return s_mat[t] & MAT_MASK; }
+uint s_class(uint t) { return materials[s_material(t)].info.x; }
+
+ivec2 cell_coord(vec2 p) {
+	ivec2 c = ivec2(floor(p / params.h));
+	return clamp(c, ivec2(0), ivec2(int(params.grid_w) - 1, int(params.grid_h) - 1));
+}
+
+uint cell_index(ivec2 c) { return uint(c.y) * params.grid_w + uint(c.x); }
+
+// Keeps a particle inside the world. Each slot gets its own inset (0.5 to 0.75
+// spacing) so wall clamping can't stack particles on exactly the same point.
+vec2 clamp_to_world(vec2 p, uint slot) {
+	float r = params.spacing * (0.5 + 0.25 * float(slot % 7u) / 6.0);
+	return clamp(p, vec2(r), params.world_size - vec2(r));
+}
+
+// "lowbias32" integer hash, for per-particle randomness.
+uint hash_u32(uint x) {
+	x ^= x >> 16;
+	x *= 0x7feb352du;
+	x ^= x >> 15;
+	x *= 0x846ca68bu;
+	x ^= x >> 16;
+	return x;
+}
+
+float hash_unit(uint x) { return float(hash_u32(x) & 0xFFFFFFu) / 16777216.0; }
+
+// --- Kernels (keep in sync with cpu_ref/particle_step.gd) ----------------------------
+
+float poly6(float r2) {
+	float h2 = params.h * params.h;
+	if (r2 >= h2) {
+		return 0.0;
+	}
+	float d = h2 - r2;
+	return 4.0 / (PI * pow(params.h, 8.0)) * d * d * d;
+}
+
+// Unit vector from p_j to p_i. Coincident particles (walls and corners clamp them
+// together) get a fixed direction per pair, opposite for i and j, so they separate.
+vec2 pair_dir(vec2 rv, float r, uint i, uint j) {
+	if (r > MIN_DIST) {
+		return rv / r;
+	}
+	uint a = min(i, j);
+	uint b = max(i, j);
+	float angle = float(((a * 7919u) ^ (b * 104729u)) & 1023u) / 1024.0 * 2.0 * PI;
+	vec2 dir = vec2(cos(angle), sin(angle));
+	return i < j ? dir : -dir;
+}
+
+// Spiky kernel gradient with respect to p_i, for rv = p_i - p_j.
+vec2 spiky_grad(vec2 rv, uint i, uint j) {
+	float r = length(rv);
+	if (r >= params.h) {
+		return vec2(0.0);
+	}
+	float d = params.h - r;
+	return pair_dir(rv, r, i, j) * (-30.0 / (PI * pow(params.h, 5.0)) * d * d);
+}
+
+// Neighbour loop over the 3x3 cells around p, in sorted space. Usage:
+//   FOR_EACH_NEIGHBOUR(p) { uint j = k; ... } END_NEIGHBOURS
+// Includes the particle itself: skip it with `if (j == t) continue;`.
+#define FOR_EACH_NEIGHBOUR(p) \
+	ivec2 nb_c = cell_coord(p); \
+	for (int nb_dy = -1; nb_dy <= 1; nb_dy++) { \
+		for (int nb_dx = -1; nb_dx <= 1; nb_dx++) { \
+			ivec2 nb_cc = nb_c + ivec2(nb_dx, nb_dy); \
+			if (nb_cc.x < 0 || nb_cc.y < 0 || nb_cc.x >= int(params.grid_w) || nb_cc.y >= int(params.grid_h)) continue; \
+			uint nb_cell = cell_index(nb_cc); \
+			for (uint k = cell_start[nb_cell]; k < cell_start[nb_cell + 1u]; k++)
+#define END_NEIGHBOURS }}
+
+// Solver threads: thread t handles sorted particle t. False past the live count.
+bool sorted_particle(out uint t) {
+	t = gl_GlobalInvocationID.x;
+	return t < counters[1];
+}

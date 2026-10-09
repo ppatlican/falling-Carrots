@@ -1,0 +1,64 @@
+// Behaviour class: LIQUID. PBF density constraint (Macklin & Mueller 2013).
+// Mirror: cpu_ref/particle_step.gd _lambda / _liquid_delta / _xsph.
+// All indices are sorted indices (see common.glslinc).
+// Density is normalised (1.0 = rest). Every neighbour adds to density, so liquids
+// are pushed out of powder too, but only liquid neighbours move with the constraint.
+// The constraint only pushes apart (C >= 0), which keeps free surfaces stable.
+
+// Anti-clumping / surface-tension term (n = 4, dq = 0.2 h).
+float scorr(float r2) {
+	float w = poly6(r2) / poly6(0.04 * params.h * params.h);
+	return -params.scorr_k * w * w * w * w;
+}
+
+float liquid_lambda(uint t) {
+	vec2 pt = s_pred[t];
+	float density = poly6(0.0);
+	vec2 grad_t = vec2(0.0);
+	float grad_sum = 0.0;
+	FOR_EACH_NEIGHBOUR(pt) {
+		uint j = k;
+		if (j == t) continue;
+		vec2 rv = pt - s_pred[j];
+		float r2 = dot(rv, rv);
+		if (r2 >= params.h * params.h) continue;
+		density += poly6(r2);
+		vec2 g = spiky_grad(rv, t, j) / params.rest_density;
+		grad_t += g;
+		if (s_class(j) == CLASS_LIQUID) {
+			grad_sum += dot(g, g);
+		}
+	} END_NEIGHBOURS
+	float c = max(density / params.rest_density - 1.0, 0.0);
+	return -c / (grad_sum + dot(grad_t, grad_t) + params.lambda_eps);
+}
+
+vec2 liquid_delta(uint t) {
+	vec2 pt = s_pred[t];
+	float lt = lambda[t];
+	vec2 d = vec2(0.0);
+	FOR_EACH_NEIGHBOUR(pt) {
+		uint j = k;
+		if (j == t) continue;
+		vec2 rv = pt - s_pred[j];
+		float r2 = dot(rv, rv);
+		if (r2 >= params.h * params.h) continue;
+		float lj = s_class(j) == CLASS_LIQUID ? lambda[j] : 0.0;
+		d += (lt + lj + scorr(r2)) * spiky_grad(rv, t, j);
+	} END_NEIGHBOURS
+	return d / params.rest_density;
+}
+
+// XSPH viscosity: blend toward liquid neighbours' velocity. Material viscosity is the blend.
+vec2 liquid_xsph(uint t) {
+	vec2 pt = s_pred[t];
+	vec2 vt = s_vel[t];
+	vec2 sum = vec2(0.0);
+	FOR_EACH_NEIGHBOUR(pt) {
+		uint j = k;
+		if (j == t || s_class(j) != CLASS_LIQUID) continue;
+		vec2 rv = pt - s_pred[j];
+		sum += (s_vel[j] - vt) * poly6(dot(rv, rv));
+	} END_NEIGHBOURS
+	return sum * (materials[s_material(t)].phys.z / params.rest_density);
+}

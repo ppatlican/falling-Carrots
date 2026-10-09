@@ -1,0 +1,42 @@
+{
+	"materials": [
+		{
+			"id": 0,
+			"name": "sand",
+			"class": "powder",
+			"color": "#d9b26b",
+			"density": 1.6,
+			"friction": 0.6,
+			"viscosity": 0.0,
+			"drag": 0.01,
+			"wind_coupling": 0.1,
+			"stiffness": 0.0,
+			"conductivity": 0.2,
+			"heat_capacity": 0.8,
+			"ignition_temp": null,
+			"boil_temp": null,
+			"melt_temp": null,
+			"lifetime": 0.0,
+			"tags": ["granular"]
+		},
+		{
+			"id": 1,
+			"name": "water",
+			"class": "liquid",
+			"color": "#3d7fd9",
+			"density": 1.0,
+			"friction": 0.0,
+			"viscosity": 0.05,
+			"drag": 0.0,
+			"wind_coupling": 0.05,
+			"stiffness": 0.0,
+			"conductivity": 0.6,
+			"heat_capacity": 4.2,
+			"ignition_temp": null,
+			"boil_temp": 100.0,
+			"melt_temp": 0.0,
+			"lifetime": 0.0,
+			"tags": []
+		}
+	]
+}

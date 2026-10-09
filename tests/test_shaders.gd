@@ -15,6 +15,25 @@ func test_all_compute_shaders_compile() -> void:
 			failures.append(e)
 
 
+## Godot re-imports a .glsl only when that file changes, not when a .glslinc it
+## includes changes. A stale import compiles fine but has the old bindings, so
+## fail when any include in a shader's folder is newer than the shader's import.
+## Fix: in the editor FileSystem dock select the .glsl files > Reimport, or delete
+## .godot/imported/*.glsl-* and re-open the project (touching the files does not help:
+## Godot compares content hashes).
+func test_shader_imports_newer_than_includes() -> void:
+	for path in _glsl_files("res://gpu/shaders"):
+		var dir := path.get_base_dir()
+		var config := ConfigFile.new()
+		if config.load(path + ".import") != OK:
+			failures.append("%s has no .import file" % path)
+			continue
+		var imported_time := FileAccess.get_modified_time(config.get_value("remap", "path"))
+		for file in DirAccess.get_files_at(dir):
+			if file.ends_with(".glslinc") and FileAccess.get_modified_time(dir + "/" + file) > imported_time:
+				failures.append("%s is older than %s: re-import the shaders" % [path, file])
+
+
 func _glsl_files(dir: String) -> PackedStringArray:
 	var out := PackedStringArray()
 	for sub in DirAccess.get_directories_at(dir):

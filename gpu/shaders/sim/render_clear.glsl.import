@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://btaqj8a1r0qbe"
+path="res://.godot/imported/render_clear.glsl-85dd1d43e19c1285a17b32cab576293c.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/render_clear.glsl"
+dest_files=["res://.godot/imported/render_clear.glsl-85dd1d43e19c1285a17b32cab576293c.res"]
+
+[params]
+

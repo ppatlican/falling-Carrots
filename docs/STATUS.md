@@ -1,47 +1,73 @@
 # Status
 
-Last updated: 2026-10-09. Current milestone: **1 (Project and tooling): code complete, not yet verified on hardware.**
+Last updated: 2026-10-09. Current milestone: **2 (GPU liquid + powder + brush): code complete, run on the PC GPU, not yet measured on a phone.**
 
-## Done (Milestone 1)
-- Project settings: Mobile renderer, Vulkan on Windows, no OpenGL fallback, 640×360 base viewport letterboxed (`stretch/aspect=keep`), nearest-neighbor filtering. Input actions `draw`, `erase`, `grab`, `pause`, `clear`, `toggle_debug` (F3).
-- `config.json` (`particle_cap` 50000, `solver_iterations` 4), loaded and clamped by `core/game_config.gd`.
-- `gpu/compute_context.gd`: main-device compute wrapper (see SPEC 2.7).
-- Compute smoke test (`main.tscn`): two passes over 50k elements drawn to the screen through `Texture2DRD`, plus an async readback compared against a CPU hash mirror.
-- Debug overlay (F3): FPS, frame time, per-pass CPU/GPU µs, particle count against the cap. The hash grid, wind and temperature toggles are wired up but show "n/a".
-- Error screen when no RenderingDevice is available or a shader fails to compile.
-- `cpu_ref/` stubs and a headless test runner: `tests/run_tests.gd`.
+## Done (Milestone 2)
+- **Material table:** `data/materials.json` holds sand (powder) and water (liquid).
+  - Loaded, validated and packed into a GPU buffer by `cpu_ref/material_table.gd`.
+  - Standalone validator: `tools/validate_materials.gd`.
+- **Particle pool:** fixed cap from `config.json`, with a free-list (stack plus free count).
+  - Spawning can't exceed the cap, and nothing is deleted except by the eraser.
+  - CPU mirror: `cpu_ref/particle_pool.gd`.
+- **Spatial hash:** clear, count, a 3-dispatch prefix sum, then scatter.
+  - The scatter copies particle state into cell order, and the solver runs on that sorted copy (SPEC 2.1).
+- **Liquid:** PBF density constraint plus s_corr and XSPH viscosity (`gpu/shaders/sim/liquid.glslinc`).
+- **Powder:** mass-weighted contacts with static/kinetic friction, plus floor friction (`powder.glslinc`). Sand sinks through water.
+- **Brush:**
+  - Left mouse adds the selected material and right mouse erases any material.
+  - Toolbar has Sand/Water, "+10k sand", "+10k water" (benchmark fills) and Clear.
+  - Capacity meter turns red and reads FULL at the cap, and adding stops.
+- **Rendering:** plain 2×2 colored points into a 640×360 texture.
+- **Debug overlay (F3):**
+  - GPU and CPU time per pass, averaged over 1 s, plus a TOTAL row.
+  - Working hash-grid view, which shades cells by particle count.
+  - "GPU check" button: reads back the pool and hash once, verifies they agree, and reports the fullest cell.
+- **Scenes:** `main.tscn` is now the sim. The M1 smoke test moved to `debug/smoke_test.tscn`.
+- **Fixes made along the way:**
+  - The M1 overlay labelled GPU times as µs, but they are nanoseconds; it now converts.
+  - The test runner now fails a test file that doesn't parse (it used to skip it silently).
 
 ## Verified
 | What | Where | Result |
 |---|---|---|
-| Headless tests (config, input map, renderer settings, shaders compile, hash mirror, placeholder) | WSL → Godot 4.7.1 console, `--headless` | 8 passed, 0 failed |
-| Broken shader is caught | headless | test fails with the compiler error |
-| Smoke scene runs windowed | PC, via MCP | **Not verified**: the game launched, but the MCP runtime tools failed auth (see known issues) |
-| Anything on real hardware | PC / phone | **Not yet** |
+| CPU tests (table, validator, GPU packing, free-list, CPU particle step, shaders compile, stale-import guard, scripts load) | WSL → Godot 4.7.1 console, `--headless` | 15 passed, 0 failed |
+| Table validator | headless | `materials.json OK: 2 materials` |
+| Sim on a real GPU: block fills, circle brush (+1440 over 60 frames, as expected), erase, cap, GPU check | PC, RTX 3080 Ti, driven by a temporary script | All OK. GPU check consistent at 20k, 21,440, 30k, 40k, 50k and 17,600 live |
+| Manual play with a mouse | PC | **Not yet** (owner) |
+| Phone | — | **Not yet** |
 
 Run tests: `Godot_v4.7.1-stable_win64_console.exe --headless --path <project> --script res://tests/run_tests.gd`
+Run validator: `... --headless --path <project> --script res://tools/validate_materials.gd`
 
-## Measured numbers
-None yet. Fill in from the overlay after a hardware run:
+## Measured numbers (GPU µs per pass, 1 s average)
+`solver_iterations` 4, cap 50k. The PC rows come from the automated run, not settled long-term.
 
-| Device | GPU (from `[compute] device` log line) | Particles | Frame ms | smoke_fill GPU µs | smoke_draw GPU µs | Readback |
-|---|---|---|---|---|---|---|
-| PC | | 0 (smoke test: 50k elements) | | | | |
-| Phone | | 0 (smoke test: 50k elements) | | | | |
+| Device | Particles | FPS | predict | hash | solve | velocity | render | TOTAL GPU |
+|---|---|---|---|---|---|---|---|---|
+| PC RTX 3080 Ti | 20k (falling blocks) | 165 (vsync) | 5 | 10 | 45 | 5 | 7 | ~72 |
+| PC RTX 3080 Ti | 30k water, settled | 165 | 9 | 28 | 826 | 143 | 65 | ~1070 |
+| PC RTX 3080 Ti | 50k (30k sand + 20k water), settling | 164 | 9 | 26 | 1253 | 161 | 45 | ~1495 |
+| Phone | | | | | | | | |
+
+Solve dominates once particles are settled and packed, so measure the settled state.
 
 ## Hardware checklist (PC and phone)
-1. A moving orange wave in a 16:9 letterboxed view. A frozen image means compute isn't running.
-2. Overlay shows "smoke readback OK: 50000/50000 values match".
-3. GPU µs columns show numbers, not `-`. A `-` means timestamps aren't working.
-4. F3 toggles the overlay, and Space pauses the wave.
-5. Log has the `[compute] device ...` line, with no leaked-RID warnings on quit.
-6. Phone: forcing the Compatibility renderer shows the error screen, not a crash.
+1. Drawing with left mouse/tap adds the selected material; right mouse erases any material.
+2. Sand sinks under water, and water spreads out and goes calm.
+3. "+10k" buttons add a block. The meter turns red and reads FULL at the cap, and drawing then adds nothing.
+4. "GPU check" in the overlay prints `GPU check OK ...`. A FAILED line is a bug: send it.
+5. The overlay GPU column shows numbers, not `-`.
+6. The log has no errors, and no leaked-RID warnings on quit.
 
 ## Known issues
-- **MCP runtime tools fail** with "registry entry ... has no token path; relaunch the editor". Suspected (unconfirmed) cause: the headless test runs also start the MCP addon's runtime autoload, which overwrites the registry entry. Relaunch the editor. If it recurs, the test runner should keep that autoload from starting.
-- **Stale editor state:** the editor that was open during Milestone 1 still holds the old project settings (main scene `node_2d.tscn`) and keeps re-saving `node_2d.tscn`, which is deleted from git. Close and reopen the editor before saving there, and delete the stray `node_2d.tscn`.
-- `config.json` is not auto-exported: the Android preset needs `*.json` in its non-resource include filter.
-- Overlay pass-timing columns use a proportional font, so alignment is approximate.
+- **Compression under load.** With 4 iterations, deep water is about 1.5× compressed on average and up to about 5× in the floor row. Sand under a water column is about 3× compressed. This costs solver time (more neighbors) and will matter for buoyancy in M3. Options: more iterations or substeps, boundary density at walls, or a unilateral density constraint for powders.
+- **Water looks noisy** as plain 2×2 points, with dark gaps and some spray when blocks land. Metaball rendering is M5.
+- The fixed 1/60 s step per frame means a slow device runs the sim in slow motion rather than unstably. That's intended.
+- **MCP runtime tools fail** with "registry entry ... has no token path; relaunch the editor". Suspected cause: headless test runs also start the MCP addon's runtime autoload. If it recurs, the test runner should keep that autoload from starting.
+- **Stale editor state:** delete the stray `node_2d.tscn` in the main checkout, and reopen the editor before saving.
+- **Shader includes:** after editing a `.glslinc`, reimport the `.glsl` files (SPEC 2.7). `test_shaders.gd` catches a stale import.
+- `config.json` and `data/materials.json` are not auto-exported. The Android preset needs `*.json` in its non-resource include filter.
+- No keyboard shortcuts for materials (the toolbar only), so input stays inside the action layer.
 
-## Next: Milestone 2 (GPU liquid + powder + brush)
-Particle pool and free-list, spatial hash (count, prefix-sum, scatter), PBF liquid, powder friction, and a brush using `draw`/`erase`. Sand and water should interact. **Measure the particle cap on a phone.** That measurement proves the performance budget, and its numbers go in the table above.
+## Next: Milestone 3 (cluster solids)
+Shape-matched carrot boxes colliding and floating or sinking in water and sand. Start by deciding how to handle the compression above, because buoyancy depends on it.

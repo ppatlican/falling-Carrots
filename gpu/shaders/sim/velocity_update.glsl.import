@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://catmh2mseup8s"
+path="res://.godot/imported/velocity_update.glsl-dbe8a6de509c5cee02d10e8e151c46dd.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/velocity_update.glsl"
+dest_files=["res://.godot/imported/velocity_update.glsl-dbe8a6de509c5cee02d10e8e151c46dd.res"]
+
+[params]
+

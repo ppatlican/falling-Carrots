@@ -35,7 +35,7 @@ var _passes: Array = []
 ## Timing results, written on the render thread and read on the main thread.
 var _mutex := Mutex.new()
 var _cpu_us := {}  # pass name -> CPU microseconds spent recording the pass
-var _gpu_us := {}  # pass name -> GPU microseconds (lags a frame or two)
+var _gpu_us := {}  # pass name -> GPU microseconds, float (lags a frame or two)
 
 
 func _init() -> void:
@@ -72,13 +72,20 @@ static func groups_for(count: int) -> int:
 	return ceili(float(count) / WORKGROUP_SIZE)
 
 
-## Checks device limits for our 64-thread 1D dispatches. Returns "" if OK, else the problem.
-func check_limits_rt(max_groups_x: int) -> String:
+## Checks device limits for our 64-thread 1D dispatches, shared memory and push
+## constants. Returns "" if OK, else the problem.
+func check_limits_rt(max_groups_x: int, push_bytes := 16, shared_bytes := 0) -> String:
 	var size_x := rd.limit_get(RenderingDevice.LIMIT_MAX_COMPUTE_WORKGROUP_SIZE_X)
 	var invocations := rd.limit_get(RenderingDevice.LIMIT_MAX_COMPUTE_WORKGROUP_INVOCATIONS)
 	var count_x := rd.limit_get(RenderingDevice.LIMIT_MAX_COMPUTE_WORKGROUP_COUNT_X)
-	print("[compute] device '%s': workgroup size x %d, invocations %d, count x %d (need %d)"
-			% [rd.get_device_name(), size_x, invocations, count_x, max_groups_x])
+	var max_push := rd.limit_get(RenderingDevice.LIMIT_MAX_PUSH_CONSTANT_SIZE)
+	var max_shared := rd.limit_get(RenderingDevice.LIMIT_MAX_COMPUTE_SHARED_MEMORY_SIZE)
+	print("[compute] device '%s': workgroup size x %d, invocations %d, count x %d (need %d), push %d B, shared %d B"
+			% [rd.get_device_name(), size_x, invocations, count_x, max_groups_x, max_push, max_shared])
+	if max_push < push_bytes:
+		return "GPU push constant limit too small: need %d bytes, device allows %d" % [push_bytes, max_push]
+	if max_shared < shared_bytes:
+		return "GPU shared memory limit too small: need %d bytes, device allows %d" % [shared_bytes, max_shared]
 	if size_x < WORKGROUP_SIZE or invocations < WORKGROUP_SIZE:
 		return "GPU workgroup limit too small: need %d threads, device allows %d (x) / %d (total)" \
 				% [WORKGROUP_SIZE, size_x, invocations]
@@ -141,6 +148,11 @@ func create_uniform_set_rt(name: String, pipeline_name: String, set_index: int, 
 	return rid
 
 
+## Writes bytes into a buffer. Render thread, between frames (not inside a compute list).
+func update_buffer_rt(name: String, offset: int, data: PackedByteArray) -> Error:
+	return rd.buffer_update(_buffers[name], offset, data.size(), data)
+
+
 func buffer(name: String) -> RID:
 	return _buffers.get(name, RID())
 
@@ -173,6 +185,20 @@ func set_push_rt(pass_name: String, push: PackedByteArray) -> void:
 				d.push = push
 
 
+## Sets the same push constant bytes on every dispatch of every pass.
+func set_push_all_rt(push: PackedByteArray) -> void:
+	for p in _passes:
+		for d in p.dispatches:
+			d.push = push
+
+
+## Changes one dispatch's workgroup count for this and later frames. 0 skips it.
+func set_groups_rt(pass_name: String, dispatch_index: int, groups_x: int) -> void:
+	for p in _passes:
+		if p.name == pass_name:
+			p.dispatches[dispatch_index].groups_x = groups_x
+
+
 ## Records all passes for this frame. Call once per frame on the render thread.
 func record_frame_rt() -> void:
 	_collect_timestamps_rt()
@@ -181,10 +207,13 @@ func record_frame_rt() -> void:
 	for p in _passes:
 		var t0 := Time.get_ticks_usec()
 		var list := rd.compute_list_begin()
-		for i in p.dispatches.size():
-			var d: Dictionary = p.dispatches[i]
-			if i > 0:
+		var first := true
+		for d in p.dispatches:
+			if d.groups_x <= 0:
+				continue
+			if not first:
 				rd.compute_list_add_barrier(list)
+			first = false
 			rd.compute_list_bind_compute_pipeline(list, d.pipeline)
 			rd.compute_list_bind_uniform_set(list, d.uniform_set, 0)
 			if not d.push.is_empty():
@@ -209,7 +238,8 @@ func _collect_timestamps_rt() -> void:
 			continue
 		var t := rd.get_captured_timestamp_gpu_time(i)
 		if ts_name != TS_BEGIN and prev_time >= 0:
-			gpu[ts_name.trim_prefix(TS_PREFIX)] = t - prev_time
+			# GPU timestamps are nanoseconds (Vulkan driver); report microseconds.
+			gpu[ts_name.trim_prefix(TS_PREFIX)] = (t - prev_time) / 1000.0
 		prev_time = t
 	if gpu.is_empty():
 		return

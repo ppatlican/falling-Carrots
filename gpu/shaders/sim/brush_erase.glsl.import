@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://hivurobmuap6"
+path="res://.godot/imported/brush_erase.glsl-aad7687a8d7e5890d57da3563da8172b.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/brush_erase.glsl"
+dest_files=["res://.godot/imported/brush_erase.glsl-aad7687a8d7e5890d57da3563da8172b.res"]
+
+[params]
+

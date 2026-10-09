@@ -1,0 +1,42 @@
+// Behaviour class: POWDER. Frictional particle contacts.
+// Mirror: cpu_ref/particle_step.gd _contact_delta. All indices are sorted indices.
+// Any pair closer than `spacing` where at least one side is a powder is pushed apart,
+// mass-weighted by material density (heavy sand sinks through water). Powders also get
+// static/kinetic friction on their relative sideways motion this step. The sum is
+// scaled by contact_relax. It is NOT averaged over the contact count: averaging let
+// deep sand piles crush to ~8x rest density under water (Milestone 2 measurement).
+
+vec2 contact_delta(uint t) {
+	Material mt = materials[s_material(t)];
+	bool t_powder = mt.info.x == CLASS_POWDER;
+	vec2 pt = s_pred[t];
+	vec2 move_t = pt - s_pos[t];
+	vec2 sum = vec2(0.0);
+	FOR_EACH_NEIGHBOUR(pt) {
+		uint j = k;
+		if (j == t) continue;
+		Material mj = materials[s_material(j)];
+		if (!t_powder && mj.info.x != CLASS_POWDER) continue;  // liquid-liquid: density constraint
+		vec2 rv = pt - s_pred[j];
+		float dist = length(rv);
+		if (dist >= params.spacing) continue;
+
+		vec2 normal = pair_dir(rv, dist, t, j);
+		float pen = params.spacing - dist;
+		float w = mj.phys.x / (mt.phys.x + mj.phys.x);
+		sum += w * pen * normal;
+
+		float mu = min(mt.phys.y, mj.phys.y);
+		if (mu > 0.0) {
+			vec2 rel = move_t - (s_pred[j] - s_pos[j]);
+			vec2 tangent = rel - dot(rel, normal) * normal;
+			float t_len = length(tangent);
+			if (t_len < mu * pen) {
+				sum -= w * tangent;  // static friction: cancel the slide
+			} else if (t_len > 1e-6) {
+				sum -= w * tangent * min(0.8 * mu * pen / t_len, 1.0);  // kinetic
+			}
+		}
+	} END_NEIGHBOURS
+	return sum * params.contact_relax;
+}

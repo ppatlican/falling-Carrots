@@ -21,6 +21,7 @@ One unified GPU particle solver (Position-Based Dynamics) plus two grids.
 - Struct-of-arrays in storage buffers: position, previous position, velocity, material ID, temperature, lifetime, cluster ID, flags.
 - Fixed pool with a hard cap and a free-list. When the pool is full, brushing stops adding particles and a UI meter shows capacity. Nothing is ever silently deleted. Gas and fire particles expire by lifetime, which frees slots.
 - One spatial hash grid, rebuilt every frame (count, prefix-sum, scatter), is shared by all neighbor queries.
+- Slots are stable particle IDs. The scatter step also copies each live particle's state into cell-sorted arrays, and the solver and velocity passes work only on those, so neighbors are contiguous in memory. A commit pass writes results back to the slots. (Decided in Milestone 2: neighbor reads through slot indices were about 2× slower on a settled pool.)
 
 ### 2.2 Behavior classes
 Each material belongs to exactly one class. New classes are the only thing that needs shader changes.
@@ -68,15 +69,18 @@ Buoyancy comes from per-material density in the density-constraint and contact r
 - Each pass is its own compute list followed by `capture_timestamp()`, because timestamps can't be captured inside a list that already has dispatches. The engine inserts barriers between lists. Dependent dispatches inside one pass use `compute_list_add_barrier()`.
 - Shaders are `.glsl` files (`#[compute]`, `#version 450`) loaded via `RDShaderFile.get_spirv()`. Check both `base_error` and `compile_error_compute` and fail loudly with an on-screen error.
 - Use 64-thread 1D workgroups. Check `LIMIT_MAX_COMPUTE_WORKGROUP_SIZE_X`, `_INVOCATIONS` and `_COUNT_X` at startup against the dispatch needed for `particle_cap`. There is no limit constant for maximum storage buffer size.
-- GPU readback is debug-only and always `buffer_get_data_async()`. `buffer_get_data()` stalls the GPU.
+- GPU readback is always `buffer_get_data_async()`. `buffer_get_data()` stalls the GPU. Readback is debug-only, with one exception: a 16-byte pool counter is read back every frame for the capacity meter (it lags 1–2 frames; the GPU enforces the cap on its own).
+- GPU timestamps (`get_captured_timestamp_gpu_time`) are **nanoseconds** (checked in the Vulkan driver source). The overlay shows microseconds.
+- Shared GLSL goes in `.glslinc` files pulled in with `#include "name.glslinc"` (relative path; verified to compile in 4.7.1). Godot does **not** re-import a `.glsl` when only an included file changes, and touching the file doesn't help (it compares content hashes). Reimport from the editor, or delete `.godot/imported/*.glsl-*`. `test_shaders.gd` fails on a stale import.
+- All sim kernels share one binding layout (`gpu/shaders/sim/common.glslinc`) and get the same full uniform set; the engine ignores bindings a shader doesn't use (checked in `uniform_set_create`). Push constants must match the pipeline's size exactly, so every kernel reads the shared `Params` block (96 bytes, under the 128-byte portable limit).
 - No RenderingDevice (Compatibility renderer, headless, no Vulkan) means an error screen, not a fallback. `fallback_to_opengl3` is off, and Windows uses Vulkan, not D3D12.
 - Tunables (`particle_cap`, `solver_iterations`) live in `res://config.json`. Export presets must include `*.json` in the non-resource filter.
 
 ## 3. Material system (extensibility)
 
-**One data file** (JSON or CSV) with a hard cap of 64 materials. One row per material:
+**One data file**, `data/materials.json` (`{"materials": [row, ...]}`), with a hard cap of 64 materials. The `id` (0–63) is the GPU table index. One row per material:
 
-`id, name, class, color/texture_id, density, friction, viscosity, drag, wind_coupling, stiffness (clusters), conductivity, heat_capacity, ignition_temp, boil/melt_temp, lifetime (gas), tags`
+`id, name, class, color (HTML string; texture_id later), density, friction, viscosity, drag, wind_coupling, stiffness (clusters), conductivity, heat_capacity, ignition_temp, boil_temp, melt_temp (number or null), lifetime (gas), tags`
 
 **Reactions** go in a separate rule list. Each rule has:
 - a trigger: contact between two materials, or a temperature threshold

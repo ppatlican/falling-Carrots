@@ -12,7 +12,7 @@ func _initialize() -> void:
 	var failed := 0
 	for file in _test_files():
 		var script: GDScript = load(TEST_DIR + file)
-		if script == null:
+		if script == null or not script.can_instantiate():
 			print("FAIL %s: could not load" % file)
 			failed += 1
 			continue

@@ -36,3 +36,12 @@ func test_renderer_settings() -> void:
 	expect_eq(s.call("display/window/size/viewport_width"), 640, "base width")
 	expect_eq(s.call("display/window/size/viewport_height"), 360, "base height")
 	expect_eq(s.call("rendering/textures/canvas_textures/default_texture_filter"), 0, "nearest filter")
+
+
+## GPU host code can't run headless, so at least make sure every game script parses.
+func test_game_scripts_load() -> void:
+	for dir in ["res://", "res://core", "res://cpu_ref", "res://debug", "res://gpu", "res://ui", "res://tools"]:
+		for file in DirAccess.get_files_at(dir):
+			if file.ends_with(".gd"):
+				var path: String = dir.path_join(file)
+				expect(load(path) != null, "script %s failed to load" % path)

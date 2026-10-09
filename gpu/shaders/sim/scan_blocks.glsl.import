@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cckc02tyain5c"
+path="res://.godot/imported/scan_blocks.glsl-c0f790fc2544bad9fbae10a8188f75c4.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/scan_blocks.glsl"
+dest_files=["res://.godot/imported/scan_blocks.glsl-c0f790fc2544bad9fbae10a8188f75c4.res"]
+
+[params]
+

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dxhxu72bvxi75"
+path="res://.godot/imported/solve_delta.glsl-6c26589e0d48ec67451ea826a021ef01.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/solve_delta.glsl"
+dest_files=["res://.godot/imported/solve_delta.glsl-6c26589e0d48ec67451ea826a021ef01.res"]
+
+[params]
+

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://djqi6hpfjwh36"
+path="res://.godot/imported/render_points.glsl-ac4a6ad5c2892acc29c86f3d4ba58ea3.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/render_points.glsl"
+dest_files=["res://.godot/imported/render_points.glsl-ac4a6ad5c2892acc29c86f3d4ba58ea3.res"]
+
+[params]
+
