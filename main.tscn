@@ -1,0 +1,18 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://main.gd" id="1_main"]
+[ext_resource type="Script" path="res://debug/debug_overlay.gd" id="2_overlay"]
+[ext_resource type="Script" path="res://debug/error_screen.gd" id="3_error"]
+
+[node name="Main" type="Node2D"]
+script = ExtResource("1_main")
+
+[node name="SmokeView" type="Sprite2D" parent="."]
+position = Vector2(320, 180)
+scale = Vector2(1.5, 1.5)
+
+[node name="DebugOverlay" type="CanvasLayer" parent="."]
+script = ExtResource("2_overlay")
+
+[node name="ErrorScreen" type="CanvasLayer" parent="."]
+script = ExtResource("3_error")

@@ -1,0 +1,4 @@
+{
+	"particle_cap": 50000,
+	"solver_iterations": 4
+}
