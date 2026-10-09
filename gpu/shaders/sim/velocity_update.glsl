@@ -5,6 +5,7 @@
 // Powders: the solver's push-out may stop a grain but not launch it faster than
 // max_separation in the push direction (keeps settled sand from hopping).
 
+// common.glslinc stamp: Params 108 B, v2. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {
