@@ -15,9 +15,9 @@
 // density correction overshoots, and the overshoot became upward speed: deep water
 // churned at ~37 px/s (30k) and ~60 px/s (50k), with jets of 150-350 px/s up the side
 // walls. A cap of 0 would stop the water levelling, since the slow sideways push from a
-// higher surface starts from rest. See liquid.glslinc for the other half of the fix.
+// higher surface starts from rest. Depth pressure comes from the grid (hydro.glslinc).
 
-// common.glslinc stamp: Params 108 B, v4. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v5. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Largest move per step (px) that still counts as resting. Below the free-fall move of

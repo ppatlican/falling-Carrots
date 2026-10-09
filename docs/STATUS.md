@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-09. Current milestone: **2 (GPU liquid + powder + brush): code complete and run on the PC GPU. Water churn is still the top problem (owner: "way too churny" in manual play); phone not yet measured.**
+Last updated: 2026-10-10. Current milestone: **2 (GPU liquid + powder + brush): code complete and run on the PC GPU. Water churn fixed on the GPU probe with a grid density projection (2026-10-10); waiting on the owner's manual play. Phone not yet measured.**
 
 Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `docs/SPEC.md`.
 
@@ -14,9 +14,9 @@ Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `d
   - Neighbour loops use each particle's hash cell, so pairs are symmetric (SPEC 2.7).
 - **Liquid** (`gpu/shaders/sim/liquid.glslinc`): PBF density constraint, s_corr and XSPH viscosity, plus:
   - Wall density, so liquid doesn't crowd into the walls.
-  - Height mass scaling (`STACK_K`), so deep water stays at rest density instead of being squeezed. 30k water had ~3× rest density at the floor; it is now ≈1.0 all the way down.
-  - Carried-over pressure (`PRESSURE_GAIN` 0.1, `WARM_START` 0.95, pass `solve_pressure`): each liquid particle keeps its pressure between frames and is pushed down its gradient before the iterations. It passes pressure sideways, so heaps flow out and the surface levels.
-  - Kick cap (`LIQUID_KICK` 2, `velocity_update.glsl`): the solver's correction may stop water but add at most 2 × gravity × dt of speed per step in its own direction, so overshoot can't launch water. Both this and carried-over pressure are needed; each alone churned at 35–140 px/s.
+  - Density projection grid (`hydro.glslinc`, pass `hydro`, then `solve_pressure`): 16 px cells; liquid and powder particles splat their density with integer atomics, 32 red-black SOR sweeps (one dispatch each, warm-started) solve for a pressure p ≥ 0 that removes `HYDRO_K` 0.5 of each cell's compression and closes air bubbles under full water, and liquid particles are pushed by −∇p·dt² before the PBF iterations. It reaches the whole tank in one step, so deep water stays at rest density with gravity acting as usual.
+  - Water drag 0.01 per step (`materials.json`), so a slosh dies within seconds.
+  - Kick cap (`LIQUID_KICK` 2, `velocity_update.glsl`): the solver's correction may stop water but add at most 2 × gravity × dt of speed per step in its own direction, so overshoot can't launch water.
 - **Powder** (`powder.glslinc`, `solve_apply.glsl`, `velocity_update.glsl`): mass-weighted contacts with static/kinetic friction, averaged over contacts.
   - Height mass scaling (`STACK_K` 0.3), so piles aren't crushed under load.
   - Inelastic push-out (`MAX_SEPARATION` 0): impacts don't rebound grains, which removed the upward kicks at the edges.
@@ -47,7 +47,11 @@ Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `d
 | Deep water, 50k | PC, GPU probe | Mean speed 57–67 → 14–15 px/s; wall particles rising 200–350 → 33–48 px/s |
 | 10k water started at rest, 25 s | PC, GPU probe | 3.8 px/s (was 4.1), fastest 27 px/s (was 46) |
 | 50k sand at rest, and 10k sand into 10k water, after the water fix | PC, GPU probe | Sand unchanged: drift 0.000 px, surface y 112; sand rests on the floor under the water |
-| Manual play with a mouse | PC | **Not yet** (owner) |
+| Water churn fix (density projection grid, water drag 0.01), 50k water dropped as five +10k presses 30 frames apart | PC, GPU probe, 2400 frames, plateau from frame 1200 | Mean speed 15.2 → 0.08 px/s; top 20 px 30 → 0.06 px/s; surface tilt 17 → 0.4 px, roughness 5.6 → 0.5 px; spray 41 → 0.7 drops; floor at rest density. Game capture: water pixels changing within 2 frames 13.7% → 0.1% |
+| Same fix, 50k and 30k water dropped in consecutive frames | PC, GPU probe | 50k: 15 → 0.06 px/s, all particles still. 30k: 0.11 px/s (sloshed at 19–22 px/s without drag) |
+| Same fix, 50k sand at rest; 10k sand into 10k water | PC, GPU probe | Sand unchanged: drift 0.000 px, top grains at y≈105 resting on 7–9 grains, no wall grains rising. Sand rests on the floor (0.01 px/s); the water over it moves at 5.2 px/s (was ~11) |
+| Same fix, CPU tests | headless | 15 passed, 0 failed |
+| Manual play with a mouse | PC | Owner on PR #2 (2026-10-10): "way too churny", 50k water shooting up. The fix above is **not yet** played |
 | Phone | — | **Not yet** |
 
 Run tests: `Godot_v4.7.1-stable_win64_console.exe --headless --path <project> --script res://tests/run_tests.gd`
@@ -75,20 +79,22 @@ Solve dominates once particles are settled and packed, so measure the settled st
 6. The log has no errors, and no leaked-RID warnings on quit.
 
 ## Known issues
-- **Water churn: still the top problem.** In manual play the owner finds the water "way too churny" (2026-10-09). Not yet confirmed whether that play was on `main` or with PR #2 applied. PR #2 (carried-over pressure + kick cap) brought the GPU probe to ~9 px/s (30k) and ~15 px/s (50k), from 37 and 60 (see Verified). If the owner was on PR #2, mean speed isn't measuring what they see: find a probe metric that matches the visible churn (for example per-particle jitter, surface motion, or speeds in the top 40 px and along the walls) before tuning against it.
-  - The fix may change anything it needs to, including sand, powder contacts and the solver structure. After any change, re-run the sand checks in Verified (50k sand at rest: drift 0, surface y≈112; sand into water: sand rests on the floor).
-  - What was left on the probe after PR #2:
-    - The surface of 30k water can stay tilted by ~20 px across the tank, and its top 20–40 px moves at 10–40 px/s. The stack scaling still holds water up locally, so it levels slowly.
-    - 10k water resting on 10k sand moves at ~11 px/s (8 before), and 10–15 grains under it creep at up to 7 px/s (0 before).
-  - Cause, found 2026-10-09: with 4 Jacobi iterations the density correction overshoots and the overshoot became separating speed (the kick cap stops that). The stack scaling held deep water up by a local lift, so water didn't pass pressure sideways: heaps held up like sand, and squeezed water rose like hot air, which drove the wall jets and plumes (carried-over pressure fixes that).
-  - Tried on the GPU and rejected (30k water, mean speed):
-    - Symmetric neighbour windows alone: no change. Liquid stack k 0.1 or 0.05: 60–68 px/s. Capping the stack lift at gravity: 95. XSPH 0.2: 27, but more viscous. Delta relaxation 0.5: 31. From before: SCORR_K 0, LAMBDA_EPS 0.1, 16 iterations.
-    - Carried-over pressure applied with the symmetric PBF form, sum (λi + λj)∇W: 100–120 px/s jitter. A large λ times ∑∇W, which is non-zero for any disordered arrangement, is noise. Hence the gradient form.
-    - Hydrostatic pressure from the liquid count above each particle's column: 130 px/s in the symmetric form, 140–185 in the gradient form (spray adds depth and lifts the water under it).
-    - 4 substeps of 1 iteration (dt 1/240): 100–180 px/s, spikes over 1000. PBF turns per-step position noise into velocity / dt.
-    - Mirror (ghost) walls instead of the analytic wall density: no change (37).
-    - Kick cap alone (with stack): 9–15 px/s, but the water heaped against both walls around an empty hole mid-tank. Kick 4: 19–27. Kick cap with stack 0.1 or 0.03: 16–53 and sloshing.
-    - Carried-over pressure without the kick cap: 85–145. Without stack scaling: 11 at gain 0.1, but the floor squeezed to 1.4× (1.8× at keep 0.9). Gain 0.25: whole-body bounce at 40. Keep 0.99 or 1.0: 32–70 and sloshing.
+- **Water churn: fixed on the probe (2026-10-10), waiting on manual play.** The owner played PR #2 and found 50k water shooting up and churning. Screenshots then showed the surface 60–70 px higher at one wall, spray, and dark gaps opening and closing near the top.
+  - Cause: PBF with 4 Jacobi iterations can't build pressure that grows with depth, and both workarounds churned. Liquid stack scaling lifts every squeezed pair, so water held slopes like a sand pile and boiled at the surface. Without it 50k water squeezed to 2.5× rest density at the floor. A per-particle pressure strong enough to hold the floor sloshed (keep 0.99: tilt swinging ±70 px; gain 0.3: 38 px/s).
+  - Fix: a grid density projection (`hydro.glslinc`, see Done) replaces both, and water got drag 0.01 because the now nearly frictionless water sloshed for 40+ s after a big drop (the tank's fundamental mode, 4.7 s period).
+  - Tried this session and rejected (50k water, GPU probe):
+    - The uncommitted velocity projection from the main checkout (`projection_*.glsl`, MAC grid, 40 Jacobi sweeps after XSPH): tilt 79 px, roughness 18 px. It cancels divergence, not density error, so it doesn't hold water up.
+    - 12 iterations: 13 px/s, tilt 24. Without liquid stack at 12 iterations: 19 px/s.
+    - A grid pressure built from the weight of the liquid above (div grad p = div(φg)): water became weightless as a body and bounced to the ceiling. Capped fill bounced the same way; converged solves (128 sweeps, 16 px cells) didn't help. Pressure must come only from compression.
+    - Density gather per coarse cell: ~900 µs (920 threads, each looping over ~300 particles); replaced by a particle splat with integer atomics.
+    - The whole SOR solve in one workgroup in shared memory: 3× slower than one dispatch per sweep.
+    - 8 or 16 sweeps: 50k left at 6.5–14 px/s.
+    - Thin cells pulled full only when all four neighbours are full: 30k water kept bubbles next to each other. Counting cells part-filled with sand as bubbles pulled water into the sand bed (9 px/s over sand).
+  - Left over:
+    - Water over sand moves at ~5 px/s along the sand slope. The grid counts sand only to skip the bubble pull; it doesn't treat sand as solid.
+    - Cost: the new pass adds ~200–300 µs at 50k on the 3080 Ti, mostly the 64 small SOR dispatches; not measured on a phone.
+    - Probe timings are noisy (the GPU downclocks at vsync'd 165 fps); compare totals within one session, back to back.
+  - Probe additions: `SURF` line (tilt, roughness, spray, top-band speed, floor density), `gap=N` (blocks N frames apart, 30 ≈ clicking pace), `every=N` (sample interval; 60 hid a 1 s bounce), and per-pass `TIME` averages at the end.
 - **Sleeping trade-off:** a grain sliding slower than ~6 px/s on a slope stops, so piles freeze instead of creeping.
   - The churn can't be removed by softening contacts instead: averaged contacts or CONTACT_RELAX 0.15 stopped it but crushed the 50k pile (centroid y 244 → 302–342).
   - Also not the churn's cause: friction, iterations up to 32, CONTACT_RELAX 0.25, dt 1/120, MAX_SEPARATION 15.
@@ -104,6 +110,6 @@ Solve dominates once particles are settled and packed, so measure the settled st
 - No keyboard shortcuts for materials (the toolbar only), so input stays inside the action layer.
 
 ## Next
-1. Water churn (Known issues): first confirm whether the owner's report was on PR #2, then make the water calm in manual play. Sand may be changed if needed but must still pass its checks.
-2. Re-measure GPU pass times at the settled state (the solve pass gained one pressure pass), then measure the cap on a phone (the Milestone 2 goal).
-3. Milestone 3 (cluster solids): shape-matched carrot boxes colliding and floating or sinking in water and sand. Buoyancy should use the same density weighting as the sand–water contacts.
+1. Owner plays the fix (50k water via "+10k water", and sand into water). If the water now looks too still or too thick when pouring, lower water drag (0.005) before touching the grid.
+2. Re-measure GPU pass times at the settled state, then measure the cap on a phone (the Milestone 2 goal). The `hydro` pass is new and is mostly dispatch overhead (64 SOR dispatches).
+3. Milestone 3 (cluster solids): shape-matched carrot boxes colliding and floating or sinking in water and sand. The density projection grid is a natural place for buoyancy and for solids displacing water.

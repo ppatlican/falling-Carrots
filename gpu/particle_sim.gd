@@ -8,7 +8,8 @@
 ##   brush     add (spawn + finalize) or erase (erase + finalize)
 ##   predict   gravity, predicted positions
 ##   hash      clear, count, 3-step prefix sum, scatter (copies state into cell order)
-##   solve     carried-over pressure (pressure, apply), then
+##   hydro     liquid density projection grid (splat, density, HYDRO_SWEEPS x red/black SOR)
+##   solve     grid pressure push (pressure, apply), then
 ##             solver_iterations x (lambda, delta, apply)
 ##   velocity  update, XSPH, commit
 ##   render    clear image, draw points
@@ -29,7 +30,7 @@ const SHADER_DIR := "res://gpu/shaders/sim/"
 const KERNELS := [
 	"brush_spawn", "brush_erase", "brush_finalize", "predict",
 	"hash_clear", "hash_count", "scan_local", "scan_blocks", "scan_add", "hash_scatter",
-	"solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
+	"hydro_splat", "hydro_phi", "hydro_red", "hydro_black", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
 	"velocity_update", "velocity_xsph", "velocity_commit",
 	"render_clear", "render_points",
 ]
@@ -135,8 +136,6 @@ func _buffer_specs() -> Array:
 		["s_pos", cap * 8, PackedByteArray()],
 		["s_vel", cap * 8, PackedByteArray()],
 		["s_mat", cap * 4, PackedByteArray()],
-		["lambda_acc", cap * 4, PackedByteArray()],
-		["s_lambda", cap * 4, PackedByteArray()],
 	]
 
 
@@ -157,7 +156,15 @@ func _create_resources_rt() -> String:
 	var image: RID = _ctx.create_storage_texture_rt("image", size.x, size.y)
 	if not image.is_valid():
 		return "could not create the %dx%d render texture" % [size.x, size.y]
-	bindings.append([specs.size(), RenderingDevice.UNIFORM_TYPE_IMAGE, image])  # binding 21, last
+	bindings.append([specs.size(), RenderingDevice.UNIFORM_TYPE_IMAGE, image])  # binding 19
+	# Liquid density projection grid (hydro.glslinc), bindings 20 to 22.
+	# [binding, name, bytes per cell]: phi and acc hold liquid and powder.
+	for spec in [[20, "hydro_phi", 8], [21, "hydro_p", 4], [22, "hydro_acc", 8]]:
+		var hydro_bytes: int = _hydro_cells() * spec[2]
+		var hrid: RID = _ctx.create_buffer_rt(spec[1], hydro_bytes, PackedByteArray())
+		if not hrid.is_valid():
+			return "could not create buffer '%s' (%d bytes)" % [spec[1], hydro_bytes]
+		bindings.append([spec[0], RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER, hrid])
 	# Every kernel gets the full set; unused bindings are ignored by the engine.
 	for k in KERNELS:
 		if not _ctx.create_uniform_set_rt(k, k, 0, bindings).is_valid():
@@ -178,12 +185,23 @@ func _build_passes_rt() -> void:
 		d.call("scan_local", ceili(float(_n_cells + 1) / SCAN_BLOCK)), d.call("scan_blocks", 1),
 		d.call("scan_add", cells), d.call("hash_scatter", all),
 	])
+	var hydro := ComputeContext.groups_for(_hydro_cells())
+	var hydro_pass := [d.call("hydro_splat", all), d.call("hydro_phi", hydro)]
+	for _i in SimParams.HYDRO_SWEEPS:
+		hydro_pass.append_array([d.call("hydro_red", hydro), d.call("hydro_black", hydro)])
+	_ctx.add_pass("hydro", hydro_pass)
 	var solve := [d.call("solve_pressure", all), d.call("solve_apply", all)]
 	for _i in _iterations:
 		solve.append_array([d.call("solve_lambda", all), d.call("solve_delta", all), d.call("solve_apply", all)])
 	_ctx.add_pass("solve", solve)
 	_ctx.add_pass("velocity", [d.call("velocity_update", all), d.call("velocity_xsph", all), d.call("velocity_commit", all)])
 	_ctx.add_pass("render", [d.call("render_clear", pixels), d.call("render_points", all)])
+
+
+## Coarse cells of the density projection grid (hydro_size() in hydro.glslinc).
+func _hydro_cells() -> int:
+	var c := SimParams.HYDRO_CELL
+	return ((_grid.x + c - 1) / c) * ((_grid.y + c - 1) / c)
 
 
 func _finish_setup(err: String, image: RID) -> void:

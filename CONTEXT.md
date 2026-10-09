@@ -93,6 +93,13 @@ A coherent column of liquid rising through the bulk at rest density, part of chu
 Particles pressed well above rest density under the weight of what sits on them.
 _Avoid_: Compression (fine in prose, but squeezing is the bug name)
 
+**Slosh**:
+The whole body of liquid swinging from side to side, the surface tilting one way then the other. Real water does it; it is churn only if it doesn't die down.
+
+**Density projection grid**:
+The coarse grid (16 px cells) that gives liquids their pressure with depth: it measures each cell's liquid density, solves for the pressure that removes compression across the whole tank, and pushes liquid particles down its gradient before the PBF iterations (`hydro.glslinc`).
+_Avoid_: Hydro grid (the shader names say hydro, but it isn't hydrostatic: pressure comes only from compression)
+
 ## Verification
 
 **CPU reference**:

@@ -4,7 +4,7 @@
 // Brush, after add or erase (one thread): commit the spawn to the free count and
 // refresh the live count that later passes and the capacity meter read.
 
-// common.glslinc stamp: Params 108 B, v4. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v5. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

@@ -4,22 +4,17 @@
 // Density is normalised (1.0 = rest). Every neighbour adds to density, so liquids
 // are pushed out of powder too, but only liquid neighbours move with the constraint.
 // The constraint only pushes apart (C >= 0), which keeps free surfaces stable.
-// Walls count toward density (wall_density), and liquid-liquid pushes are mass-scaled
-// by height like powder stacks (stack_k), see liquid_delta.
+// Walls count toward density (wall_density).
 //
-// Carried-over pressure: each liquid particle keeps a running pressure (s_lambda, kept
-// between frames in lambda_acc). Every iteration adds PRESSURE_GAIN x its lambda to it,
-// of either sign (it drops where the water is under rest density), never above 0, and
-// each frame keeps WARM_START of it. Before the iterations, liquid particles are pushed
-// down its gradient (liquid_pressure_delta). The stack scaling alone holds deep water up
-// by a local lift, so water didn't pass pressure sideways: heaps held up like sand
-// piles and squeezed water rose like hot air (convection, jets up the side walls). The
-// carried pressure spreads it, and levels the water.
-// The other half of the fix is in velocity_update.glsl (LIQUID_KICK): the solver may not
-// launch water. Each part alone left deep water churning at 35-140 px/s; together
-// 30k water calms to ~9 px/s and 50k to ~15 (Milestone 2 GPU probe, was 37 and 60).
-// Gains: PRESSURE_GAIN 0.25 bounced the whole body, WARM_START 0.99 or 1 sloshed, 0.9
-// squeezed the floor to 1.8x rest density.
+// PBF only holds water locally: a few Jacobi iterations can't build the pressure that
+// grows with depth. That comes from the density projection grid (hydro.glslinc), whose
+// push solve_pressure.glsl applies before the iterations. The solver may still not
+// launch water (LIQUID_KICK in velocity_update.glsl).
+// Replaced by the grid (2026-10-10, GPU probe, 50k water dropped in five 10k blocks 30
+// frames apart): liquid pairs mass-scaled by height like powder stacks, and a per-
+// particle pressure carried between frames. With them the water held a 17 px tilt and
+// boiled at the surface (30 px/s in the top 20 px, 41 spray drops). With the grid and
+// water drag 0.01 it comes to rest: 0.06 px/s, 0.4 px tilt, under one spray drop.
 
 // Anti-clumping / surface-tension term (n = 4, dq = 0.2 h).
 float scorr(float r2) {
@@ -59,10 +54,6 @@ float wall_density(vec2 p, out vec2 grad) {
 	return density;
 }
 
-// Share of each iteration's lambda (of either sign) added to the carried-over pressure.
-// Mirror: SimParams.PRESSURE_GAIN.
-const float PRESSURE_GAIN = 0.1;
-
 float liquid_lambda(uint t) {
 	vec2 pt = s_pred[t];
 	vec2 wall_grad;
@@ -83,18 +74,9 @@ float liquid_lambda(uint t) {
 		}
 	} END_NEIGHBOURS
 	float c = density / params.rest_density - 1.0;
-	float l = -c / (grad_sum + dot(grad_t, grad_t) + params.lambda_eps);
-	s_lambda[t] = min(s_lambda[t] + PRESSURE_GAIN * l, 0.0);
-	return min(l, 0.0);
+	return min(-c / (grad_sum + dot(grad_t, grad_t) + params.lambda_eps), 0.0);
 }
 
-// Between two liquid particles the push is mass-scaled by height, as for powder stacks
-// (stack_weight in powder.glslinc, equal masses): the upper particle takes the larger
-// share. Plain PBF needs a pressure that grows with depth to hold a column up with a
-// few Jacobi iterations; at 50k the bottom was squeezed to ~3x rest density and every
-// particle jittered at ~100 px/s. With the scaling a small, even pressure holds it.
-// Like the powder version it is not momentum-conserving: a squeezed pair's centre moves
-// up a little. See the header for what keeps that from driving convection.
 vec2 liquid_delta(uint t) {
 	vec2 pt = s_pred[t];
 	float lt = lambda[t];
@@ -107,29 +89,8 @@ vec2 liquid_delta(uint t) {
 		vec2 rv = pt - s_pred[j];
 		float r2 = dot(rv, rv);
 		if (r2 >= params.h * params.h) continue;
-		bool liquid_j = s_class(j) == CLASS_LIQUID;
-		float lj = liquid_j ? lambda[j] : 0.0;
-		float share = liquid_j ? 2.0 / (exp(clamp(params.stack_k * rv.y, -8.0, 8.0)) + 1.0) : 1.0;
-		d += share * (lt + lj + scorr(r2)) * spiky_grad(rv, t, j);
-	} END_NEIGHBOURS
-	return d / params.rest_density;
-}
-
-// Push down the gradient of the carried-over pressure: sum (lambda_j - lambda_t) grad W
-// over liquid neighbours. The difference, not the sum that liquid_delta uses: at depth
-// the pressure is large, and the sum multiplies it by sum grad W, which is zero only on
-// a perfect lattice, so it shook deep water at ~120 px/s (GPU probe). Momentum: not
-// pairwise equal and opposite, but it only pushes along the pressure gradient.
-vec2 liquid_pressure_delta(uint t) {
-	vec2 pt = s_pred[t];
-	float lt = s_lambda[t];
-	vec2 d = vec2(0.0);
-	FOR_EACH_NEIGHBOUR(t) {
-		uint j = k;
-		if (j == t || s_class(j) != CLASS_LIQUID) continue;
-		vec2 rv = pt - s_pred[j];
-		if (dot(rv, rv) >= params.h * params.h) continue;
-		d += (s_lambda[j] - lt) * spiky_grad(rv, t, j);
+		float lj = s_class(j) == CLASS_LIQUID ? lambda[j] : 0.0;
+		d += (lt + lj + scorr(r2)) * spiky_grad(rv, t, j);
 	} END_NEIGHBOURS
 	return d / params.rest_density;
 }

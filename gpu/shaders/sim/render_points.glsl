@@ -5,7 +5,7 @@
 // Powders get a little per-grain brightness variation (fixed per slot). Overlapping
 // points simply overwrite each other (no blending), which is fine for plain points.
 
-// common.glslinc stamp: Params 108 B, v4. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v5. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

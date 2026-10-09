@@ -53,15 +53,9 @@ layout(set = 0, binding = 16, std430) buffer SPos { vec2 s_pos[]; };
 layout(set = 0, binding = 17, std430) buffer SVel { vec2 s_vel[]; };
 layout(set = 0, binding = 18, std430) buffer SMat { uint s_mat[]; };
 
-// --- Liquid pressure carried between frames (liquid.glslinc) ------------------------------
-// Accumulated PBF lambda per slot, kept from frame to frame (brush_spawn zeroes it).
-layout(set = 0, binding = 19, std430) buffer LambdaAcc { float lambda_acc[]; };
-// The same in sorted order: hash_scatter copies it in, solve_lambda adds to it,
-// velocity_commit writes it back (times WARM_START).
-layout(set = 0, binding = 20, std430) buffer SLambda { float s_lambda[]; };
-
 // --- Output -------------------------------------------------------------------------
-layout(set = 0, binding = 21, rgba8) uniform image2D out_image;
+layout(set = 0, binding = 19, rgba8) uniform image2D out_image;
+// Bindings 20 to 22: the liquid density projection grid (hydro.glslinc).
 
 // Same layout as ParticleSim._push() in gpu/particle_sim.gd. 108 bytes.
 layout(push_constant, std430) uniform Params {
@@ -107,10 +101,6 @@ const uint VIEW_HASH = 1u;
 
 // Prefix sum: 64 threads x 4 elements per workgroup.
 const uint SCAN_BLOCK = 256u;
-
-// Share of last frame's liquid pressure a liquid particle keeps (liquid.glslinc).
-// Mirror: SimParams.WARM_START.
-const float WARM_START = 0.95;
 
 const float PI = 3.14159265;
 const float MIN_DIST = 1e-4;

@@ -5,7 +5,7 @@
 // Only min(brush_count, free count) threads do work, so the pool can't overfill.
 // brush_finalize.glsl then lowers the free count. Mirror: cpu_ref/particle_pool.gd.
 
-// common.glslinc stamp: Params 108 B, v4. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v5. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {
@@ -32,6 +32,5 @@ void main() {
 	pos[slot] = p;
 	pred[slot] = p;
 	vel[slot] = vec2(0.0);
-	lambda_acc[slot] = 0.0;
 	mat_flags[slot] = (params.brush_material & MAT_MASK) | ALIVE;
 }
