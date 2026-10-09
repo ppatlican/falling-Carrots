@@ -33,7 +33,7 @@ const KERNELS := [
 	"render_clear", "render_points",
 ]
 ## Must match Params in common.glslinc.
-const PUSH_SIZE := 96
+const PUSH_SIZE := 108
 ## Prefix sum: 256 elements per workgroup, at most 256 workgroups (one scan_blocks group).
 const SCAN_BLOCK := 256
 const MAX_SCAN_BLOCKS := 256
@@ -235,7 +235,7 @@ func _set_live_count(count: int) -> void:
 		live_count = count
 
 
-## Push constants, same layout as Params in common.glslinc (96 bytes).
+## Push constants, same layout as Params in common.glslinc (108 bytes).
 func _push(brush: Dictionary, view_flags: int) -> PackedByteArray:
 	var b := PackedByteArray()
 	b.resize(PUSH_SIZE)
@@ -264,6 +264,9 @@ func _push(brush: Dictionary, view_flags: int) -> PackedByteArray:
 	b.encode_float(84, SimParams.SCORR_K)
 	b.encode_float(88, SimParams.CONTACT_RELAX)
 	b.encode_u32(92, _n_cells)
+	b.encode_float(96, SimParams.STACK_K)
+	b.encode_float(100, SimParams.MAX_SEPARATION)
+	b.encode_float(104, SimParams.WET_SLIP)
 	return b
 
 

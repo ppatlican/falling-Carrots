@@ -22,6 +22,16 @@ const LAMBDA_EPS := 0.01
 const SCORR_K := 0.02
 ## Powder contact stiffness per iteration: delta = relax * sum of push-outs.
 const CONTACT_RELAX := 0.5
+## Stack stiffening (mass scaling by height, as in Macklin et al. 2014 "Unified
+## Particle Physics"): in a contact the lower particle acts exp(STACK_K * dy) times
+## heavier, so piles hold their shape under load instead of crushing. Per px of dy.
+const STACK_K := 0.3
+## Fastest a powder grain may move away from a contact because of the push-out alone
+## (px/s). Overlap is still resolved, it just can't launch grains (no "grasshoppers").
+const MAX_SEPARATION := 15.0
+## Share of its friction a powder grain loses when fully surrounded by liquid. Lets
+## sand under water slump and settle under the water instead of trapping it.
+const WET_SLIP := 0.9
 
 ## Brush: radius in px, and the fraction of the circle's empty capacity added per frame.
 const BRUSH_RADIUS := 10.0

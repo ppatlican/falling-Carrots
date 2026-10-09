@@ -131,7 +131,10 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	var new_vel := PackedVector2Array()
 	new_vel.resize(n)
 	for i in n:
-		vel[i] = (pred[i] - pos[i]) / dt * (1.0 - materials[mat[i]].drag)
+		var v := (pred[i] - pos[i]) / dt
+		if _class(mat[i]) == POWDER:
+			v = limit_separation(v, vel[i].limit_length(SimParams.MAX_STEP / dt))
+		vel[i] = v * (1.0 - materials[mat[i]].drag)
 	for i in n:
 		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h)
 	for i in n:
@@ -139,6 +142,18 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		pos[i] = pred[i]
 	state.pos = pos
 	state.vel = vel
+
+
+## Powder push-out may stop a grain but not launch it faster than MAX_SEPARATION
+## in the push direction. v_pre is the velocity the grain was predicted with.
+static func limit_separation(v: Vector2, v_pre: Vector2) -> Vector2:
+	var dv := v - v_pre
+	var dv_len := dv.length()
+	if dv_len <= 1e-6:
+		return v
+	var n := dv / dv_len
+	var excess := v.dot(n) - maxf(SimParams.MAX_SEPARATION, v_pre.dot(n))
+	return v - excess * n if excess > 0.0 else v
 
 
 func _class(m: int) -> int:
@@ -208,6 +223,13 @@ func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lamb
 	return d / rest_density
 
 
+## Share of a contact's push-out that particle i takes, for rv = p_i - p_j (y down).
+## The lower particle acts heavier (STACK_K), so piles hold up under load.
+## Powder-powder pairs only (see powder.glslinc).
+static func stack_weight(m_i: float, m_j: float, rv_y: float) -> float:
+	return m_j / (m_i * exp(clampf(SimParams.STACK_K * rv_y, -8.0, 8.0)) + m_j)
+
+
 ## Contacts with any particle closer than SPACING, where at least one side is a
 ## powder. Mass-weighted push-out; powders also get static/kinetic friction on the
 ## relative sideways motion. Scaled by CONTACT_RELAX, not averaged (see powder.glslinc).
@@ -215,28 +237,38 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 		nb: PackedInt32Array) -> Vector2:
 	var mi: Dictionary = materials[mat[i]]
 	var sum := Vector2.ZERO
+	var fric := Vector2.ZERO
+	var n_near := 0
+	var n_wet := 0
 	for j in nb:
 		var mj: Dictionary = materials[mat[j]]
 		if mi["class"] != POWDER and mj["class"] != POWDER:
 			continue  # liquid-liquid is handled by the density constraint
 		var rv := pred[i] - pred[j]
 		var dist := rv.length()
+		if dist < SimParams.H:
+			n_near += 1
+			if mj["class"] == LIQUID:
+				n_wet += 1
 		if dist >= SimParams.SPACING:
 			continue
 		var normal := pair_dir(rv, dist, i, j)
 		var pen := SimParams.SPACING - dist
 		var w: float = mj.density / (mi.density + mj.density)
-		sum += w * pen * normal
+		var stack: bool = mi["class"] == POWDER and mj["class"] == POWDER
+		sum += (stack_weight(mi.density, mj.density, rv.y) if stack else w) * pen * normal
 		var mu: float = minf(mi.friction, mj.friction)
 		if mu > 0.0:
 			var rel := (pred[i] - pos[i]) - (pred[j] - pos[j])
 			var tangent := rel - rel.dot(normal) * normal
 			var t_len := tangent.length()
 			if t_len < mu * pen:
-				sum -= w * tangent  # static: cancel the slide
+				fric -= w * tangent  # static: cancel the slide
 			elif t_len > 1e-6:
-				sum -= w * tangent * minf(0.8 * mu * pen / t_len, 1.0)  # kinetic
-	return sum * SimParams.CONTACT_RELAX
+				fric -= w * tangent * minf(0.8 * mu * pen / t_len, 1.0)  # kinetic
+	# Wet grains slip (WET_SLIP): friction drops with the share of liquid neighbours.
+	var wet := float(n_wet) / n_near if n_near > 0 else 0.0
+	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet)) * SimParams.CONTACT_RELAX
 
 
 ## XSPH viscosity: liquids blend toward their liquid neighbours' velocity.

@@ -56,7 +56,7 @@ layout(set = 0, binding = 18, std430) buffer SMat { uint s_mat[]; };
 // --- Output -------------------------------------------------------------------------
 layout(set = 0, binding = 19, rgba8) uniform image2D out_image;
 
-// Same layout as ParticleSim._push() in gpu/particle_sim.gd. 96 bytes.
+// Same layout as ParticleSim._push() in gpu/particle_sim.gd. 108 bytes.
 layout(push_constant, std430) uniform Params {
 	vec2 brush_pos;
 	float brush_radius;
@@ -80,6 +80,9 @@ layout(push_constant, std430) uniform Params {
 	float scorr_k;
 	float contact_relax;
 	uint n_cells;         // grid_w * grid_h
+	float stack_k;        // contact mass scaling by height (powder.glslinc)
+	float max_separation; // powder push-out speed cap (velocity_update.glsl)
+	float wet_slip;       // friction lost by a powder grain fully surrounded by liquid
 } params;
 
 const uint ALIVE = 0x100u;

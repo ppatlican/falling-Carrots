@@ -29,7 +29,7 @@ Each material belongs to exactly one class. New classes are the only thing that 
 | Class | Method |
 |---|---|
 | Liquid | PBF-style density constraint, plus mild viscosity (XSPH) and a surface-tension hint. The viscosity parameter covers water, oil, and batter. |
-| Powder | Frictional particle-particle contact. Flour has strong drag, low mass, and a wind-coupling coefficient. Sand is heavier and has little drag. |
+| Powder | Frictional particle-particle contact. Flour has strong drag, low mass, and a wind-coupling coefficient. Sand is heavier and has little drag. Gameplay-first tweaks (M2): powder-powder contacts are mass-scaled by height so piles hold their volume under load (`STACK_K`); a grain's push-out speed is capped so overlap can't launch it (`MAX_SEPARATION`); grains surrounded by liquid lose most of their friction so sand settles under water (`WET_SLIP`). |
 | Cluster solid | Shape matching: a group of particles is pulled toward a rigid-transformed rest shape with a stiffness parameter. Carrots are stiff and dough is soft (lower stiffness, plus plastic deformation optional later). Particles within a cluster are bonded, so cutting later means severing bonds, with no redesign. |
 | Gas | Light, short-lived particles. Buoyancy comes from temperature, they are pushed by wind, and they have a lifetime. This class covers fire, smoke, and steam. |
 | Static | Not particles. See 2.3. |
@@ -72,7 +72,7 @@ Buoyancy comes from per-material density in the density-constraint and contact r
 - GPU readback is always `buffer_get_data_async()`. `buffer_get_data()` stalls the GPU. Readback is debug-only, with one exception: a 16-byte pool counter is read back every frame for the capacity meter (it lags 1–2 frames; the GPU enforces the cap on its own).
 - GPU timestamps (`get_captured_timestamp_gpu_time`) are **nanoseconds** (checked in the Vulkan driver source). The overlay shows microseconds.
 - Shared GLSL goes in `.glslinc` files pulled in with `#include "name.glslinc"` (relative path; verified to compile in 4.7.1). Godot does **not** re-import a `.glsl` when only an included file changes, and touching the file doesn't help (it compares content hashes). Reimport from the editor, or delete `.godot/imported/*.glsl-*`. `test_shaders.gd` fails on a stale import.
-- All sim kernels share one binding layout (`gpu/shaders/sim/common.glslinc`) and get the same full uniform set; the engine ignores bindings a shader doesn't use (checked in `uniform_set_create`). Push constants must match the pipeline's size exactly, so every kernel reads the shared `Params` block (96 bytes, under the 128-byte portable limit).
+- All sim kernels share one binding layout (`gpu/shaders/sim/common.glslinc`) and get the same full uniform set; the engine ignores bindings a shader doesn't use (checked in `uniform_set_create`). Push constants must match the pipeline's size exactly, so every kernel reads the shared `Params` block (108 bytes, under the 128-byte portable limit).
 - No RenderingDevice (Compatibility renderer, headless, no Vulkan) means an error screen, not a fallback. `fallback_to_opengl3` is off, and Windows uses Vulkan, not D3D12.
 - Tunables (`particle_cap`, `solver_iterations`) live in `res://config.json`. Export presets must include `*.json` in the non-resource filter.
 

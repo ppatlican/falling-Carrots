@@ -13,6 +13,8 @@ Last updated: 2026-10-09. Current milestone: **2 (GPU liquid + powder + brush): 
   - The scatter copies particle state into cell order, and the solver runs on that sorted copy (SPEC 2.1).
 - **Liquid:** PBF density constraint plus s_corr and XSPH viscosity (`gpu/shaders/sim/liquid.glslinc`).
 - **Powder:** mass-weighted contacts with static/kinetic friction, plus floor friction (`powder.glslinc`). Sand sinks through water.
+  - Anti-compression and anti-hop fix (owner report: sand under water crushed, top grains "jumping like grasshoppers"):
+    stack stiffening between grains (`STACK_K` 0.3), a 15 px/s cap on push-out speed (`MAX_SEPARATION`), and wet slip (`WET_SLIP` 0.9).
 - **Brush:**
   - Left mouse adds the selected material and right mouse erases any material.
   - Toolbar has Sand/Water, "+10k sand", "+10k water" (benchmark fills) and Clear.
@@ -47,6 +49,7 @@ Run validator: `... --headless --path <project> --script res://tools/validate_ma
 | PC RTX 3080 Ti | 20k (falling blocks) | 165 (vsync) | 5 | 10 | 45 | 5 | 7 | ~72 |
 | PC RTX 3080 Ti | 30k water, settled | 165 | 9 | 28 | 826 | 143 | 65 | ~1070 |
 | PC RTX 3080 Ti | 50k (30k sand + 20k water), settling | 164 | 9 | 26 | 1253 | 161 | 45 | ~1495 |
+| PC RTX 3080 Ti | 20k (10k sand, then 10k water on top), 15 s, after the compression fix | 165 | 8 | 24 | 637 | 57 | 12 | ~738 |
 | Phone | | | | | | | | |
 
 Solve dominates once particles are settled and packed, so measure the settled state.
@@ -60,7 +63,15 @@ Solve dominates once particles are settled and packed, so measure the settled st
 6. The log has no errors, and no leaked-RID warnings on quit.
 
 ## Known issues
-- **Compression under load.** With 4 iterations, deep water is about 1.5× compressed on average and up to about 5× in the floor row. Sand under a water column is about 3× compressed. This costs solver time (more neighbors) and will matter for buoyancy in M3. Options: more iterations or substeps, boundary density at walls, or a unilateral density constraint for powders.
+- **Compression under load (mostly fixed).** Measured with 10k sand under 10k water, in particles per 4×4 cell (rest is 4):
+  - Sand: 9.9 → 5.2 on average (max 17 → 8).
+  - Floor row: 13.6 → 7.5.
+  - Water: about 4.4, both before and after.
+  - Fast sand grains: none moving upward any more (was 15 or more). About 20 sinking ones remain.
+  - Solve pass: 1192 → 637 µs.
+  - Tried and rejected:
+    - Stiffening sand–water pairs too: water ended up under the sand.
+    - `STACK_K` 0.7: the pile was so stiff it trapped water inside it and churned.
 - **Water looks noisy** as plain 2×2 points, with dark gaps and some spray when blocks land. Metaball rendering is M5.
 - The fixed 1/60 s step per frame means a slow device runs the sim in slow motion rather than unstably. That's intended.
 - **MCP runtime tools fail** with "registry entry ... has no token path; relaunch the editor". Suspected cause: headless test runs also start the MCP addon's runtime autoload. If it recurs, the test runner should keep that autoload from starting.
@@ -70,4 +81,4 @@ Solve dominates once particles are settled and packed, so measure the settled st
 - No keyboard shortcuts for materials (the toolbar only), so input stays inside the action layer.
 
 ## Next: Milestone 3 (cluster solids)
-Shape-matched carrot boxes colliding and floating or sinking in water and sand. Start by deciding how to handle the compression above, because buoyancy depends on it.
+Shape-matched carrot boxes colliding and floating or sinking in water and sand. Buoyancy should use the same density weighting as the sand–water contacts. The deep-water floor row is still somewhat compressed.
