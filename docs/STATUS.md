@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-09. Current milestone: **2 (GPU liquid + powder + brush): code complete and run on the PC GPU. Deep-water churn fixed on the GPU (mild residual, see Known issues); phone not yet measured.**
+Last updated: 2026-10-09. Current milestone: **2 (GPU liquid + powder + brush): code complete and run on the PC GPU. Water churn is still the top problem (owner: "way too churny" in manual play); phone not yet measured.**
 
 Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `docs/SPEC.md`.
 
@@ -75,9 +75,11 @@ Solve dominates once particles are settled and packed, so measure the settled st
 6. The log has no errors, and no leaked-RID warnings on quit.
 
 ## Known issues
-- **Deep-water churn: fixed, small residual.** Water now settles to ~9 px/s (30k) and ~15 px/s (50k), from 37 and 60 (see Verified). What is left:
-  - The surface of 30k water can stay tilted by ~20 px across the tank, and its top 20–40 px moves at 10–40 px/s. The stack scaling still holds water up locally, so it levels slowly.
-  - 10k water resting on 10k sand moves at ~11 px/s (8 before), and 10–15 grains under it creep at up to 7 px/s (0 before).
+- **Water churn: still the top problem.** In manual play the owner finds the water "way too churny" (2026-10-09). Not yet confirmed whether that play was on `main` or with PR #2 applied. PR #2 (carried-over pressure + kick cap) brought the GPU probe to ~9 px/s (30k) and ~15 px/s (50k), from 37 and 60 (see Verified). If the owner was on PR #2, mean speed isn't measuring what they see: find a probe metric that matches the visible churn (for example per-particle jitter, surface motion, or speeds in the top 40 px and along the walls) before tuning against it.
+  - The fix may change anything it needs to, including sand, powder contacts and the solver structure. After any change, re-run the sand checks in Verified (50k sand at rest: drift 0, surface y≈112; sand into water: sand rests on the floor).
+  - What was left on the probe after PR #2:
+    - The surface of 30k water can stay tilted by ~20 px across the tank, and its top 20–40 px moves at 10–40 px/s. The stack scaling still holds water up locally, so it levels slowly.
+    - 10k water resting on 10k sand moves at ~11 px/s (8 before), and 10–15 grains under it creep at up to 7 px/s (0 before).
   - Cause, found 2026-10-09: with 4 Jacobi iterations the density correction overshoots and the overshoot became separating speed (the kick cap stops that). The stack scaling held deep water up by a local lift, so water didn't pass pressure sideways: heaps held up like sand, and squeezed water rose like hot air, which drove the wall jets and plumes (carried-over pressure fixes that).
   - Tried on the GPU and rejected (30k water, mean speed):
     - Symmetric neighbour windows alone: no change. Liquid stack k 0.1 or 0.05: 60–68 px/s. Capping the stack lift at gravity: 95. XSPH 0.2: 27, but more viscous. Delta relaxation 0.5: 31. From before: SCORR_K 0, LAMBDA_EPS 0.1, 16 iterations.
@@ -102,6 +104,6 @@ Solve dominates once particles are settled and packed, so measure the settled st
 - No keyboard shortcuts for materials (the toolbar only), so input stays inside the action layer.
 
 ## Next
-1. Owner: look at deep water and sand + water by hand (the residual surface tilt, and whether the water now looks too calm or viscous when blocks land).
+1. Water churn (Known issues): first confirm whether the owner's report was on PR #2, then make the water calm in manual play. Sand may be changed if needed but must still pass its checks.
 2. Re-measure GPU pass times at the settled state (the solve pass gained one pressure pass), then measure the cap on a phone (the Milestone 2 goal).
 3. Milestone 3 (cluster solids): shape-matched carrot boxes colliding and floating or sinking in water and sand. Buoyancy should use the same density weighting as the sand–water contacts.
