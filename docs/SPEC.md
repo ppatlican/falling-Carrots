@@ -62,6 +62,16 @@ Buoyancy comes from per-material density in the density-constraint and contact r
 7. Reaction pass: apply table rules and spawn or despawn particles.
 8. Render.
 
+### 2.7 GPU plumbing rules (verified against the Godot 4.7 class reference in Milestone 1)
+- Use the **main** `RenderingDevice` (`RenderingServer.get_rendering_device()`), never a local one. Local devices can't share data with rendering, and particle buffers must feed it (`Texture2DRD` only works with main-device textures).
+- Make every device call on the render thread through `RenderingServer.call_on_render_thread()`. Record compute lists each frame and never `submit()`/`sync()` (those are local-device only).
+- Each pass is its own compute list followed by `capture_timestamp()`, because timestamps can't be captured inside a list that already has dispatches. The engine inserts barriers between lists. Dependent dispatches inside one pass use `compute_list_add_barrier()`.
+- Shaders are `.glsl` files (`#[compute]`, `#version 450`) loaded via `RDShaderFile.get_spirv()`. Check both `base_error` and `compile_error_compute` and fail loudly with an on-screen error.
+- Use 64-thread 1D workgroups. Check `LIMIT_MAX_COMPUTE_WORKGROUP_SIZE_X`, `_INVOCATIONS` and `_COUNT_X` at startup against the dispatch needed for `particle_cap`. There is no limit constant for maximum storage buffer size.
+- GPU readback is debug-only and always `buffer_get_data_async()`. `buffer_get_data()` stalls the GPU.
+- No RenderingDevice (Compatibility renderer, headless, no Vulkan) means an error screen, not a fallback. `fallback_to_opengl3` is off, and Windows uses Vulkan, not D3D12.
+- Tunables (`particle_cap`, `solver_iterations`) live in `res://config.json`. Export presets must include `*.json` in the non-resource filter.
+
 ## 3. Material system (extensibility)
 
 **One data file** (JSON or CSV) with a hard cap of 64 materials. One row per material:
@@ -110,7 +120,7 @@ Input is routed through an abstraction layer (actions such as `draw`, `erase`, a
 
 ## 7. Milestones (riskiest first)
 
-1. **Project and tooling:** Godot project with the Forward Mobile renderer, the `RenderingDevice` compute plumbing **[verify]**, the debug overlay, and the CPU reference scaffold.
+1. **Project and tooling:** Godot project with the Forward Mobile renderer, the `RenderingDevice` compute plumbing (verified, see 2.7), the debug overlay, and the CPU reference scaffold.
 2. **GPU liquid + powder + brush:** the particle pool, spatial hash, PBF liquid, and powder friction. Sand and water interact. Measure the cap on a phone. This milestone proves the performance budget.
 3. **Cluster solids:** shape-matched carrot boxes colliding and floating or sinking in water, sand, and flour. This proves cross-material coupling, which is the main risk.
 4. **Static solids grid:** steel brush, SDF collision, and the eraser.
