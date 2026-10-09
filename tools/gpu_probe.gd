@@ -5,6 +5,9 @@
 ##   blocks   10k block fills (default 5); by default all at y=8 in consecutive frames
 ##   spawn_y  above 8: stack the blocks upward from this y (279 = 10k at rest on the floor)
 ##   top      list the highest particles instead of the fastest risers
+##   gap=N    drop the blocks N frames apart (30 is about the pace of clicking +10k)
+##   every=N  sample every N frames (default 60; a bounce with a 1 s period hides at 60)
+## At the end: mean GPU time per pass from frame 600 on (TIME lines).
 ## Every sample (60 frames): speed, wall and RMS-drift stats per material. Every 5th sample:
 ## a grid of 20 px cells (S speed, V mean vy, N count, M count of the last material) and
 ## the 12 fastest-rising (or highest) particles with their neighbourhood.
@@ -16,7 +19,7 @@ const GameConfig = preload("res://core/game_config.gd")
 const MaterialTable = preload("res://cpu_ref/material_table.gd")
 const SimParams = preload("res://core/sim_params.gd")
 
-const SAMPLE_EVERY := 60
+var sample_every := 60  # from "every=N"; pick one coprime with 60 to catch periodic bounces
 const WALL_BAND := 8.0
 
 var ctx
@@ -27,6 +30,10 @@ var fill_name := "sand"
 var max_frames := 1500
 var blocks := 5
 var spawn_y := 8.0
+var n_samples := 0
+var time_sums := {}  # pass name -> [gpu_us sum, frames], from TIME_FROM on
+const TIME_FROM := 600
+var gap := 1  # from "gap=N": frames between block drops (1 = consecutive)
 var seq: Array = []
 var frame_i := 0
 var ready := false
@@ -48,6 +55,11 @@ func _initialize() -> void:
 		blocks = int(args[2])
 	if args.size() >= 4:
 		spawn_y = float(args[3])
+	for a in args:
+		if a.begins_with("gap="):
+			gap = maxi(1, int(a.substr(4)))
+		if a.begins_with("every="):
+			sample_every = maxi(1, int(a.substr(6)))
 	var config = GameConfig.load_from_file()
 	cap = config.particle_cap
 	table = MaterialTable.new()
@@ -86,19 +98,26 @@ func _process(_delta: float) -> bool:
 	var k_block := (frame_i - 1) / 240 if mixed else frame_i - 1
 	if mixed:
 		brush.material = seq[mini(k_block, seq.size() - 1)]
-	if (mixed and (frame_i - 1) % 240 == 0 and k_block < blocks) or (not mixed and frame_i <= blocks):
+	if (mixed and (frame_i - 1) % 240 == 0 and k_block < blocks) or (not mixed and (frame_i - 1) % gap == 0 and (frame_i - 1) / gap < blocks):
 		var cols := SimParams.BENCH_COLS
 		brush.op = ParticleSim.BRUSH_BLOCK
 		brush.count = SimParams.BENCH_BLOCK
 		brush.cols = cols
-		brush.pos = Vector2((SimParams.WORLD_SIZE.x - cols * SimParams.SPACING) * 0.5, spawn_y - (80.0 * (frame_i - 1) if spawn_y > 8.0 else 0.0))
+		brush.pos = Vector2((SimParams.WORLD_SIZE.x - cols * SimParams.SPACING) * 0.5, spawn_y - (80.0 * ((frame_i - 1) / gap) if spawn_y > 8.0 else 0.0))
 	sim.frame(brush, 0)
-	if frame_i % SAMPLE_EVERY == 0 and not pending:
+	if frame_i >= TIME_FROM:
+		for t in ctx.get_timings():
+			if t.gpu_us >= 0:
+				var acc: Array = time_sums.get(t.name, [0.0, 0])
+				time_sums[t.name] = [acc[0] + t.gpu_us, acc[1] + 1]
+	if frame_i % sample_every == 0 and not pending:
 		pending = true
 		got = {}
 		RenderingServer.call_on_render_thread(_request)
 	if frame_i >= max_frames:
 		print("done after %d frames, live %d" % [frame_i, sim.live_count])
+		for k in time_sums:
+			print("TIME %-10s gpu_us=%8.1f" % [k, time_sums[k][0] / maxi(time_sums[k][1], 1)])
 		sim.shutdown()
 		quit(0)
 	return false
@@ -182,10 +201,12 @@ func _analyse(b: Dictionary) -> void:
 		if sm.n > 0:
 			print("  mat%d n=%d mean_speed=%.2f max_speed=%.2f mean_vy=%.2f max_up=%.2f wall_up=%.2f" % [m, sm.n, sm.sum_speed / sm.n, sm.max_speed, sm.sum_vy / sm.n, sm.max_up, sm.wall_up])
 	var s = stats[mat_id]
-	if frame_i % 300 == 1:
+	n_samples += 1
+	if n_samples % 5 == 0:
 		_grid_dump(b)
 		_fast_dump(b)
 	print("  rms_disp_per_sample=%.3f px  centroid_y=%.2f" % [sqrt(sum_d2 / maxf(cnt_d, 1)), sum_cy / maxf(s.n, 1)])
+	_surface(b)
 	var mean_speed: float = s.sum_speed / maxf(s.n, 1)
 	print("f=%5d alive=%5d mat_n=%5d mean_speed=%7.2f max_speed=%8.2f moving(>3)=%5d bottom_moving=%5d rev=%5d top_y=%7.2f mean_vy=%7.3f wall_n=%4d wall_max_up_vy=%8.2f max_up_vy=%8.2f" % [
 			frame_i, alive, s.n, mean_speed, s.max_speed, s.moving, s.bottom_moving, s.rev,
@@ -257,3 +278,59 @@ func _fast_dump(b: Dictionary) -> void:
 						if ps[j].y < ps[i].y: up += 1
 						if ps[j].y > ps[i].y + 0.5: below += 1
 		print("  p=(%.1f,%.1f) v=(%.0f,%.0f) nb=%d below=%d above=%d mind=%.2f rho/rho0=%.2f nb_mean_v=(%.0f,%.0f)" % [ps[i].x, ps[i].y, vs[i].x, vs[i].y, nb, below, up, mind, (dens + 0.0796) / 0.2537, (nbv / maxf(nb, 1)).x, (nbv / maxf(nb, 1)).y])
+
+
+## Surface metrics for the last material, per 8 px column. The column's surface is the y of
+## its SURF_DEPTH-th highest particle, so a few spray drops don't count as surface.
+##   tilt   mean surface y of the left quarter minus the right quarter (+: higher on the right)
+##   rough  RMS of the surface about its straight-line fit (px)
+##   spray  particles more than 6 px above their column's surface
+##   top_v  mean speed of the particles within 20 px below the surface (px/s)
+##   floor_rho  particles in the bottom 20 px over the rest count (1 = rest density)
+func _surface(b: Dictionary) -> void:
+	const COL := 8.0
+	const SURF_DEPTH := 6
+	var nc := int(SimParams.WORLD_SIZE.x / COL)
+	var ys := []
+	for c in nc:
+		ys.append(PackedFloat32Array())
+	var px := PackedFloat32Array(); var py := PackedFloat32Array(); var sp := PackedFloat32Array()
+	for i in cap:
+		var f := int(b.mat_flags.decode_u32(i * 4))
+		if (f & 0x100) == 0 or (f & 0xFF) != mat_id:
+			continue
+		var x: float = b.pos.decode_float(i * 8)
+		var y: float = b.pos.decode_float(i * 8 + 4)
+		px.append(x); py.append(y)
+		sp.append(Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4)).length())
+		ys[clampi(int(x / COL), 0, nc - 1)].append(y)
+	var surf := PackedFloat32Array(); surf.resize(nc)
+	for c in nc:
+		var col: PackedFloat32Array = ys[c]
+		col.sort()
+		surf[c] = col[mini(SURF_DEPTH, col.size() - 1)] if col.size() > 0 else SimParams.WORLD_SIZE.y
+	var q := nc / 4
+	var left := 0.0; var right := 0.0
+	for c in range(1, q + 1):
+		left += surf[c]; right += surf[nc - 1 - c]
+	var tilt := (left - right) / q
+	# least-squares line through the surface, then RMS about it
+	var sx := 0.0; var sy := 0.0; var sxx := 0.0; var sxy := 0.0
+	for c in nc:
+		sx += c; sy += surf[c]; sxx += c * c; sxy += c * surf[c]
+	var slope := (nc * sxy - sx * sy) / (nc * sxx - sx * sx)
+	var icpt := (sy - slope * sx) / nc
+	var r2 := 0.0
+	for c in nc:
+		r2 += pow(surf[c] - (icpt + slope * c), 2)
+	var spray := 0; var top_sum := 0.0; var top_n := 0; var floor_n := 0
+	for k in px.size():
+		if py[k] > SimParams.WORLD_SIZE.y - 20.0:
+			floor_n += 1
+		var s: float = surf[clampi(int(px[k] / COL), 0, nc - 1)]
+		if py[k] < s - 6.0:
+			spray += 1
+		elif py[k] < s + 20.0:
+			top_sum += sp[k]; top_n += 1
+	var floor_rho := floor_n * SimParams.SPACING * SimParams.SPACING / (SimParams.WORLD_SIZE.x * 20.0)
+	print("SURF f=%5d tilt=%6.1f rough=%5.2f spray=%4d top_v=%6.2f floor_rho=%.2f" % [frame_i, tilt, sqrt(r2 / nc), spray, top_sum / maxf(top_n, 1), floor_rho])

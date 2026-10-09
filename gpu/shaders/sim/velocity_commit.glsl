@@ -1,10 +1,10 @@
 #[compute]
 #version 450
 
-// Velocity 3/3: write the solved position and new velocity back to the particle's
-// slot for the next frame.
+// Velocity 3/3: write the solved position and new velocity back to the particle's slot
+// for the next frame.
 
-// common.glslinc stamp: Params 108 B, v3. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v5. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

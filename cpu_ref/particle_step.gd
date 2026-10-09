@@ -2,7 +2,9 @@
 ## Mirrors the GPU passes in gpu/shaders/sim/ one for one, in plain readable form:
 ##   predict  -> gravity, step clamp, wall clamp            (predict.glsl)
 ##   hash     -> neighbours within H                         (hash_*.glsl, scan_*.glsl)
-##   solve    -> per iteration: lambda, delta, apply         (solve_*.glsl)
+##   hydro    -> liquid density projection grid               (hydro_*.glsl)
+##   solve    -> grid pressure push, then                   (solve_pressure.glsl)
+##               per iteration: lambda, delta, apply         (solve_*.glsl)
 ##               liquids: PBF density constraint (liquid.glslinc)
 ##               powders: frictional contacts   (powder.glslinc)
 ##   velocity -> v = (pred - pos) / dt, drag, XSPH, commit   (velocity_*.glsl)
@@ -90,13 +92,18 @@ static func scorr(r2: float, h: float) -> float:
 # --- Step -------------------------------------------------------------------------
 
 ## Advances particles one frame. state: "pos", "vel" (PackedVector2Array) and
-## "material" (PackedInt32Array), all the same length. Modified in place.
+## "material" (PackedInt32Array), all the same length, and optionally "hydro_p"
+## (PackedFloat32Array, the density projection grid's pressure from the last frame;
+## added at 0 if missing). Modified in place.
 func step(state: Dictionary, dt: float, iterations: int) -> void:
 	var pos: PackedVector2Array = state.pos
 	var vel: PackedVector2Array = state.vel
 	var mat: PackedInt32Array = state.material
 	var n := pos.size()
 	var h := SimParams.H
+	var hydro_p: PackedFloat32Array = state.get("hydro_p", PackedFloat32Array())
+	var hsize := hydro_size(world_size)
+	hydro_p.resize(hsize.x * hsize.y)
 
 	# Predict.
 	var pred := PackedVector2Array()
@@ -109,15 +116,23 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	# Neighbour lists from the predicted positions (the GPU rebuilds its hash here too).
 	var neighbours := _find_neighbours(pred, h)
 
+	# Density projection grid, then its push on liquids (hydro_*.glsl, solve_pressure.glsl).
+	var phi := _hydro_density(pred, mat)
+	_hydro_solve(phi, hydro_p, dt)
+	var delta := PackedVector2Array()
+	delta.resize(n)
+	for i in n:
+		delta[i] = _hydro_delta(pred[i], phi, hydro_p, dt).limit_length(0.5 * SimParams.SPACING) \
+				if _class(mat[i]) == LIQUID else Vector2.ZERO
+	for i in n:
+		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i])
+
 	# Solver iterations: lambda, delta, apply.
 	var lambda := PackedFloat32Array()
 	lambda.resize(n)
-	var delta := PackedVector2Array()
-	delta.resize(n)
 	for _it in iterations:
 		for i in n:
-			lambda[i] = _lambda(i, pred, mat, neighbours[i], h) \
-					if _class(mat[i]) == LIQUID else 0.0
+			lambda[i] = minf(_lambda(i, pred, mat, neighbours[i], h), 0.0) if _class(mat[i]) == LIQUID else 0.0
 		for i in n:
 			var d := Vector2.ZERO
 			if _class(mat[i]) == LIQUID:
@@ -132,14 +147,16 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	new_vel.resize(n)
 	for i in n:
 		var v := (pred[i] - pos[i]) / dt
+		var v_pre := vel[i].limit_length(SimParams.MAX_STEP / dt)
 		if _class(mat[i]) == POWDER:
-			var v_pre := vel[i].limit_length(SimParams.MAX_STEP / dt)
 			# Sleeping (velocity_update.glsl): a stopped grain that barely moved stays put.
 			var stopped := (v - v_pre).length() > 0.5 * SimParams.GRAVITY * dt
 			if stopped and pred[i].distance_to(pos[i]) < SimParams.SLEEP_DISTANCE:
 				pred[i] = pos[i]
 				v = Vector2.ZERO
-			v = limit_separation(v, v_pre)
+			v = limit_separation(v, v_pre, SimParams.MAX_SEPARATION, 0.0)
+		else:
+			v = limit_separation(v, v_pre, 0.0, SimParams.LIQUID_KICK * SimParams.GRAVITY * dt)
 		vel[i] = v * (1.0 - materials[mat[i]].drag)
 	for i in n:
 		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h)
@@ -148,17 +165,20 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		pos[i] = pred[i]
 	state.pos = pos
 	state.vel = vel
+	state.hydro_p = hydro_p
 
 
-## Powder push-out may stop a grain but not launch it faster than MAX_SEPARATION
-## in the push direction. v_pre is the velocity the grain was predicted with.
-static func limit_separation(v: Vector2, v_pre: Vector2) -> Vector2:
+## The solver's correction may stop a particle but leave it at most
+## max(sep, its speed along the correction before the solver) + kick in that direction.
+## Powders: sep MAX_SEPARATION, kick 0. Liquids: sep 0, kick LIQUID_KICK * GRAVITY * dt.
+## v_pre is the velocity the particle was predicted with. Same as velocity_update.glsl.
+static func limit_separation(v: Vector2, v_pre: Vector2, sep: float, kick: float) -> Vector2:
 	var dv := v - v_pre
 	var dv_len := dv.length()
 	if dv_len <= 1e-6:
 		return v
 	var n := dv / dv_len
-	var excess := v.dot(n) - maxf(SimParams.MAX_SEPARATION, v_pre.dot(n))
+	var excess := v.dot(n) - (maxf(sep, v_pre.dot(n)) + kick)
 	return v - excess * n if excess > 0.0 else v
 
 
@@ -224,7 +244,7 @@ func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: Packed
 		grad_i += g
 		if _class(mat[j]) == LIQUID:
 			grad_sum += g.length_squared()
-	var c := maxf(density / rest_density - 1.0, 0.0)
+	var c := density / rest_density - 1.0
 	return -c / (grad_sum + grad_i.length_squared() + SimParams.LAMBDA_EPS)
 
 
@@ -234,12 +254,113 @@ func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lamb
 	var d := lambda[i] * Vector2(wall.y, wall.z)
 	for j in nb:
 		var rv := pred[i] - pred[j]
-		var liquid_j := _class(mat[j]) == LIQUID
-		var lj := lambda[j] if liquid_j else 0.0
-		# Liquid pairs are mass-scaled by height like powder stacks (liquid.glslinc).
-		var share := 2.0 / (exp(clampf(SimParams.STACK_K * rv.y, -8.0, 8.0)) + 1.0) if liquid_j else 1.0
-		d += share * (lambda[i] + lj + scorr(rv.length_squared(), h)) * spiky_grad(rv, h, i, j)
+		var lj := lambda[j] if _class(mat[j]) == LIQUID else 0.0
+		d += (lambda[i] + lj + scorr(rv.length_squared(), h)) * spiky_grad(rv, h, i, j)
 	return d / rest_density
+
+
+# --- Liquid density projection grid (hydro.glslinc) --------------------------------
+
+## Coarse grid size: HYDRO_CELL hash cells per cell along each axis.
+static func hydro_size(world: Vector2) -> Vector2i:
+	var g := Vector2i(ceili(world.x / SimParams.H), ceili(world.y / SimParams.H))
+	var c := SimParams.HYDRO_CELL
+	return Vector2i((g.x + c - 1) / c, (g.y + c - 1) / c)
+
+
+static func hydro_cell_size() -> float:
+	return SimParams.H * SimParams.HYDRO_CELL
+
+
+## Share of a 1D tent of half-width a, centred at c, that lies inside [0, w].
+static func hydro_tent_inside(c: float, a: float, w: float) -> float:
+	var lo := maxf(1.0 - c / a, 0.0)
+	var hi := maxf(1.0 - (w - c) / a, 0.0)
+	return 1.0 - 0.5 * (lo * lo + hi * hi)
+
+
+## Liquid (x) and powder (y) density over rest per coarse cell: each particle's tent
+## weight on the four nearest cell centres (hydro_splat), over the weight at rest spacing
+## of the part of the tent inside the world (hydro_density).
+func _hydro_density(pred: PackedVector2Array, mat: PackedInt32Array) -> PackedVector2Array:
+	var size := hydro_size(world_size)
+	var a := hydro_cell_size()
+	var sum := PackedVector2Array()
+	sum.resize(size.x * size.y)
+	for i in pred.size():
+		if _class(mat[i]) != LIQUID and _class(mat[i]) != POWDER:
+			continue
+		var channel := Vector2(1.0, 0.0) if _class(mat[i]) == LIQUID else Vector2(0.0, 1.0)
+		var g := pred[i] / a - Vector2(0.5, 0.5)
+		var b := Vector2i(g.floor())
+		var f := g - Vector2(b)
+		for dy in 2:
+			for dx in 2:
+				var c := b + Vector2i(dx, dy)
+				if c.x < 0 or c.y < 0 or c.x >= size.x or c.y >= size.y:
+					continue
+				sum[c.y * size.x + c.x] += channel * (f.x if dx == 1 else 1.0 - f.x) * (f.y if dy == 1 else 1.0 - f.y)
+	for c in sum.size():
+		var centre := (Vector2(c % size.x, c / size.x) + Vector2(0.5, 0.5)) * a
+		var inside := hydro_tent_inside(centre.x, a, world_size.x) * hydro_tent_inside(centre.y, a, world_size.y)
+		sum[c] *= SimParams.SPACING * SimParams.SPACING / (a * a * inside)
+	return sum
+
+
+## HYDRO_SWEEPS projected red-black SOR sweeps on p, in place (hydro_sweep).
+func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> void:
+	var size := hydro_size(world_size)
+	var a := hydro_cell_size()
+	var offs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	for _s in SimParams.HYDRO_SWEEPS:
+		for parity in 2:
+			for c in phi.size():
+				var ci := Vector2i(c % size.x, c / size.x)
+				if (ci.x + ci.y) % 2 != parity:
+					continue
+				if phi[c].x < SimParams.HYDRO_AIR:
+					p[c] = 0.0
+					continue
+				var sum := 0.0
+				var n := 0.0
+				for off in offs:
+					var nc: Vector2i = ci + off
+					if nc.x < 0 or nc.y < 0 or nc.x >= size.x or nc.y >= size.y:
+						continue
+					var ni := nc.y * size.x + nc.x
+					n += 1.0
+					sum += 0.0 if phi[ni].x < SimParams.HYDRO_AIR else p[ni]
+				# Thin cells are pulled full only under full water and without powder (a trapped bubble).
+				var covered := ci.y > 0 and phi[c - size.x].x >= SimParams.HYDRO_FULL and phi[c].y < SimParams.HYDRO_POWDER
+				var err := phi[c].x - 1.0 if covered else maxf(phi[c].x - 1.0, 0.0)
+				var rhs := -a * a * SimParams.HYDRO_K * err / (dt * dt)
+				p[c] = maxf(lerpf(p[c], (sum - rhs) / n, SimParams.HYDRO_SOR), 0.0)
+
+
+## Pressure at coarse cell c, mirrored past the grid edge (hydro_p_at).
+func _hydro_p_at(c: Vector2i, phi: PackedVector2Array, p: PackedFloat32Array) -> float:
+	var size := hydro_size(world_size)
+	var cc := c.clamp(Vector2i.ZERO, size - Vector2i.ONE)
+	var i := cc.y * size.x + cc.x
+	return 0.0 if phi[i].x < SimParams.HYDRO_AIR else p[i]
+
+
+func _hydro_p_sample(x: Vector2, phi: PackedVector2Array, p: PackedFloat32Array) -> float:
+	var g := x / hydro_cell_size() - Vector2(0.5, 0.5)
+	var b := Vector2i(g.floor())
+	var f := g - Vector2(b)
+	var top := lerpf(_hydro_p_at(b, phi, p), _hydro_p_at(b + Vector2i(1, 0), phi, p), f.x)
+	var bottom := lerpf(_hydro_p_at(b + Vector2i(0, 1), phi, p), _hydro_p_at(b + Vector2i(1, 1), phi, p), f.x)
+	return lerpf(top, bottom, f.y)
+
+
+## Position change this step from the grid pressure: -grad p * dt^2 (hydro_delta).
+func _hydro_delta(x: Vector2, phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> Vector2:
+	var e := 0.5 * hydro_cell_size()
+	var grad := Vector2(
+			_hydro_p_sample(x + Vector2(e, 0.0), phi, p) - _hydro_p_sample(x - Vector2(e, 0.0), phi, p),
+			_hydro_p_sample(x + Vector2(0.0, e), phi, p) - _hydro_p_sample(x - Vector2(0.0, e), phi, p)) / (2.0 * e)
+	return -grad * dt * dt
 
 
 ## Density a wall at distance d adds (poly6 over the half-plane past it, at rest

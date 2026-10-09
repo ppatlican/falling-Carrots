@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b1sjiwpjsw3lq"
+path="res://.godot/imported/hydro_red.glsl-ac8f675faba7e080f32f13287b8a42f3.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/hydro_red.glsl"
+dest_files=["res://.godot/imported/hydro_red.glsl-ac8f675faba7e080f32f13287b8a42f3.res"]
+
+[params]
+

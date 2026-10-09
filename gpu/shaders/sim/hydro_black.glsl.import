@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dgmbja142fslt"
+path="res://.godot/imported/hydro_black.glsl-0bf1f72c0b612427411c1e6677b4cb74.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/hydro_black.glsl"
+dest_files=["res://.godot/imported/hydro_black.glsl-0bf1f72c0b612427411c1e6677b4cb74.res"]
+
+[params]
+

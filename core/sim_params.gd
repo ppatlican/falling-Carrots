@@ -25,7 +25,7 @@ const CONTACT_RELAX := 0.5
 ## Stack stiffening (mass scaling by height, as in Macklin et al. 2014 "Unified
 ## Particle Physics"): in a contact the lower particle acts exp(STACK_K * dy) times
 ## heavier, so piles hold their shape under load instead of crushing. Per px of dy.
-## Also used between liquid particles (liquid.glslinc), so deep water isn't squeezed.
+## Powder-powder contacts only (liquids get their depth pressure from the hydro grid).
 const STACK_K := 0.3
 ## Share of a powder-liquid contact's push-out that the powder takes; the liquid takes
 ## the rest. Low, so water yields and can't push sand grains apart (see powder.glslinc).
@@ -41,6 +41,26 @@ const WET_SLIP := 0.9
 ## Powder sleeping (velocity_update.glsl): a grain the solver stopped that moved less
 ## than this (px) in a step stays put with zero velocity. Below gravity * DT^2.
 const SLEEP_DISTANCE := 0.1
+
+## Liquids (velocity_update.glsl): the speed the solver's correction may add in its own
+## direction in one step, in units of GRAVITY * DT. Stops the solver launching water.
+const LIQUID_KICK := 2.0
+
+## Liquid density projection on a coarse grid (gpu/shaders/sim/hydro.glslinc): cell size
+## in hash cells, the density (over rest) below which a cell is air, the SOR
+## over-relaxation, the share of a cell's compression removed per step, the density from
+## which the cell above counts as full (thin cells under full water are pulled full), and
+## the red-black sweeps per frame (warm-started from the last frame). Fewer sweeps don't
+## converge in deep water: 16 left 50k water moving at 6.5 px/s with a 12 px tilt
+## instead of at rest (GPU probe). The sweeps are most of the pass's cost.
+const HYDRO_CELL := 4
+const HYDRO_AIR := 0.3
+const HYDRO_SOR := 1.8
+const HYDRO_K := 0.5
+const HYDRO_FULL := 0.95
+## Powder density over rest above which a thin cell isn't pulled full: it is sand, not air.
+const HYDRO_POWDER := 0.05
+const HYDRO_SWEEPS := 32
 
 ## Brush: radius in px, and the fraction of the circle's empty capacity added per frame.
 const BRUSH_RADIUS := 10.0
