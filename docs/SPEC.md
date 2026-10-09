@@ -1,6 +1,6 @@
 # Cooking Sandbox: Design Spec (v1)
 
-Audience: Opus 5.5, who writes all the code. The human owner tests on real hardware and reports back. Items marked **[verify]** are Godot API details to check against the 4.7.1 docs before relying on them.
+Audience: Opus 5.5, who writes all the code. The owner tests on real hardware (PC and phone) and reports back. Terms follow `CONTEXT.md`; current progress and open bugs are in `docs/STATUS.md`.
 
 ## 1. Product
 
@@ -28,8 +28,8 @@ Each material belongs to exactly one class. New classes are the only thing that 
 
 | Class | Method |
 |---|---|
-| Liquid | PBF-style density constraint, plus mild viscosity (XSPH) and a surface-tension hint. The viscosity parameter covers water, oil, and batter. |
-| Powder | Frictional particle-particle contact. Flour has strong drag, low mass, and a wind-coupling coefficient. Sand is heavier and has little drag. Gameplay-first tweaks (M2): powder-powder contacts are mass-scaled by height so piles hold their volume under load (`STACK_K`); a grain's push-out speed is capped so overlap can't launch it (`MAX_SEPARATION`); grains surrounded by liquid lose most of their friction so sand settles under water (`WET_SLIP`). |
+| Liquid | PBF-style density constraint, plus mild viscosity (XSPH) and a surface-tension hint. The viscosity parameter covers water, oil, and batter. Walls count toward a liquid particle's density (an analytic poly6 integral over the half-plane past the wall), so liquid doesn't crowd into walls. Liquid–liquid pushes are mass-scaled by height with `STACK_K`, as for powders, so deep liquid isn't squeezed by the few Jacobi iterations. |
+| Powder | Frictional particle-particle contact. Flour has strong drag, low mass, and a wind-coupling coefficient. Sand is heavier and has little drag. Gameplay-first tweaks (M2): powder-powder contacts are mass-scaled by height so piles hold their volume under load (`STACK_K`); a grain's push-out never adds velocity away from a contact (`MAX_SEPARATION` 0, so impacts can't rebound grains); the powder share of a powder–liquid push-out is small so water yields (`POWDER_LIQUID_SHARE`); grains surrounded by liquid lose most of their friction so sand settles under water (`WET_SLIP`); side walls apply Coulomb friction (at most friction × how far the grain is pressed in); a grain the solver stopped that moved less than `SLEEP_DISTANCE` in a step stays put (sleeping), which is what brings a pile to rest. |
 | Cluster solid | Shape matching: a group of particles is pulled toward a rigid-transformed rest shape with a stiffness parameter. Carrots are stiff and dough is soft (lower stiffness, plus plastic deformation optional later). Particles within a cluster are bonded, so cutting later means severing bonds, with no redesign. |
 | Gas | Light, short-lived particles. Buoyancy comes from temperature, they are pushed by wind, and they have a lifetime. This class covers fire, smoke, and steam. |
 | Static | Not particles. See 2.3. |
@@ -58,7 +58,7 @@ Buoyancy comes from per-material density in the density-constraint and contact r
 2. Predict positions (gravity, wind force, buoyancy).
 3. Rebuild the spatial hash.
 4. Solver iterations (about 3–4): density constraints, contacts, cluster shape matching, and static-SDF collision.
-5. Update velocities and apply viscosity and friction.
+5. Update velocities (powder sleeping and the push-out speed cap happen here) and apply viscosity and friction.
 6. Heat step: particle and cell conduction, then the wind grid step.
 7. Reaction pass: apply table rules and spawn or despawn particles.
 8. Render.
@@ -71,8 +71,10 @@ Buoyancy comes from per-material density in the density-constraint and contact r
 - Use 64-thread 1D workgroups. Check `LIMIT_MAX_COMPUTE_WORKGROUP_SIZE_X`, `_INVOCATIONS` and `_COUNT_X` at startup against the dispatch needed for `particle_cap`. There is no limit constant for maximum storage buffer size.
 - GPU readback is always `buffer_get_data_async()`. `buffer_get_data()` stalls the GPU. Readback is debug-only, with one exception: a 16-byte pool counter is read back every frame for the capacity meter (it lags 1–2 frames; the GPU enforces the cap on its own).
 - GPU timestamps (`get_captured_timestamp_gpu_time`) are **nanoseconds** (checked in the Vulkan driver source). The overlay shows microseconds.
-- Shared GLSL goes in `.glslinc` files pulled in with `#include "name.glslinc"` (relative path; verified to compile in 4.7.1). Godot does **not** re-import a `.glsl` when only an included file changes, and touching the file doesn't help (it compares content hashes). Reimport from the editor, or delete `.godot/imported/*.glsl-*`. `test_shaders.gd` fails on a stale import. Because of that, every sim `.glsl` carries a stamp comment on the line above `#include "common.glslinc"` (a comment on the include line itself is a syntax error) (the `Params` size). Whenever `common.glslinc` changes, edit that stamp in every `.glsl` (e.g. a version bump), so a merge or pull changes each shader's content and Godot reimports all of them. Without it, merging an include change gives "push constant ... not present" errors.
+- Shared GLSL goes in `.glslinc` files pulled in with `#include "name.glslinc"` (relative path; verified to compile in 4.7.1). Godot does **not** re-import a `.glsl` when only an included file changes, and touching the file doesn't help (it compares content hashes). Reimport from the editor, or delete `.godot/imported/*.glsl-*`. `test_shaders.gd` fails on a stale import. Because of that, every sim `.glsl` carries a stamp comment with the `Params` size and a version (currently `Params 108 B, v3`) on the line above `#include "common.glslinc"`; a comment on the include line itself is a syntax error. Whenever `common.glslinc` changes, bump that version in every `.glsl`, so a merge or pull changes each shader's content and Godot reimports all of them. Without it, merging an include change gives "push constant ... not present" errors. After editing any shader locally, delete `.godot/imported/<name>*` and run `--headless --import`.
 - All sim kernels share one binding layout (`gpu/shaders/sim/common.glslinc`) and get the same full uniform set; the engine ignores bindings a shader doesn't use (checked in `uniform_set_create`). Push constants must match the pipeline's size exactly, so every kernel reads the shared `Params` block (108 bytes, under the 128-byte portable limit).
+- Neighbour loops (`FOR_EACH_NEIGHBOUR(t)`) search the 3×3 cells around the cell particle `t` was hashed into this frame, never around its current solved position. Particles are stored by their hash cell, so this keeps every pair symmetric across solver iterations, as the CPU reference's once-per-frame neighbour lists are.
+- Every solver change lands in both the shaders and `cpu_ref/particle_step.gd`. The headless tests only run the CPU reference.
 - No RenderingDevice (Compatibility renderer, headless, no Vulkan) means an error screen, not a fallback. `fallback_to_opengl3` is off, and Windows uses Vulkan, not D3D12.
 - Tunables (`particle_cap`, `solver_iterations`) live in `res://config.json`. Export presets must include `*.json` in the non-resource filter.
 
@@ -119,7 +121,7 @@ Input is routed through an abstraction layer (actions such as `draw`, `erase`, a
 ## 6. Testing
 
 - **CPU reference:** a small, readable implementation of the core rules (the table loader, reactions, conduction, and a simplified 2D particle step). Headless tests cover the material validator, reaction outcomes, and conservation and sanity properties such as a cluster staying intact.
-- **GPU:** verified by the owner on real hardware, who reports screenshots, frame times, and a description of any bug.
+- **GPU:** on the PC, agents verify solver changes with the GPU probe (`tools/gpu_probe.gd`, which needs a real window) before calling them fixed: CPU-only results have been wrong on the GPU before. The owner verifies manual play and phones, and reports screenshots, frame times, and a description of any bug.
 - Add a debug overlay: particle count and cap, frame time per pass, and a toggle for the hash grid, the wind field, and the temperature visualization.
 
 ## 7. Milestones (riskiest first)
@@ -140,6 +142,7 @@ Input is routed through an abstraction layer (actions such as `draw`, `erase`, a
 |---|---|
 | The particle budget doesn't fit on mid-range phones | Milestone 2 measures it first. The cap is configurable, and the solver iteration count is tunable. |
 | Cross-material jitter or tunneling | Stability first: small time steps, clamped velocities, and position-based projection. Soft stiffness before hard stiffness. |
+| Deep piles and deep liquid with only ~4 Jacobi iterations: soft solves squeeze them, stiff solves overshoot and churn | Height mass scaling (`STACK_K`) for support, sleeping to bring powders to rest. Stack scaling isn't momentum-conserving and drives convection in deep liquid (open, see STATUS). Check settling with the GPU probe after any stiffness change. |
 | Cluster solids tunnel through thin static walls | Minimum wall thickness, plus substeps for fast objects. |
 | Compute shader differences across mobile GPUs | Use conservative GLSL features, test on at least two devices, and keep shaders small. |
 | Wind grid instability | A small time step, a clamped velocity, and a fixed Jacobi iteration count. |

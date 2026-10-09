@@ -7,8 +7,13 @@
 // deep sand piles crush to ~8x rest density under water (Milestone 2 measurement).
 // Between two powder grains the push-out is also mass-scaled by height (stack_weight):
 // the upper grain gives way, so a pile is held up from the bottom instead of being
-// crushed. Not for powder-liquid pairs: there plain density decides, so sand sinks.
+// crushed. Powder-liquid pairs don't use that: they use POWDER_LIQUID_SHARE, so water yields.
 // Friction is cut for grains surrounded by liquid (wet_slip), see the end of contact_delta.
+
+// Share of a powder-liquid contact's push-out that the powder takes (liquid takes the rest).
+// Low, so water yields: water pushing into sand pushes the grains apart, they lose their
+// contacts and flow. Mirror: SimParams.POWDER_LIQUID_SHARE.
+const float POWDER_LIQUID_SHARE = 0.1;
 
 // Share of a contact's push-out that particle t takes, for rv = p_t - p_j (y down).
 float stack_weight(float m_t, float m_j, float rv_y) {
@@ -24,7 +29,8 @@ vec2 contact_delta(uint t) {
 	vec2 fric = vec2(0.0);
 	float n_near = 0.0;
 	float n_wet = 0.0;
-	FOR_EACH_NEIGHBOUR(pt) {
+	float fric_w = 0.0;
+	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
 		if (j == t) continue;
 		Material mj = materials[s_material(j)];
@@ -39,7 +45,10 @@ vec2 contact_delta(uint t) {
 
 		vec2 normal = pair_dir(rv, dist, t, j);
 		float pen = params.spacing - dist;
-		float w = mj.phys.x / (mt.phys.x + mj.phys.x);
+		bool mixed = t_powder != (mj.info.x == CLASS_POWDER);
+		float w = mixed
+				? (t_powder ? POWDER_LIQUID_SHARE : 1.0 - POWDER_LIQUID_SHARE)
+				: mj.phys.x / (mt.phys.x + mj.phys.x);
 		bool stack = t_powder && mj.info.x == CLASS_POWDER;
 		sum += (stack ? stack_weight(mt.phys.x, mj.phys.x, rv.y) : w) * pen * normal;
 
@@ -53,8 +62,13 @@ vec2 contact_delta(uint t) {
 			} else if (t_len > 1e-6) {
 				fric -= w * tangent * min(0.8 * mu * pen / t_len, 1.0);  // kinetic
 			}
+			fric_w += w;
 		}
 	} END_NEIGHBOURS
+	// Friction is averaged over the contacts (divided by their total weight, at least 1),
+	// so the correction per iteration stays below CONTACT_RELAX. An unnormalised sum
+	// overshoots with many contacts and makes a settled pile wobble.
+	fric /= max(fric_w, 1.0);
 	// Wet grains slip: friction drops with the share of liquid neighbours, so sand
 	// under water slumps and sinks instead of holding water pockets inside the pile.
 	float wet = n_near > 0.0 ? n_wet / n_near : 0.0;
