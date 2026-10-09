@@ -171,11 +171,18 @@ vec2 spiky_grad(vec2 rv, uint i, uint j) {
 	return pair_dir(rv, r, i, j) * (-30.0 / (PI * pow(params.h, 5.0)) * d * d);
 }
 
-// Neighbour loop over the 3x3 cells around p, in sorted space. Usage:
-//   FOR_EACH_NEIGHBOUR(p) { uint j = k; ... } END_NEIGHBOURS
+// Neighbour loop over the 3x3 cells around sorted particle t's hash cell. Usage:
+//   FOR_EACH_NEIGHBOUR(t) { uint j = k; ... } END_NEIGHBOURS
 // Includes the particle itself: skip it with `if (j == t) continue;`.
-#define FOR_EACH_NEIGHBOUR(p) \
-	ivec2 nb_c = cell_coord(p); \
+// The window comes from the cell t was hashed into this frame, not from its current
+// solved position. Particles are stored by their hash cell, so this keeps the pair
+// sets symmetric (j sees t exactly when t sees j) across all solver iterations, as
+// the CPU reference's once-per-frame neighbour lists do. A window taken from the
+// moving position let t see j while j missed t: unbalanced pushes that pumped energy
+// into the water and the sand pile (Milestone 2 GPU measurement).
+#define FOR_EACH_NEIGHBOUR(t) \
+	uint nb_home = particle_cell[sorted_ids[t]]; \
+	ivec2 nb_c = ivec2(int(nb_home % params.grid_w), int(nb_home / params.grid_w)); \
 	for (int nb_dy = -1; nb_dy <= 1; nb_dy++) { \
 		for (int nb_dx = -1; nb_dx <= 1; nb_dx++) { \
 			ivec2 nb_cc = nb_c + ivec2(nb_dx, nb_dy); \

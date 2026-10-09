@@ -14,7 +14,17 @@ Last updated: 2026-10-09. Current milestone: **2 (GPU liquid + powder + brush): 
 - **Liquid:** PBF density constraint plus s_corr and XSPH viscosity (`gpu/shaders/sim/liquid.glslinc`).
 - **Powder:** mass-weighted contacts with static/kinetic friction, plus floor friction (`powder.glslinc`). Sand sinks through water.
   - Anti-compression and anti-hop fix (owner report: sand under water crushed, top grains "jumping like grasshoppers"):
-    stack stiffening between grains (`STACK_K` 0.3), a 15 px/s cap on push-out speed (`MAX_SEPARATION`), and wet slip (`WET_SLIP` 0.9).
+    stack stiffening between grains (`STACK_K` 0.3), a push-out speed cap (`MAX_SEPARATION`, now 0: sand is inelastic), and wet slip (`WET_SLIP` 0.9).
+- **Edge, wobble and sand-in-water changes (first measured on the CPU; see the GPU fixes below):**
+  - Upward kicks at the edges: falling grains rebounded at the 15 px/s cap. Cap is now 0, so corner and heap rebound is gone (max upward 14.85 → 0.00 px/s in the corner test).
+  - Wobble: powder friction is averaged over contacts, not summed, so the per-iteration correction stays stable. A 200-grain heap went from 5% velocity reversals to 0.
+  - Powder pressed into a side wall gets Coulomb wall friction: it cancels at most friction × how far the grain is pressed in. A fixed cut like the floor's held lightly touching grains up the walls in thin columns.
+  - Water yields to sand (`POWDER_LIQUID_SHARE` 0.1): sand–water push-out goes mostly to the water.
+- **GPU fixes for pudding and water (verified with the GPU probe, RTX 3080 Ti, 2026-10-09):**
+  - Neighbour windows come from each particle's hash cell, not its moving position (`FOR_EACH_NEIGHBOUR(t)`), so pairs stay symmetric across iterations like the CPU's per-frame lists. No measurable change on its own; it removes a CPU/GPU difference.
+  - Sand sleeping (`SLEEP_DISTANCE` 0.1 px, `velocity_update.glsl`): a grain the solver stopped that moved less than that stays put. 50k sand: RMS displacement per 60 frames 2.5 → 0.000 px from frame ~900 to 3000, surface fixed at y≈111 (was breathing between 92 and 130), wall grains 0 px/s upward.
+  - Water: walls add density (`wall_density`, poly6 over the half-plane past the wall), and liquid pairs are mass-scaled by height with `STACK_K`, like sand. Deep water was squeezed to ~3× rest at the bottom and jittered at ~115 px/s; it is now at rest density (≈1.05) all the way down.
+  - Sand dropped into 10k water sinks to the floor and comes to rest, with no water left inside the pile.
 - **Brush:**
   - Left mouse adds the selected material and right mouse erases any material.
   - Toolbar has Sand/Water, "+10k sand", "+10k water" (benchmark fills) and Clear.
@@ -63,6 +73,19 @@ Solve dominates once particles are settled and packed, so measure the settled st
 6. The log has no errors, and no leaked-RID warnings on quit.
 
 ## Known issues
+- **Deep water still churns (GPU, measured 2026-10-09, improved, not fixed).** GPU probe, water dropped as 10k blocks from the top:
+  | | before | now |
+  |---|---|---|
+  | 30k, mean speed after 15–30 s | 85 px/s | 30–36 px/s |
+  | 30k, moving grains in the bottom 40 px | ~11,400 | ~2,900 |
+  | 50k, mean speed | 93 px/s | 57–67 px/s |
+  | 10k from rest, mean speed after 28 s | 7.5 px/s | 5.1 px/s |
+  - Wall grains still reach 200–350 px/s upward at 30k and 50k. Coherent plumes rise mid-tank at rest density, about 240 px/s (the MAX_STEP cap).
+  - At rest density, 50k water fills ~312 of the 360 px world, so it touches the top edge. That is the real volume, not a bug.
+  - Likely cause: the liquid `STACK_K` scaling is not momentum-conserving. It lifts in proportion to the pressure itself, not its gradient, so pressure from the flow drives convection. Without it the water is squeezed instead (30k: 89 px/s).
+  - Tried and rejected: liquid stack k 0.1 and 0.05 (bigger waves, 60–68 px/s), capping the lift at gravity (95 px/s), XSPH 0.2 (27 px/s, more viscous), delta relaxation 0.5 (31 px/s).
+  - A real fix probably needs pressure that carries over between frames (warm-started λ) or more effective iterations, rather than stack scaling.
+- **Sand sleeping trade-off:** a grain sliding slower than ~6 px/s on a slope stops, so heaps freeze instead of creeping. Averaged contacts or CONTACT_RELAX 0.15 also stopped the churn, but crushed the 50k pile (centroid y 244 → 302–342).
 - **Compression under load (mostly fixed).** Measured with 10k sand under 10k water, in particles per 4×4 cell (rest is 4):
   - Sand: 9.9 → 5.2 on average (max 17 → 8).
   - Floor row: 13.6 → 7.5.

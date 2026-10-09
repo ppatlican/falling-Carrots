@@ -25,13 +25,22 @@ const CONTACT_RELAX := 0.5
 ## Stack stiffening (mass scaling by height, as in Macklin et al. 2014 "Unified
 ## Particle Physics"): in a contact the lower particle acts exp(STACK_K * dy) times
 ## heavier, so piles hold their shape under load instead of crushing. Per px of dy.
+## Also used between liquid particles (liquid.glslinc), so deep water isn't squeezed.
 const STACK_K := 0.3
+## Share of a powder-liquid contact's push-out that the powder takes; the liquid takes
+## the rest. Low, so water yields and can't push sand grains apart (see powder.glslinc).
+const POWDER_LIQUID_SHARE := 0.1
 ## Fastest a powder grain may move away from a contact because of the push-out alone
-## (px/s). Overlap is still resolved, it just can't launch grains (no "grasshoppers").
-const MAX_SEPARATION := 15.0
+## (px/s). 0 makes sand inelastic: overlap is still resolved, but a push-out never adds
+## velocity away from a contact. At 15 the impacts of falling grains rebounded them
+## upward (the "edges send particles up" bug, measured in cpu_ref), so it is now 0.
+const MAX_SEPARATION := 0.0
 ## Share of its friction a powder grain loses when fully surrounded by liquid. Lets
 ## sand under water slump and settle under the water instead of trapping it.
 const WET_SLIP := 0.9
+## Powder sleeping (velocity_update.glsl): a grain the solver stopped that moved less
+## than this (px) in a step stays put with zero velocity. Below gravity * DT^2.
+const SLEEP_DISTANCE := 0.1
 
 ## Brush: radius in px, and the fraction of the circle's empty capacity added per frame.
 const BRUSH_RADIUS := 10.0

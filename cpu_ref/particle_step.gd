@@ -133,7 +133,13 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	for i in n:
 		var v := (pred[i] - pos[i]) / dt
 		if _class(mat[i]) == POWDER:
-			v = limit_separation(v, vel[i].limit_length(SimParams.MAX_STEP / dt))
+			var v_pre := vel[i].limit_length(SimParams.MAX_STEP / dt)
+			# Sleeping (velocity_update.glsl): a stopped grain that barely moved stays put.
+			var stopped := (v - v_pre).length() > 0.5 * SimParams.GRAVITY * dt
+			if stopped and pred[i].distance_to(pos[i]) < SimParams.SLEEP_DISTANCE:
+				pred[i] = pos[i]
+				v = Vector2.ZERO
+			v = limit_separation(v, v_pre)
 		vel[i] = v * (1.0 - materials[mat[i]].drag)
 	for i in n:
 		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h)
@@ -167,12 +173,20 @@ func _clamp_to_world(p: Vector2, slot: int) -> Vector2:
 	return p.clamp(Vector2(r, r), world_size - Vector2(r, r))
 
 
-## Wall clamp. Powders resting on the floor get friction: their sideways move
-## is cut by their friction coefficient.
+## Wall clamp. Powders pressed into a wall get friction. Floor: the sideways move is
+## cut by their friction coefficient. Side walls: Coulomb, the vertical move cancelled
+## is at most friction x how far the grain was pressed into the wall (solve_apply.glsl).
+## Without the side-wall part, contacts push wall grains up the wall.
 func _apply_delta(i: int, old: Vector2, p: Vector2, m: int) -> Vector2:
 	var c := _clamp_to_world(p, i)
-	if _class(m) == POWDER and p.y > c.y:
-		c.x = lerpf(c.x, old.x, materials[m].friction)
+	if _class(m) == POWDER:
+		var mu: float = materials[m].friction
+		if p.y > c.y:
+			c.x = lerpf(c.x, old.x, mu)
+		var pen_x := absf(p.x - c.x)
+		if pen_x > 0.0:
+			var slide := c.y - old.y
+			c.y -= signf(slide) * minf(absf(slide), mu * pen_x)
 	return c
 
 
@@ -199,8 +213,9 @@ func _find_neighbours(pred: PackedVector2Array, h: float) -> Array:
 ## PBF lambda. Every neighbour counts toward density (sand fills volume too),
 ## but only liquid neighbours move, so only they add to the gradient sum.
 func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: PackedInt32Array, h: float) -> float:
-	var density := poly6(0.0, h)
-	var grad_i := Vector2.ZERO
+	var wall := wall_density(pred[i], h, rest_density, world_size)
+	var density: float = poly6(0.0, h) + wall.x
+	var grad_i := Vector2(wall.y, wall.z) / rest_density
 	var grad_sum := 0.0
 	for j in nb:
 		var rv := pred[i] - pred[j]
@@ -215,12 +230,40 @@ func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: Packed
 
 func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lambda: PackedFloat32Array,
 		nb: PackedInt32Array, h: float) -> Vector2:
-	var d := Vector2.ZERO
+	var wall := wall_density(pred[i], h, rest_density, world_size)
+	var d := lambda[i] * Vector2(wall.y, wall.z)
 	for j in nb:
 		var rv := pred[i] - pred[j]
-		var lj := lambda[j] if _class(mat[j]) == LIQUID else 0.0
-		d += (lambda[i] + lj + scorr(rv.length_squared(), h)) * spiky_grad(rv, h, i, j)
+		var liquid_j := _class(mat[j]) == LIQUID
+		var lj := lambda[j] if liquid_j else 0.0
+		# Liquid pairs are mass-scaled by height like powder stacks (liquid.glslinc).
+		var share := 2.0 / (exp(clampf(SimParams.STACK_K * rv.y, -8.0, 8.0)) + 1.0) if liquid_j else 1.0
+		d += share * (lambda[i] + lj + scorr(rv.length_squared(), h)) * spiky_grad(rv, h, i, j)
 	return d / rest_density
+
+
+## Density a wall at distance d adds (poly6 over the half-plane past it, at rest
+## density), and its slope d(density)/dd. Returns Vector2(density, slope).
+static func wall_density_1d(d: float, h: float, rest: float) -> Vector2:
+	if d >= h:
+		return Vector2.ZERO
+	var s := maxf(d, 0.0) / h
+	var a := asin(s)
+	var q := 1.0 - s * s
+	var c := 128.0 / (35.0 * PI)
+	var j := (35.0 * a + 28.0 * sin(2.0 * a) + 7.0 * sin(4.0 * a) + 4.0 / 3.0 * sin(6.0 * a)
+			+ 0.125 * sin(8.0 * a)) / 128.0
+	return Vector2(rest * (0.5 - c * j), -rest * c / h * q * q * q * sqrt(q))
+
+
+## Density from all four walls and its gradient with respect to p, as
+## Vector3(density, grad.x, grad.y). Same as wall_density() in liquid.glslinc.
+static func wall_density(p: Vector2, h: float, rest: float, world: Vector2) -> Vector3:
+	var l := wall_density_1d(p.x, h, rest)
+	var r := wall_density_1d(world.x - p.x, h, rest)
+	var t := wall_density_1d(p.y, h, rest)
+	var b := wall_density_1d(world.y - p.y, h, rest)
+	return Vector3(l.x + r.x + t.x + b.x, l.y - r.y, t.y - b.y)
 
 
 ## Share of a contact's push-out that particle i takes, for rv = p_i - p_j (y down).
@@ -240,6 +283,7 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	var fric := Vector2.ZERO
 	var n_near := 0
 	var n_wet := 0
+	var fric_w := 0.0
 	for j in nb:
 		var mj: Dictionary = materials[mat[j]]
 		if mi["class"] != POWDER and mj["class"] != POWDER:
@@ -254,7 +298,12 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			continue
 		var normal := pair_dir(rv, dist, i, j)
 		var pen := SimParams.SPACING - dist
-		var w: float = mj.density / (mi.density + mj.density)
+		var w: float
+		if (mi["class"] == POWDER) != (mj["class"] == POWDER):
+			# Powder-liquid: the liquid yields (see POWDER_LIQUID_SHARE).
+			w = SimParams.POWDER_LIQUID_SHARE if mi["class"] == POWDER else 1.0 - SimParams.POWDER_LIQUID_SHARE
+		else:
+			w = mj.density / (mi.density + mj.density)
 		var stack: bool = mi["class"] == POWDER and mj["class"] == POWDER
 		sum += (stack_weight(mi.density, mj.density, rv.y) if stack else w) * pen * normal
 		var mu: float = minf(mi.friction, mj.friction)
@@ -266,6 +315,11 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 				fric -= w * tangent  # static: cancel the slide
 			elif t_len > 1e-6:
 				fric -= w * tangent * minf(0.8 * mu * pen / t_len, 1.0)  # kinetic
+			fric_w += w
+	# Friction is averaged over the contacts (divided by their total weight, at least 1),
+	# so the correction per iteration stays below CONTACT_RELAX. An unnormalised sum
+	# overshoots with many contacts and makes a settled pile wobble.
+	fric /= maxf(fric_w, 1.0)
 	# Wet grains slip (WET_SLIP): friction drops with the share of liquid neighbours.
 	var wet := float(n_wet) / n_near if n_near > 0 else 0.0
 	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet)) * SimParams.CONTACT_RELAX
