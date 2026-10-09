@@ -42,6 +42,15 @@ const WET_SLIP := 0.9
 ## than this (px) in a step stays put with zero velocity. Below gravity * DT^2.
 const SLEEP_DISTANCE := 0.1
 
+## Liquid carried-over pressure (liquid.glslinc): the share of each solver iteration's
+## lambda added to a particle's running pressure, and the share of that pressure kept
+## from one frame to the next.
+const PRESSURE_GAIN := 0.1
+const WARM_START := 0.95
+## Liquids (velocity_update.glsl): the speed the solver's correction may add in its own
+## direction in one step, in units of GRAVITY * DT. Stops the solver launching water.
+const LIQUID_KICK := 2.0
+
 ## Brush: radius in px, and the fraction of the circle's empty capacity added per frame.
 const BRUSH_RADIUS := 10.0
 const BRUSH_FILL := 0.3

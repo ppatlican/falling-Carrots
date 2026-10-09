@@ -2,7 +2,8 @@
 ## Mirrors the GPU passes in gpu/shaders/sim/ one for one, in plain readable form:
 ##   predict  -> gravity, step clamp, wall clamp            (predict.glsl)
 ##   hash     -> neighbours within H                         (hash_*.glsl, scan_*.glsl)
-##   solve    -> per iteration: lambda, delta, apply         (solve_*.glsl)
+##   solve    -> carried-over pressure push, then           (solve_pressure.glsl)
+##               per iteration: lambda, delta, apply         (solve_*.glsl)
 ##               liquids: PBF density constraint (liquid.glslinc)
 ##               powders: frictional contacts   (powder.glslinc)
 ##   velocity -> v = (pred - pos) / dt, drag, XSPH, commit   (velocity_*.glsl)
@@ -90,13 +91,17 @@ static func scorr(r2: float, h: float) -> float:
 # --- Step -------------------------------------------------------------------------
 
 ## Advances particles one frame. state: "pos", "vel" (PackedVector2Array) and
-## "material" (PackedInt32Array), all the same length. Modified in place.
+## "material" (PackedInt32Array), all the same length, and optionally "pressure"
+## (PackedFloat32Array, the liquids' carried-over pressure; added at 0 if missing).
+## Modified in place.
 func step(state: Dictionary, dt: float, iterations: int) -> void:
 	var pos: PackedVector2Array = state.pos
 	var vel: PackedVector2Array = state.vel
 	var mat: PackedInt32Array = state.material
 	var n := pos.size()
 	var h := SimParams.H
+	var pressure: PackedFloat32Array = state.get("pressure", PackedFloat32Array())
+	pressure.resize(n)
 
 	# Predict.
 	var pred := PackedVector2Array()
@@ -109,15 +114,27 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	# Neighbour lists from the predicted positions (the GPU rebuilds its hash here too).
 	var neighbours := _find_neighbours(pred, h)
 
+	# Carried-over liquid pressure: push down its gradient (solve_pressure.glsl).
+	var delta := PackedVector2Array()
+	delta.resize(n)
+	for i in n:
+		delta[i] = _pressure_delta(i, pred, mat, pressure, neighbours[i], h).limit_length(0.5 * SimParams.SPACING) \
+				if _class(mat[i]) == LIQUID else Vector2.ZERO
+	for i in n:
+		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i])
+
 	# Solver iterations: lambda, delta, apply.
 	var lambda := PackedFloat32Array()
 	lambda.resize(n)
-	var delta := PackedVector2Array()
-	delta.resize(n)
 	for _it in iterations:
 		for i in n:
-			lambda[i] = _lambda(i, pred, mat, neighbours[i], h) \
-					if _class(mat[i]) == LIQUID else 0.0
+			if _class(mat[i]) == LIQUID:
+				# Full lambda of either sign goes into the carried pressure (liquid_lambda).
+				var l := _lambda(i, pred, mat, neighbours[i], h)
+				pressure[i] = minf(pressure[i] + SimParams.PRESSURE_GAIN * l, 0.0)
+				lambda[i] = minf(l, 0.0)
+			else:
+				lambda[i] = 0.0
 		for i in n:
 			var d := Vector2.ZERO
 			if _class(mat[i]) == LIQUID:
@@ -132,33 +149,39 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	new_vel.resize(n)
 	for i in n:
 		var v := (pred[i] - pos[i]) / dt
+		var v_pre := vel[i].limit_length(SimParams.MAX_STEP / dt)
 		if _class(mat[i]) == POWDER:
-			var v_pre := vel[i].limit_length(SimParams.MAX_STEP / dt)
 			# Sleeping (velocity_update.glsl): a stopped grain that barely moved stays put.
 			var stopped := (v - v_pre).length() > 0.5 * SimParams.GRAVITY * dt
 			if stopped and pred[i].distance_to(pos[i]) < SimParams.SLEEP_DISTANCE:
 				pred[i] = pos[i]
 				v = Vector2.ZERO
-			v = limit_separation(v, v_pre)
+			v = limit_separation(v, v_pre, SimParams.MAX_SEPARATION, 0.0)
+		else:
+			v = limit_separation(v, v_pre, 0.0, SimParams.LIQUID_KICK * SimParams.GRAVITY * dt)
 		vel[i] = v * (1.0 - materials[mat[i]].drag)
 	for i in n:
 		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h)
 	for i in n:
 		vel[i] = new_vel[i]
 		pos[i] = pred[i]
+		pressure[i] *= SimParams.WARM_START
 	state.pos = pos
 	state.vel = vel
+	state.pressure = pressure
 
 
-## Powder push-out may stop a grain but not launch it faster than MAX_SEPARATION
-## in the push direction. v_pre is the velocity the grain was predicted with.
-static func limit_separation(v: Vector2, v_pre: Vector2) -> Vector2:
+## The solver's correction may stop a particle but leave it at most
+## max(sep, its speed along the correction before the solver) + kick in that direction.
+## Powders: sep MAX_SEPARATION, kick 0. Liquids: sep 0, kick LIQUID_KICK * GRAVITY * dt.
+## v_pre is the velocity the particle was predicted with. Same as velocity_update.glsl.
+static func limit_separation(v: Vector2, v_pre: Vector2, sep: float, kick: float) -> Vector2:
 	var dv := v - v_pre
 	var dv_len := dv.length()
 	if dv_len <= 1e-6:
 		return v
 	var n := dv / dv_len
-	var excess := v.dot(n) - maxf(SimParams.MAX_SEPARATION, v_pre.dot(n))
+	var excess := v.dot(n) - (maxf(sep, v_pre.dot(n)) + kick)
 	return v - excess * n if excess > 0.0 else v
 
 
@@ -224,7 +247,8 @@ func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: Packed
 		grad_i += g
 		if _class(mat[j]) == LIQUID:
 			grad_sum += g.length_squared()
-	var c := maxf(density / rest_density - 1.0, 0.0)
+	# Unclamped: the carried pressure also takes negative C (step() clamps the push).
+	var c := density / rest_density - 1.0
 	return -c / (grad_sum + grad_i.length_squared() + SimParams.LAMBDA_EPS)
 
 
@@ -239,6 +263,17 @@ func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lamb
 		# Liquid pairs are mass-scaled by height like powder stacks (liquid.glslinc).
 		var share := 2.0 / (exp(clampf(SimParams.STACK_K * rv.y, -8.0, 8.0)) + 1.0) if liquid_j else 1.0
 		d += share * (lambda[i] + lj + scorr(rv.length_squared(), h)) * spiky_grad(rv, h, i, j)
+	return d / rest_density
+
+
+## Push down the gradient of the carried-over pressure: sum (p_j - p_i) grad W over
+## liquid neighbours (liquid_pressure_delta in liquid.glslinc).
+func _pressure_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, pressure: PackedFloat32Array,
+		nb: PackedInt32Array, h: float) -> Vector2:
+	var d := Vector2.ZERO
+	for j in nb:
+		if _class(mat[j]) == LIQUID:
+			d += (pressure[j] - pressure[i]) * spiky_grad(pred[i] - pred[j], h, i, j)
 	return d / rest_density
 
 

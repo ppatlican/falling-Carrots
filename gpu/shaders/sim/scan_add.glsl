@@ -4,7 +4,7 @@
 // Hash 5/6, prefix sum part 3: add each block's offset. cell_start[c] is now the
 // first sorted index of cell c, and cell_start[n_cells] is the live count.
 
-// common.glslinc stamp: Params 108 B, v3. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v4. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

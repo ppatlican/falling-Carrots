@@ -8,7 +8,8 @@
 ##   brush     add (spawn + finalize) or erase (erase + finalize)
 ##   predict   gravity, predicted positions
 ##   hash      clear, count, 3-step prefix sum, scatter (copies state into cell order)
-##   solve     solver_iterations x (lambda, delta, apply)
+##   solve     carried-over pressure (pressure, apply), then
+##             solver_iterations x (lambda, delta, apply)
 ##   velocity  update, XSPH, commit
 ##   render    clear image, draw points
 ##
@@ -28,7 +29,7 @@ const SHADER_DIR := "res://gpu/shaders/sim/"
 const KERNELS := [
 	"brush_spawn", "brush_erase", "brush_finalize", "predict",
 	"hash_clear", "hash_count", "scan_local", "scan_blocks", "scan_add", "hash_scatter",
-	"solve_lambda", "solve_delta", "solve_apply",
+	"solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
 	"velocity_update", "velocity_xsph", "velocity_commit",
 	"render_clear", "render_points",
 ]
@@ -134,6 +135,8 @@ func _buffer_specs() -> Array:
 		["s_pos", cap * 8, PackedByteArray()],
 		["s_vel", cap * 8, PackedByteArray()],
 		["s_mat", cap * 4, PackedByteArray()],
+		["lambda_acc", cap * 4, PackedByteArray()],
+		["s_lambda", cap * 4, PackedByteArray()],
 	]
 
 
@@ -154,7 +157,7 @@ func _create_resources_rt() -> String:
 	var image: RID = _ctx.create_storage_texture_rt("image", size.x, size.y)
 	if not image.is_valid():
 		return "could not create the %dx%d render texture" % [size.x, size.y]
-	bindings.append([specs.size(), RenderingDevice.UNIFORM_TYPE_IMAGE, image])  # binding 19, last
+	bindings.append([specs.size(), RenderingDevice.UNIFORM_TYPE_IMAGE, image])  # binding 21, last
 	# Every kernel gets the full set; unused bindings are ignored by the engine.
 	for k in KERNELS:
 		if not _ctx.create_uniform_set_rt(k, k, 0, bindings).is_valid():
@@ -175,7 +178,7 @@ func _build_passes_rt() -> void:
 		d.call("scan_local", ceili(float(_n_cells + 1) / SCAN_BLOCK)), d.call("scan_blocks", 1),
 		d.call("scan_add", cells), d.call("hash_scatter", all),
 	])
-	var solve := []
+	var solve := [d.call("solve_pressure", all), d.call("solve_apply", all)]
 	for _i in _iterations:
 		solve.append_array([d.call("solve_lambda", all), d.call("solve_delta", all), d.call("solve_apply", all)])
 	_ctx.add_pass("solve", solve)

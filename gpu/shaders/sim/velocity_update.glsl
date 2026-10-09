@@ -10,13 +10,23 @@
 // settled 50k pile never came to rest: the few Jacobi iterations leave ~2.5 px/s of
 // back-and-forth in every grain ("pudding", Milestone 2 GPU measurement). It is decided
 // again each step, so a grain wakes as soon as it is hit or loses its support.
+// Liquids: the solver's correction may stop water but add at most LIQUID_KICK x
+// gravity x dt of speed in its own direction per step. With few Jacobi iterations the
+// density correction overshoots, and the overshoot became upward speed: deep water
+// churned at ~37 px/s (30k) and ~60 px/s (50k), with jets of 150-350 px/s up the side
+// walls. A cap of 0 would stop the water levelling, since the slow sideways push from a
+// higher surface starts from rest. See liquid.glslinc for the other half of the fix.
 
-// common.glslinc stamp: Params 108 B, v3. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v4. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Largest move per step (px) that still counts as resting. Below the free-fall move of
 // one step from rest (gravity * dt^2 = 0.11 px). Mirror: SimParams.SLEEP_DISTANCE.
 const float SLEEP_DISTANCE = 0.1;
+
+// Liquids: the separating speed the solver's correction may add in one step, in units
+// of gravity * dt. Mirror: SimParams.LIQUID_KICK.
+const float LIQUID_KICK = 2.0;
 
 void main() {
 	uint t;
@@ -25,25 +35,32 @@ void main() {
 	}
 	float drag = materials[s_material(t)].phys.w;
 	vec2 v = (s_pred[t] - s_pos[t]) / params.dt;
+	vec2 v_pre = s_vel[t];  // velocity predict moved with (after gravity, before the solver)
+	float max_v = params.max_step / params.dt;
+	if (length(v_pre) > max_v) {
+		v_pre *= max_v / length(v_pre);
+	}
+	// Separating speed the solver's correction may leave along its own direction n:
+	// max(sep, speed along n before the solver) + kick.
+	float sep = 0.0;
+	float kick = 0.0;
 	if (s_class(t) == CLASS_POWDER) {
-		vec2 v_pre = s_vel[t];  // velocity predict moved with (after gravity, before the solver)
-		float max_v = params.max_step / params.dt;
-		if (length(v_pre) > max_v) {
-			v_pre *= max_v / length(v_pre);
-		}
 		bool stopped = length(v - v_pre) > 0.5 * params.gravity * params.dt;
 		if (stopped && length(s_pred[t] - s_pos[t]) < SLEEP_DISTANCE) {
 			s_pred[t] = s_pos[t];
 			v = vec2(0.0);
 		}
-		vec2 dv = v - v_pre;
-		float dv_len = length(dv);
-		if (dv_len > 1e-6) {
-			vec2 n = dv / dv_len;
-			float excess = dot(v, n) - max(params.max_separation, dot(v_pre, n));
-			if (excess > 0.0) {
-				v -= excess * n;
-			}
+		sep = params.max_separation;
+	} else {
+		kick = LIQUID_KICK * params.gravity * params.dt;
+	}
+	vec2 dv = v - v_pre;
+	float dv_len = length(dv);
+	if (dv_len > 1e-6) {
+		vec2 n = dv / dv_len;
+		float excess = dot(v, n) - (max(sep, dot(v_pre, n)) + kick);
+		if (excess > 0.0) {
+			v -= excess * n;
 		}
 	}
 	s_vel[t] = v * (1.0 - drag);

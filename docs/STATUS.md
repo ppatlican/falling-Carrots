@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-09. Current milestone: **2 (GPU liquid + powder + brush): code complete and run on the PC GPU. Deep-water churn is open; phone not yet measured.**
+Last updated: 2026-10-09. Current milestone: **2 (GPU liquid + powder + brush): code complete and run on the PC GPU. Deep-water churn fixed on the GPU (mild residual, see Known issues); phone not yet measured.**
 
 Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `docs/SPEC.md`.
 
@@ -14,7 +14,9 @@ Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `d
   - Neighbour loops use each particle's hash cell, so pairs are symmetric (SPEC 2.7).
 - **Liquid** (`gpu/shaders/sim/liquid.glslinc`): PBF density constraint, s_corr and XSPH viscosity, plus:
   - Wall density, so liquid doesn't crowd into the walls.
-  - Height mass scaling (`STACK_K`), so deep water stays at rest density instead of being squeezed. 30k water had ~3× rest density at the floor; it is now ≈1.05 all the way down.
+  - Height mass scaling (`STACK_K`), so deep water stays at rest density instead of being squeezed. 30k water had ~3× rest density at the floor; it is now ≈1.0 all the way down.
+  - Carried-over pressure (`PRESSURE_GAIN` 0.1, `WARM_START` 0.95, pass `solve_pressure`): each liquid particle keeps its pressure between frames and is pushed down its gradient before the iterations. It passes pressure sideways, so heaps flow out and the surface levels.
+  - Kick cap (`LIQUID_KICK` 2, `velocity_update.glsl`): the solver's correction may stop water but add at most 2 × gravity × dt of speed per step in its own direction, so overshoot can't launch water. Both this and carried-over pressure are needed; each alone churned at 35–140 px/s.
 - **Powder** (`powder.glslinc`, `solve_apply.glsl`, `velocity_update.glsl`): mass-weighted contacts with static/kinetic friction, averaged over contacts.
   - Height mass scaling (`STACK_K` 0.3), so piles aren't crushed under load.
   - Inelastic push-out (`MAX_SEPARATION` 0): impacts don't rebound grains, which removed the upward kicks at the edges.
@@ -41,7 +43,10 @@ Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `d
 | Block fills, circle brush (+1440 over 60 frames, as expected), erase, cap, GPU check | PC, RTX 3080 Ti, scripted | All OK. GPU check consistent at 20k, 21,440, 30k, 40k, 50k and 17,600 live |
 | 50k sand at rest | PC, GPU probe, 3000 frames | RMS drift per 60 frames 2.5 → 0.000 px from frame ~900; surface fixed at y≈111 (was 92–130); wall grains 0 px/s upward |
 | 10k sand dropped into 10k water | PC, GPU probe | Sand sinks to the floor and rests there; no water inside the pile |
-| Deep water | PC, GPU probe | Improved, not fixed: see Known issues |
+| Deep water, 30k (3 blocks at y=8) | PC, GPU probe | Mean speed 37 → 9 px/s (steady to 4800 frames); fastest riser 200–330 → 30–48 px/s; wall particles rising 150–330 → 20–45 px/s; floor at rest density |
+| Deep water, 50k | PC, GPU probe | Mean speed 57–67 → 14–15 px/s; wall particles rising 200–350 → 33–48 px/s |
+| 10k water started at rest, 25 s | PC, GPU probe | 3.8 px/s (was 4.1), fastest 27 px/s (was 46) |
+| 50k sand at rest, and 10k sand into 10k water, after the water fix | PC, GPU probe | Sand unchanged: drift 0.000 px, surface y 112; sand rests on the floor under the water |
 | Manual play with a mouse | PC | **Not yet** (owner) |
 | Phone | — | **Not yet** |
 
@@ -70,24 +75,18 @@ Solve dominates once particles are settled and packed, so measure the settled st
 6. The log has no errors, and no leaked-RID warnings on quit.
 
 ## Known issues
-- **Deep-water churn (open, the next fix).** GPU probe, water dropped as 10k block fills from the top:
-  | | before 2026-10-09 | now |
-  |---|---|---|
-  | 30k, mean speed after 15–30 s | 85 px/s | 30–36 px/s (plateau, not decaying) |
-  | 30k, moving grains in the bottom 40 px | ~11,400 | ~2,900 |
-  | 50k, mean speed | 93 px/s | 57–67 px/s |
-  | 10k started at rest, mean speed after 28 s | 7.5 px/s | 5.1 px/s |
-  - Wall particles still reach 200–350 px/s upward at 30k and 50k. Plumes rise mid-tank at about 240 px/s (the MAX_STEP cap).
-  - At rest density, 50k water fills ~312 of the 360 px world, so touching the top edge is correct. Study deep water at 30k.
-  - Likely cause: liquid `STACK_K` scaling isn't momentum-conserving. It lifts in proportion to pressure, not its gradient, so pressure from the flow drives convection. Without it the water is squeezed instead (30k: 89 px/s).
-  - Tried on the GPU and rejected:
-    - Symmetric neighbour windows alone: no change.
-    - Liquid stack k 0.1 or 0.05: bigger waves, 60–68 px/s.
-    - Capping the stack lift at gravity: 95 px/s.
-    - XSPH 0.2: 27 px/s, but more viscous.
-    - Delta relaxation 0.5: 31 px/s.
-    - From before: SCORR_K 0, LAMBDA_EPS 0.1, 16 iterations.
-  - Likely direction: pressure that carries over between frames (warm-started λ) or more effective iterations, in place of stack scaling for liquids.
+- **Deep-water churn: fixed, small residual.** Water now settles to ~9 px/s (30k) and ~15 px/s (50k), from 37 and 60 (see Verified). What is left:
+  - The surface of 30k water can stay tilted by ~20 px across the tank, and its top 20–40 px moves at 10–40 px/s. The stack scaling still holds water up locally, so it levels slowly.
+  - 10k water resting on 10k sand moves at ~11 px/s (8 before), and 10–15 grains under it creep at up to 7 px/s (0 before).
+  - Cause, found 2026-10-09: with 4 Jacobi iterations the density correction overshoots and the overshoot became separating speed (the kick cap stops that). The stack scaling held deep water up by a local lift, so water didn't pass pressure sideways: heaps held up like sand, and squeezed water rose like hot air, which drove the wall jets and plumes (carried-over pressure fixes that).
+  - Tried on the GPU and rejected (30k water, mean speed):
+    - Symmetric neighbour windows alone: no change. Liquid stack k 0.1 or 0.05: 60–68 px/s. Capping the stack lift at gravity: 95. XSPH 0.2: 27, but more viscous. Delta relaxation 0.5: 31. From before: SCORR_K 0, LAMBDA_EPS 0.1, 16 iterations.
+    - Carried-over pressure applied with the symmetric PBF form, sum (λi + λj)∇W: 100–120 px/s jitter. A large λ times ∑∇W, which is non-zero for any disordered arrangement, is noise. Hence the gradient form.
+    - Hydrostatic pressure from the liquid count above each particle's column: 130 px/s in the symmetric form, 140–185 in the gradient form (spray adds depth and lifts the water under it).
+    - 4 substeps of 1 iteration (dt 1/240): 100–180 px/s, spikes over 1000. PBF turns per-step position noise into velocity / dt.
+    - Mirror (ghost) walls instead of the analytic wall density: no change (37).
+    - Kick cap alone (with stack): 9–15 px/s, but the water heaped against both walls around an empty hole mid-tank. Kick 4: 19–27. Kick cap with stack 0.1 or 0.03: 16–53 and sloshing.
+    - Carried-over pressure without the kick cap: 85–145. Without stack scaling: 11 at gain 0.1, but the floor squeezed to 1.4× (1.8× at keep 0.9). Gain 0.25: whole-body bounce at 40. Keep 0.99 or 1.0: 32–70 and sloshing.
 - **Sleeping trade-off:** a grain sliding slower than ~6 px/s on a slope stops, so piles freeze instead of creeping.
   - The churn can't be removed by softening contacts instead: averaged contacts or CONTACT_RELAX 0.15 stopped it but crushed the 50k pile (centroid y 244 → 302–342).
   - Also not the churn's cause: friction, iterations up to 32, CONTACT_RELAX 0.25, dt 1/120, MAX_SEPARATION 15.
@@ -103,6 +102,6 @@ Solve dominates once particles are settled and packed, so measure the settled st
 - No keyboard shortcuts for materials (the toolbar only), so input stays inside the action layer.
 
 ## Next
-1. Deep-water churn (Known issues).
-2. Re-measure GPU pass times at the settled state, then measure the cap on a phone (the Milestone 2 goal).
+1. Owner: look at deep water and sand + water by hand (the residual surface tilt, and whether the water now looks too calm or viscous when blocks land).
+2. Re-measure GPU pass times at the settled state (the solve pass gained one pressure pass), then measure the cap on a phone (the Milestone 2 goal).
 3. Milestone 3 (cluster solids): shape-matched carrot boxes colliding and floating or sinking in water and sand. Buoyancy should use the same density weighting as the sand–water contacts.

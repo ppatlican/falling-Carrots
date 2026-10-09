@@ -5,7 +5,7 @@
 // its state into the sorted s_* arrays, so the solver reads neighbours from
 // contiguous memory. sorted_ids maps t back to the slot.
 
-// common.glslinc stamp: Params 108 B, v3. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v4. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {
@@ -19,4 +19,5 @@ void main() {
 	s_pos[t] = pos[i];
 	s_vel[t] = vel[i];
 	s_mat[t] = mat_flags[i];
+	s_lambda[t] = lambda_acc[i];
 }
