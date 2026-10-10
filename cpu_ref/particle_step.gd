@@ -151,15 +151,15 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		if _class(mat[i]) == POWDER:
 			# Sleeping (velocity_update.glsl): a stopped grain that barely moved stays put.
 			var stopped := (v - v_pre).length() > 0.5 * SimParams.GRAVITY * dt
-			if stopped and pred[i].distance_to(pos[i]) < SimParams.SLEEP_DISTANCE:
+			if stopped and pred[i].distance_to(pos[i]) < SimParams.SLEEP_SPEED * dt:
 				pred[i] = pos[i]
 				v = Vector2.ZERO
 			v = limit_separation(v, v_pre, SimParams.MAX_SEPARATION, 0.0)
 		else:
 			v = limit_separation(v, v_pre, 0.0, SimParams.LIQUID_KICK * SimParams.GRAVITY * dt)
-		vel[i] = v * (1.0 - materials[mat[i]].drag)
+		vel[i] = v * exp(-materials[mat[i]].drag * dt)
 	for i in n:
-		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h)
+		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h, dt)
 	for i in n:
 		vel[i] = new_vel[i]
 		pos[i] = pred[i]
@@ -333,7 +333,8 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 				# Thin cells are pulled full only under full water and without powder (a trapped bubble).
 				var covered := ci.y > 0 and phi[c - size.x].x >= SimParams.HYDRO_FULL and phi[c].y < SimParams.HYDRO_POWDER
 				var err := phi[c].x - 1.0 if covered else maxf(phi[c].x - 1.0, 0.0)
-				var rhs := -a * a * SimParams.HYDRO_K * err / (dt * dt)
+				var k := 1.0 - pow(1.0 - SimParams.HYDRO_K, dt * 60.0)  # share per step (hydro_k())
+				var rhs := -a * a * k * err / (dt * dt)
 				p[c] = maxf(lerpf(p[c], (sum - rhs) / n, SimParams.HYDRO_SOR), 0.0)
 
 
@@ -446,9 +447,10 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet)) * SimParams.CONTACT_RELAX
 
 
-## XSPH viscosity: liquids blend toward their liquid neighbours' velocity.
+## XSPH viscosity: liquids blend toward their liquid neighbours' velocity. The material
+## viscosity is the blend per 1/60 s, scaled to dt.
 func _xsph(i: int, pred: PackedVector2Array, vel: PackedVector2Array, mat: PackedInt32Array,
-		nb: PackedInt32Array, h: float) -> Vector2:
+		nb: PackedInt32Array, h: float, dt: float) -> Vector2:
 	if _class(mat[i]) != LIQUID:
 		return Vector2.ZERO
 	var visc: float = materials[mat[i]].viscosity
@@ -456,4 +458,4 @@ func _xsph(i: int, pred: PackedVector2Array, vel: PackedVector2Array, mat: Packe
 	for j in nb:
 		if _class(mat[j]) == LIQUID:
 			sum += (vel[j] - vel[i]) * poly6(pred[i].distance_squared_to(pred[j]), h)
-	return sum * (visc / rest_density)
+	return sum * (visc * dt * 60.0 / rest_density)

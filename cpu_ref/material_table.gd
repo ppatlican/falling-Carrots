@@ -20,7 +20,7 @@ const NUMBER_FIELDS := [
 	["density", 0.01, 100.0],
 	["friction", 0.0, 1.0],
 	["viscosity", 0.0, 1.0],
-	["drag", 0.0, 1.0],
+	["drag", 0.0, 60.0],  # per second: v *= exp(-drag * dt)
 	["wind_coupling", 0.0, 10.0],
 	["stiffness", 0.0, 1.0],
 	["conductivity", 0.0, 100.0],

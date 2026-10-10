@@ -4,7 +4,7 @@
 // Hash 3/6, prefix sum part 1: each workgroup scans SCAN_BLOCK (256) cell counts,
 // 4 per thread, writes the exclusive prefix to cell_start, and its total to block_sums.
 
-// common.glslinc stamp: Params 108 B, v5. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v7. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 shared uint partial[64];

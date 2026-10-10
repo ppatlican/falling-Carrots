@@ -39,8 +39,13 @@ const int HYDRO_CELL = 4;
 const float HYDRO_AIR = 0.3;
 // SOR over-relaxation. Mirror: SimParams.HYDRO_SOR.
 const float HYDRO_SOR = 1.8;
-// Share of a cell's compression removed per step. Mirror: SimParams.HYDRO_K.
+// Share of a cell's compression removed per 1/60 s; hydro_k() gives the share per step, so
+// substeps don't stiffen the grid. Mirror: SimParams.HYDRO_K.
 const float HYDRO_K = 0.5;
+
+float hydro_k() {
+	return 1.0 - pow(1.0 - HYDRO_K, params.dt * 60.0);
+}
 // Density over rest from which the cell above counts as full (see hydro_sweep).
 // Mirror: SimParams.HYDRO_FULL.
 const float HYDRO_FULL = 0.95;
@@ -144,7 +149,7 @@ void hydro_sweep(uint parity) {
 			&& hydro_phi[c].y < HYDRO_POWDER;
 	float err = covered ? phi - 1.0 : max(phi - 1.0, 0.0);
 	float a = hydro_cell_size();
-	float rhs = -a * a * HYDRO_K * err / (params.dt * params.dt);
+	float rhs = -a * a * hydro_k() * err / (params.dt * params.dt);
 	hydro_p[c] = max(mix(hydro_p[c], (sum - rhs) / n, HYDRO_SOR), 0.0);
 }
 

@@ -95,7 +95,8 @@ vec2 liquid_delta(uint t) {
 	return d / params.rest_density;
 }
 
-// XSPH viscosity: blend toward liquid neighbours' velocity. Material viscosity is the blend.
+// XSPH viscosity: blend toward liquid neighbours' velocity. Material viscosity is the blend
+// per 1/60 s, scaled to the step so substeps don't make liquid thicker.
 vec2 liquid_xsph(uint t) {
 	vec2 pt = s_pred[t];
 	vec2 vt = s_vel[t];
@@ -106,5 +107,5 @@ vec2 liquid_xsph(uint t) {
 		vec2 rv = pt - s_pred[j];
 		sum += (s_vel[j] - vt) * poly6(dot(rv, rv));
 	} END_NEIGHBOURS
-	return sum * (materials[s_material(t)].phys.z / params.rest_density);
+	return sum * (materials[s_material(t)].phys.z * params.dt * 60.0 / params.rest_density);
 }

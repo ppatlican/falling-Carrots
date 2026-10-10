@@ -4,7 +4,7 @@
 // Render 1/2: clear the art-resolution image (one thread per pixel). With the
 // hash-grid view on, each cell is shaded by how many particles it holds.
 
-// common.glslinc stamp: Params 108 B, v5. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v7. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {
