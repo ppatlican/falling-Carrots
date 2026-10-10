@@ -17,6 +17,9 @@
 ##          sideways across it while rising from the floor (to ERASE_END), as the owner
 ##          does: grains with nothing under them (no grain within 4 px below and not on
 ##          the floor) that are still (< SLEEP_SPEED) are clumps held in the air (should be 0)
+##   shaft  the erase pile, then the eraser cut straight down at x=300 and x=345: dry sand
+##          should cave in to its angle of repose, so the empty 2 px cells left in
+##          x 285..360, y 260..356 should drop back towards 0, not stay open
 ##   hover  the surface pool: water particles in the loose fringe above the dense surface
 ##          (the first 2 px row at least half full), and their mean vy (> 0 is falling)
 ## Every sample (every=N frames, default 3): one line per scenario, see _analyse.
@@ -130,6 +133,8 @@ func _process(_delta: float) -> bool:
 		brush = _sandair_brush()
 	if scenario == "erase":
 		brush = _erase_brush()
+	if scenario == "shaft":
+		brush = _shaft_brush()
 	sim.frame(brush, 0)
 	if frame_i in shots:
 		RenderingServer.call_on_render_thread(_shot_rt.bind(frame_i))
@@ -194,6 +199,32 @@ func _erase_brush() -> Dictionary:
 		brush.op = ParticleSim.BRUSH_ERASE
 		brush.pos = Vector2(200.0 + (ph if ph < 240 else 480 - ph), SimParams.WORLD_SIZE.y - 4.0 - 0.3 * k)
 	return brush
+
+
+func _shaft_brush() -> Dictionary:
+	var brush := _erase_brush() if frame_i <= ERASE_PILE else {"op": ParticleSim.BRUSH_NONE,
+			"pos": Vector2.ZERO, "radius": SimParams.BRUSH_RADIUS, "material": sand, "count": 0, "cols": 1}
+	var k := frame_i - ERASE_PILE - 60
+	if k > 0 and k <= 220:
+		# Down at 2 px per frame from y 140, first at x 300, then at x 345.
+		brush.op = ParticleSim.BRUSH_ERASE
+		brush.pos = Vector2(300.0 if k <= 110 else 345.0, 140.0 + 2.0 * float((k - 1) % 110))
+	return brush
+
+
+func _shaft_stats(b: Dictionary, t: float) -> void:
+	var cells := {}
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0 or (fl & 0xFF) != sand:
+			continue
+		cells[Vector2i(int(b.pos.decode_float(i * 8) / 2.0), int(b.pos.decode_float(i * 8 + 4) / 2.0))] = true
+	var empty := 0
+	for cy in range(130, 178):
+		for cx in range(143, 180):
+			if not cells.has(Vector2i(cx, cy)):
+				empty += 1
+	print("SHAFT t=%.2f empty_cells=%d of %d" % [t, empty, 48 * 37])
 
 
 func _erase_stats(b: Dictionary, t: float) -> void:
@@ -264,6 +295,9 @@ func _analyse(b: Dictionary, f: int) -> void:
 		return
 	if scenario == "erase":
 		_erase_stats(b, t)
+		return
+	if scenario == "shaft":
+		_shaft_stats(b, t)
 		return
 	var xs := PackedFloat32Array()
 	var n := 0
