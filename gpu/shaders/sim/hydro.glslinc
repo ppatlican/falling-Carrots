@@ -19,7 +19,14 @@
 // the floor falls back. (A pressure built from the weight of the liquid above made the
 // water weightless as a body: it bounced to the ceiling.)
 //
-// Air cells (phi < HYDRO_AIR) hold p = 0 and the walls let nothing through. Coarse cells
+// Air cells (phi < HYDRO_AIR) are outside the liquid and the walls let nothing through.
+// The free surface is a ghost-fluid boundary (Gibou et al. 2002; Enright et al. 2003):
+// p = 0 sits where phi crosses HYDRO_SURFACE between a liquid cell and its air
+// neighbour, a share theta of the way, not at the air cell's centre. With p = 0 at the
+// air centre the push that holds water against gravity reached ~8 px past the surface
+// and held loose drops hovering there. Air cells store the ghost pressure (p of the
+// liquid side extrapolated through 0 at the surface, so negative), the bilinear sample
+// is 0 at the surface, and a sample is clamped to >= 0, so nothing pushes above it. Coarse cells
 // are HYDRO_CELL hash cells across (16 px), and phi is tent-weighted, so a particle
 // crossing a cell edge doesn't make p jump. The solve is projected red-black SOR (p kept
 // >= 0), warm-started from the last frame's p (kept in hydro_p).
@@ -37,6 +44,12 @@ const float HYDRO_FP = 1024.0;
 const int HYDRO_CELL = 4;
 // Density below which a coarse cell is air (p = 0). Mirror: SimParams.HYDRO_AIR.
 const float HYDRO_AIR = 0.3;
+// Liquid density over rest at the free surface, and the smallest share of a cell the
+// surface may sit from a liquid cell's centre (keeps 1/theta bounded when the surface
+// is near the centre). A stiffer clamp of 0.5 was worse: the pool's top layer moved at
+// 2-6 px/s, up to 30, and drops hovered again; 0.1 left it at ~0.1 px/s (GPU probe). Mirror: SimParams.HYDRO_SURFACE, HYDRO_THETA_MIN.
+const float HYDRO_SURFACE = 0.5;
+const float HYDRO_THETA_MIN = 0.1;
 // SOR over-relaxation. Mirror: SimParams.HYDRO_SOR.
 const float HYDRO_SOR = 1.8;
 // Share of a cell's compression removed per 1/60 s; hydro_k() gives the share per step, so
@@ -110,6 +123,12 @@ vec2 hydro_density(ivec2 ci) {
 // -a^2 HYDRO_K err / dt^2. Out-of-grid neighbours are walls and drop out. Air
 // neighbours have p = 0. Each sweep is its own dispatch: one workgroup doing all the
 // sweeps in shared memory was 3x slower (latency-bound on one compute unit).
+// Share of the way from a liquid cell (phi_f) to its air neighbour (phi_a) at which
+// phi crosses HYDRO_SURFACE, clamped to [HYDRO_THETA_MIN, 1].
+float hydro_theta(float phi_f, float phi_a) {
+	return clamp((phi_f - HYDRO_SURFACE) / max(phi_f - phi_a, 1e-4), HYDRO_THETA_MIN, 1.0);
+}
+
 void hydro_sweep(uint parity) {
 	ivec2 size = hydro_size();
 	uint c = gl_GlobalInvocationID.x;
@@ -121,10 +140,7 @@ void hydro_sweep(uint parity) {
 		return;
 	}
 	float phi = hydro_phi[c].x;
-	if (phi < HYDRO_AIR) {
-		hydro_p[c] = 0.0;
-		return;
-	}
+	bool air = phi < HYDRO_AIR;
 	float sum = 0.0;
 	float n = 0.0;
 	for (int k = 0; k < 4; k++) {
@@ -135,8 +151,25 @@ void hydro_sweep(uint parity) {
 		}
 		uint ni = hydro_index(nc);
 		float phi_n = hydro_phi[ni].x;
-		n += 1.0;
-		sum += phi_n < HYDRO_AIR ? 0.0 : hydro_p[ni];
+		bool air_n = phi_n < HYDRO_AIR;
+		if (air) {
+			// Ghost pressure: average over liquid neighbours of their p extrapolated
+			// through 0 at the surface.
+			if (!air_n) {
+				sum += hydro_p[ni] * (1.0 - 1.0 / hydro_theta(phi_n, phi));
+				n += 1.0;
+			}
+		} else if (air_n) {
+			// p = 0 at the surface, theta of the way: the term (0 - p) / theta.
+			n += 1.0 / hydro_theta(phi, phi_n);
+		} else {
+			n += 1.0;
+			sum += hydro_p[ni];
+		}
+	}
+	if (air) {
+		hydro_p[c] = n > 0.0 ? sum / n : 0.0;
+		return;
 	}
 	// Compression is always corrected. A thin cell is pulled full only under full water
 	// (the cell above it at least HYDRO_FULL) and with almost no powder in it: an air
@@ -150,16 +183,18 @@ void hydro_sweep(uint parity) {
 	float err = covered ? phi - 1.0 : max(phi - 1.0, 0.0);
 	float a = hydro_cell_size();
 	float rhs = -a * a * hydro_k() * err / (params.dt * params.dt);
-	hydro_p[c] = max(mix(hydro_p[c], (sum - rhs) / n, HYDRO_SOR), 0.0);
+	// Warm start: a cell that was air last frame holds a negative ghost.
+	hydro_p[c] = max(mix(max(hydro_p[c], 0.0), (sum - rhs) / n, HYDRO_SOR), 0.0);
 }
 
-// Pressure at coarse cell c. Past the grid edge it is mirrored, so walls let nothing through.
+// Pressure at coarse cell c (the ghost in air cells). Past the grid edge it is mirrored,
+// so walls let nothing through.
 float hydro_p_at(ivec2 c) {
-	uint i = hydro_index(clamp(c, ivec2(0), hydro_size() - ivec2(1)));
-	return hydro_phi[i].x < HYDRO_AIR ? 0.0 : hydro_p[i];
+	return hydro_p[hydro_index(clamp(c, ivec2(0), hydro_size() - ivec2(1)))];
 }
 
-// Bilinear pressure at position x (cell centres at (i + 0.5) * cell size).
+// Bilinear pressure at position x (cell centres at (i + 0.5) * cell size), 0 past the
+// free surface.
 float hydro_p_sample(vec2 x) {
 	vec2 g = x / hydro_cell_size() - 0.5;
 	ivec2 b = ivec2(floor(g));
@@ -168,7 +203,7 @@ float hydro_p_sample(vec2 x) {
 	float p10 = hydro_p_at(b + ivec2(1, 0));
 	float p01 = hydro_p_at(b + ivec2(0, 1));
 	float p11 = hydro_p_at(b + ivec2(1, 1));
-	return mix(mix(p00, p10, f.x), mix(p01, p11, f.x), f.y);
+	return max(mix(mix(p00, p10, f.x), mix(p01, p11, f.x), f.y), 0.0);
 }
 
 // Position change this step from the pressure: -grad p * dt^2 (central difference over

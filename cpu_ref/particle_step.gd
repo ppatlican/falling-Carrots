@@ -319,9 +319,7 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 				var ci := Vector2i(c % size.x, c / size.x)
 				if (ci.x + ci.y) % 2 != parity:
 					continue
-				if phi[c].x < SimParams.HYDRO_AIR:
-					p[c] = 0.0
-					continue
+				var air := phi[c].x < SimParams.HYDRO_AIR
 				var sum := 0.0
 				var n := 0.0
 				for off in offs:
@@ -329,22 +327,39 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 					if nc.x < 0 or nc.y < 0 or nc.x >= size.x or nc.y >= size.y:
 						continue
 					var ni := nc.y * size.x + nc.x
-					n += 1.0
-					sum += 0.0 if phi[ni].x < SimParams.HYDRO_AIR else p[ni]
+					var air_n := phi[ni].x < SimParams.HYDRO_AIR
+					if air:
+						if not air_n:  # ghost: liquid p extrapolated through 0 at the surface
+							sum += p[ni] * (1.0 - 1.0 / _hydro_theta(phi[ni].x, phi[c].x))
+							n += 1.0
+					elif air_n:
+						n += 1.0 / _hydro_theta(phi[c].x, phi[ni].x)
+					else:
+						n += 1.0
+						sum += p[ni]
+				if air:
+					p[c] = sum / n if n > 0.0 else 0.0
+					continue
 				# Thin cells are pulled full only under full water and without powder (a trapped bubble).
 				var covered := ci.y > 0 and phi[c - size.x].x >= SimParams.HYDRO_FULL and phi[c].y < SimParams.HYDRO_POWDER
 				var err := phi[c].x - 1.0 if covered else maxf(phi[c].x - 1.0, 0.0)
 				var k := 1.0 - pow(1.0 - SimParams.HYDRO_K, dt * 60.0)  # share per step (hydro_k())
 				var rhs := -a * a * k * err / (dt * dt)
-				p[c] = maxf(lerpf(p[c], (sum - rhs) / n, SimParams.HYDRO_SOR), 0.0)
+				p[c] = maxf(lerpf(maxf(p[c], 0.0), (sum - rhs) / n, SimParams.HYDRO_SOR), 0.0)
 
 
-## Pressure at coarse cell c, mirrored past the grid edge (hydro_p_at).
+## Share of the way from a liquid cell to its air neighbour where phi crosses the
+## surface (hydro_theta).
+static func _hydro_theta(phi_f: float, phi_a: float) -> float:
+	return clampf((phi_f - SimParams.HYDRO_SURFACE) / maxf(phi_f - phi_a, 1e-4), SimParams.HYDRO_THETA_MIN, 1.0)
+
+
+## Pressure at coarse cell c (ghost in air cells), mirrored past the grid edge (hydro_p_at).
 func _hydro_p_at(c: Vector2i, phi: PackedVector2Array, p: PackedFloat32Array) -> float:
 	var size := hydro_size(world_size)
 	var cc := c.clamp(Vector2i.ZERO, size - Vector2i.ONE)
 	var i := cc.y * size.x + cc.x
-	return 0.0 if phi[i].x < SimParams.HYDRO_AIR else p[i]
+	return p[i]
 
 
 func _hydro_p_sample(x: Vector2, phi: PackedVector2Array, p: PackedFloat32Array) -> float:
@@ -353,7 +368,7 @@ func _hydro_p_sample(x: Vector2, phi: PackedVector2Array, p: PackedFloat32Array)
 	var f := g - Vector2(b)
 	var top := lerpf(_hydro_p_at(b, phi, p), _hydro_p_at(b + Vector2i(1, 0), phi, p), f.x)
 	var bottom := lerpf(_hydro_p_at(b + Vector2i(0, 1), phi, p), _hydro_p_at(b + Vector2i(1, 1), phi, p), f.x)
-	return lerpf(top, bottom, f.y)
+	return maxf(lerpf(top, bottom, f.y), 0.0)
 
 
 ## Position change this step from the grid pressure: -grad p * dt^2 (hydro_delta).

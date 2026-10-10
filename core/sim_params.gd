@@ -63,6 +63,10 @@ const HYDRO_K := 0.5
 const HYDRO_FULL := 0.95
 ## Powder density over rest above which a thin cell isn't pulled full: it is sand, not air.
 const HYDRO_POWDER := 0.05
+## Free surface (ghost fluid): liquid density over rest at the surface, and the smallest
+## share of a cell the surface may sit from a liquid cell's centre.
+const HYDRO_SURFACE := 0.5
+const HYDRO_THETA_MIN := 0.1
 const HYDRO_SWEEPS := 32
 
 ## Brush: radius in px, and the fraction of the circle's empty capacity added per frame.

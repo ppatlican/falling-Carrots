@@ -4,7 +4,7 @@
 // Hash 4/6, prefix sum part 2 (one workgroup): turn the block totals into an
 // exclusive prefix in place. Handles up to 256 blocks (65536 cells); checked at startup.
 
-// common.glslinc stamp: Params 108 B, v8. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v9. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 shared uint partial[64];
