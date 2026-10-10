@@ -17,6 +17,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 - `CONTEXT.md`: the glossary. Use its terms (grain, pile, block fill, churn, slosh, squeezing, pudding, sleeping, density projection grid, CPU reference, GPU probe).
 - `docs/SPEC.md`: what we're building and the rules the code must keep, including the GPU plumbing rules in 2.7. Read 2.7 before touching a shader.
 - `docs/STATUS.md`: what works, what's verified, open bugs with everything already tried, and what's next. Read Known issues before tuning the solver.
+- `docs/papers.md`: reference papers and code, grouped by symptom. Before changing solver, boundary, sand, MPM or fluid-rendering behaviour, read only the matching section; cite what you used.
 - `docs/agents/gpu-probe.md`: read before running or reading the GPU probe, comparing variants, timing passes, or taking screenshots.
 - `.workbuddy-ai/memory/` (untracked, main checkout only): notes from another AI tool the owner uses, with decisions made there (for example, an MPM rewrite was judged not justified). Read them before solver or architecture decisions. Its uncommitted experiments may also sit in the main checkout; treat them as read-only.
 
