@@ -16,10 +16,14 @@
 // boiled at the surface (30 px/s in the top 20 px, 41 spray drops). With the grid and
 // water drag 0.01 it comes to rest: 0.06 px/s, 0.4 px tilt, under one spray drop.
 
-// Anti-clumping / surface-tension term (n = 4, dq = 0.2 h).
+// Anti-clumping / surface-tension term (n = 4, dq = 0.2 h). It is a position push standing
+// in for a force, so scorr_k is per 1/60 s step and scales with dt^2. Unscaled, 2 substeps
+// made it 4x too strong: the top layer of a resting pool drifted at 3-7 px/s, up to
+// 50 px/s (0.5 px/s scaled; water feel probe, surface).
 float scorr(float r2) {
 	float w = poly6(r2) / poly6(0.04 * params.h * params.h);
-	return -params.scorr_k * w * w * w * w;
+	float step = params.dt * 60.0;
+	return -params.scorr_k * step * step * w * w * w * w;
 }
 
 // Density a wall at distance d adds: poly6 integrated over the half-plane past the

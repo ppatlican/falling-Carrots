@@ -19,7 +19,8 @@ const MAX_STEP := 4.0
 ## PBF density constraint relaxation (larger = softer water). In units of
 ## (1/px)^2 of the normalised constraint gradient, so it scales with H.
 const LAMBDA_EPS := 0.01
-## Anti-clumping / surface-tension term (Macklin & Mueller 2013): k, with
+## Anti-clumping / surface-tension term (Macklin & Mueller 2013): k per 1/60 s step,
+## scaled by dt^2 in the solver (liquid.glslinc), with
 ## n = 4 and dq = 0.2 h fixed in the shader and the CPU reference.
 const SCORR_K := 0.02
 ## Powder contact stiffness per iteration: delta = relax * sum of push-outs.

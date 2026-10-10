@@ -5,7 +5,7 @@
 // Liquids: density constraint. Everyone: powder contacts. Clamped to half a spacing
 // per iteration for stability. New behaviour classes add their term here.
 
-// common.glslinc stamp: Params 108 B, v7. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v8. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "liquid.glslinc"
 #include "powder.glslinc"

@@ -13,7 +13,7 @@
 // (inelastic push-outs keep overlapping grains from spraying).
 // brush_finalize.glsl then lowers the free count. Mirror: cpu_ref/particle_pool.gd.
 
-// common.glslinc stamp: Params 108 B, v7. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v8. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Closest a new circle-brush particle may be to a live one, in rest spacings.

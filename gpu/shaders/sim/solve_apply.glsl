@@ -8,7 +8,7 @@
 // A fixed cut (like the floor's) held lightly touching grains up in thin columns on
 // the walls (Milestone 2 GPU measurement).
 
-// common.glslinc stamp: Params 108 B, v7. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v8. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

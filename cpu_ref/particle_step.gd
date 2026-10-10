@@ -84,9 +84,10 @@ static func rest_density_for(h: float, spacing: float) -> float:
 
 
 ## Surface-tension / anti-clumping term from Macklin & Mueller 2013 (n = 4, dq = 0.2h).
-static func scorr(r2: float, h: float) -> float:
+## SCORR_K is per 1/60 s step and scales with dt^2 (a position push standing in for a force).
+static func scorr(r2: float, h: float, dt: float) -> float:
 	var w := poly6(r2, h) / poly6(0.04 * h * h, h)
-	return -SimParams.SCORR_K * w * w * w * w
+	return -SimParams.SCORR_K * pow(dt * 60.0, 2.0) * w * w * w * w
 
 
 # --- Step -------------------------------------------------------------------------
@@ -136,7 +137,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		for i in n:
 			var d := Vector2.ZERO
 			if _class(mat[i]) == LIQUID:
-				d = _liquid_delta(i, pred, mat, lambda, neighbours[i], h)
+				d = _liquid_delta(i, pred, mat, lambda, neighbours[i], h, dt)
 			d += _contact_delta(i, pos, pred, mat, neighbours[i])
 			delta[i] = d.limit_length(0.5 * SimParams.SPACING)
 		for i in n:
@@ -249,13 +250,13 @@ func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: Packed
 
 
 func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lambda: PackedFloat32Array,
-		nb: PackedInt32Array, h: float) -> Vector2:
+		nb: PackedInt32Array, h: float, dt: float) -> Vector2:
 	var wall := wall_density(pred[i], h, rest_density, world_size)
 	var d := lambda[i] * Vector2(wall.y, wall.z)
 	for j in nb:
 		var rv := pred[i] - pred[j]
 		var lj := lambda[j] if _class(mat[j]) == LIQUID else 0.0
-		d += (lambda[i] + lj + scorr(rv.length_squared(), h)) * spiky_grad(rv, h, i, j)
+		d += (lambda[i] + lj + scorr(rv.length_squared(), h, dt)) * spiky_grad(rv, h, i, j)
 	return d / rest_density
 
 

@@ -6,6 +6,8 @@
 ##          against free fall (v = g t), until it lands
 ##   dam    a 100 px wide, 240 px tall column of water released at the left wall: the
 ##          front's x and speed, then the mean speed while it sloshes and settles
+##   surface  a 126 px deep pool spawned at rest: speeds of the top layer only (the
+##          highest particle per 4 px column and those within 3 px below it)
 ##   pour   a 40 px deep pool, a brush pouring into it for 3 s, then a 4000-particle
 ##          block dropped into it (look at it with shots=)
 ## Every sample (every=N frames, default 3): one line per scenario, see _analyse.
@@ -86,7 +88,11 @@ func _process(_delta: float) -> bool:
 			"material": water, "count": 0, "cols": 1}
 	if frame_i == 1:
 		brush.op = ParticleSim.BRUSH_BLOCK
-		if scenario == "dam":
+		if scenario == "surface":
+			brush.count = 20000
+			brush.cols = 319
+			brush.pos = Vector2(1.0, SimParams.WORLD_SIZE.y - 1.0 - 63 * SimParams.SPACING)
+		elif scenario == "dam":
 			brush.count = DAM_COLS * DAM_ROWS
 			brush.cols = DAM_COLS
 			brush.pos = Vector2(1.0, SimParams.WORLD_SIZE.y - 1.0 - DAM_ROWS * SimParams.SPACING)
@@ -178,6 +184,9 @@ func _analyse(b: Dictionary, f: int) -> void:
 		max_speed = maxf(max_speed, v.length())
 	if n == 0:
 		return
+	if scenario == "surface":
+		_surface(b, t)
+		return
 	if scenario == "dam":
 		xs.sort()
 		var front := xs[int(0.995 * (xs.size() - 1))]
@@ -202,3 +211,42 @@ func _analyse(b: Dictionary, f: int) -> void:
 			landed = true
 			print("FALL landed at t=%.3f (free fall from the same height: %.3f)" % [
 					t, sqrt(2.0 * (SimParams.WORLD_SIZE.y - 1.0 - (8.0 + (FALL_COUNT / FALL_COLS - 1) * SimParams.SPACING)) / SimParams.GRAVITY)])
+
+
+func _surface(b: Dictionary, t: float) -> void:
+	var cols := int(SimParams.WORLD_SIZE.x / 4.0)
+	var top := PackedFloat32Array()
+	top.resize(cols)
+	top.fill(1e9)
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0 or (fl & 0xFF) != water:
+			continue
+		var c := clampi(int(b.pos.decode_float(i * 8) / 4.0), 0, cols - 1)
+		top[c] = minf(top[c], b.pos.decode_float(i * 8 + 4))
+	var n := 0
+	var sum_vx := 0.0
+	var max_vx := 0.0
+	var sum_vy := 0.0
+	var moving := 0
+	var all_n := 0
+	var all_sum := 0.0
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0 or (fl & 0xFF) != water:
+			continue
+		var x: float = b.pos.decode_float(i * 8)
+		var y: float = b.pos.decode_float(i * 8 + 4)
+		var v := Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4))
+		all_n += 1
+		all_sum += v.length()
+		if y > top[clampi(int(x / 4.0), 0, cols - 1)] + 3.0:
+			continue
+		n += 1
+		sum_vx += absf(v.x)
+		sum_vy += absf(v.y)
+		max_vx = maxf(max_vx, absf(v.x))
+		if absf(v.x) > 2.0:
+			moving += 1
+	print("SURFACE t=%.1f top_layer=%d mean|vx|=%.2f max|vx|=%.1f mean|vy|=%.2f moving(|vx|>2)=%d  body_mean=%.2f" % [
+			t, n, sum_vx / maxi(n, 1), max_vx, sum_vy / maxi(n, 1), moving, all_sum / maxi(all_n, 1)])
