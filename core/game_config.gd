@@ -9,6 +9,8 @@ const DEFAULT_PATH := "res://config.json"
 var particle_cap: int = 50000
 ## PBD solver iterations per frame (spec 2.6, step 4).
 var solver_iterations: int = 4
+## Simulation substeps per frame (spec 2.6): each runs predict to velocity with dt / substeps.
+var substeps: int = 2
 ## Problems found while loading. Empty means the file was clean.
 var errors: PackedStringArray = []
 
@@ -31,6 +33,7 @@ static func load_from_file(path: String = DEFAULT_PATH):
 func apply(data: Dictionary) -> void:
 	particle_cap = _read_int(data, "particle_cap", particle_cap, 1024, 4_000_000)
 	solver_iterations = _read_int(data, "solver_iterations", solver_iterations, 1, 16)
+	substeps = _read_int(data, "substeps", substeps, 1, 8)
 
 
 func _read_int(data: Dictionary, key: String, fallback: int, lo: int, hi: int) -> int:

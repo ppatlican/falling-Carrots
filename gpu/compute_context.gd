@@ -119,13 +119,15 @@ func create_buffer_rt(name: String, size_bytes: int, data := PackedByteArray()) 
 
 
 ## Creates an RGBA8 texture that compute can write (image2D) and the renderer can sample.
+## Copy-from is set so probes can save it (tools/water_feel_probe.gd shots=).
 func create_storage_texture_rt(name: String, width: int, height: int) -> RID:
 	var fmt := RDTextureFormat.new()
 	fmt.format = RenderingDevice.DATA_FORMAT_R8G8B8A8_UNORM
 	fmt.width = width
 	fmt.height = height
 	fmt.usage_bits = RenderingDevice.TEXTURE_USAGE_STORAGE_BIT \
-			| RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
+			| RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT \
+			| RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT
 	var rid := rd.texture_create(fmt, RDTextureView.new())
 	if rid.is_valid():
 		_textures[name] = rid
@@ -164,7 +166,8 @@ func texture(name: String) -> RID:
 # --- Pass list --------------------------------------------------------------------
 
 ## Appends a pass. dispatches: Array of [pipeline_name, uniform_set_name, groups_x].
-## Dispatches run in order with a barrier between each.
+## Dispatches run in order with a barrier between each. Passes may share a name (one
+## per substep); their times are summed under that name.
 func add_pass(pass_name: String, dispatches: Array) -> void:
 	var list := []
 	for d in dispatches:
@@ -221,7 +224,7 @@ func record_frame_rt() -> void:
 			rd.compute_list_dispatch(list, d.groups_x, 1, 1)
 		rd.compute_list_end()
 		rd.capture_timestamp(TS_PREFIX + p.name)
-		cpu[p.name] = Time.get_ticks_usec() - t0
+		cpu[p.name] = cpu.get(p.name, 0) + Time.get_ticks_usec() - t0
 	_mutex.lock()
 	_cpu_us = cpu
 	_mutex.unlock()
@@ -239,7 +242,8 @@ func _collect_timestamps_rt() -> void:
 		var t := rd.get_captured_timestamp_gpu_time(i)
 		if ts_name != TS_BEGIN and prev_time >= 0:
 			# GPU timestamps are nanoseconds (Vulkan driver); report microseconds.
-			gpu[ts_name.trim_prefix(TS_PREFIX)] = (t - prev_time) / 1000.0
+			var pass_name := ts_name.trim_prefix(TS_PREFIX)
+			gpu[pass_name] = gpu.get(pass_name, 0.0) + (t - prev_time) / 1000.0
 		prev_time = t
 	if gpu.is_empty():
 		return
@@ -252,8 +256,12 @@ func _collect_timestamps_rt() -> void:
 ## Returns [{ "name", "cpu_us", "gpu_us" }] in pass order; values are -1 until available.
 func get_timings() -> Array:
 	var out := []
+	var seen := {}
 	_mutex.lock()
 	for p in _passes:
+		if seen.has(p.name):
+			continue
+		seen[p.name] = true
 		out.append({
 			"name": p.name,
 			"cpu_us": _cpu_us.get(p.name, -1),

@@ -1,12 +1,13 @@
 #[compute]
 #version 450
 
-// Velocity 1/3 (spec 2.6 step 5): velocity from the solved move, times (1 - drag).
+// Velocity 1/3 (spec 2.6 step 5): velocity from the solved move, times exp(-drag * dt)
+// (material drag is per second, so it doesn't depend on the substep count).
 // Powders: the solver's push-out may stop a grain but not launch it faster than
 // max_separation in the push direction (keeps settled sand from hopping).
 // Powders also sleep (Macklin et al. 2014, "particle sleeping"): a grain the solver
-// stopped (its move differs from the predicted one) that moved less than
-// SLEEP_DISTANCE this step stays where it started, with zero velocity. Without it a
+// stopped (its move differs from the predicted one) that moved slower than
+// SLEEP_SPEED this step stays where it started, with zero velocity. Without it a
 // settled 50k pile never came to rest: the few Jacobi iterations leave ~2.5 px/s of
 // back-and-forth in every grain ("pudding", Milestone 2 GPU measurement). It is decided
 // again each step, so a grain wakes as soon as it is hit or loses its support.
@@ -17,12 +18,12 @@
 // walls. A cap of 0 would stop the water levelling, since the slow sideways push from a
 // higher surface starts from rest. Depth pressure comes from the grid (hydro.glslinc).
 
-// common.glslinc stamp: Params 108 B, v5. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v8. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
-// Largest move per step (px) that still counts as resting. Below the free-fall move of
-// one step from rest (gravity * dt^2 = 0.11 px). Mirror: SimParams.SLEEP_DISTANCE.
-const float SLEEP_DISTANCE = 0.1;
+// Fastest speed (px/s) that still counts as resting: 0.1 px per 1/60 s step, below the
+// free-fall speed after one 1/60 s step (6.7 px/s). Mirror: SimParams.SLEEP_SPEED.
+const float SLEEP_SPEED = 6.0;
 
 // Liquids: the separating speed the solver's correction may add in one step, in units
 // of gravity * dt. Mirror: SimParams.LIQUID_KICK.
@@ -46,7 +47,7 @@ void main() {
 	float kick = 0.0;
 	if (s_class(t) == CLASS_POWDER) {
 		bool stopped = length(v - v_pre) > 0.5 * params.gravity * params.dt;
-		if (stopped && length(s_pred[t] - s_pos[t]) < SLEEP_DISTANCE) {
+		if (stopped && length(s_pred[t] - s_pos[t]) < SLEEP_SPEED * params.dt) {
 			s_pred[t] = s_pos[t];
 			v = vec2(0.0);
 		}
@@ -63,5 +64,5 @@ void main() {
 			v -= excess * n;
 		}
 	}
-	s_vel[t] = v * (1.0 - drag);
+	s_vel[t] = v * exp(-drag * params.dt);
 }

@@ -8,16 +8,19 @@ const WORLD_SIZE := Vector2(640, 360)
 const SPACING := 2.0
 ## SPH kernel radius and hash cell size.
 const H := 4.0
-## One fixed step per frame. Slower frames slow the sim down rather than destabilise it.
+## One fixed frame time, split into substeps (config.json). Slower frames slow the sim
+## down rather than destabilise it.
 const DT := 1.0 / 60.0
 const GRAVITY := 400.0
-## Largest move per step. Keeps fast particles from skipping past neighbours.
+## Largest move per substep. Keeps fast particles from skipping past neighbours, and caps
+## speed at MAX_STEP / (DT / substeps).
 const MAX_STEP := 4.0
 
 ## PBF density constraint relaxation (larger = softer water). In units of
 ## (1/px)^2 of the normalised constraint gradient, so it scales with H.
 const LAMBDA_EPS := 0.01
-## Anti-clumping / surface-tension term (Macklin & Mueller 2013): k, with
+## Anti-clumping / surface-tension term (Macklin & Mueller 2013): k per 1/60 s step,
+## scaled by dt^2 in the solver (liquid.glslinc), with
 ## n = 4 and dq = 0.2 h fixed in the shader and the CPU reference.
 const SCORR_K := 0.02
 ## Powder contact stiffness per iteration: delta = relax * sum of push-outs.
@@ -38,9 +41,9 @@ const MAX_SEPARATION := 0.0
 ## Share of its friction a powder grain loses when fully surrounded by liquid. Lets
 ## sand under water slump and settle under the water instead of trapping it.
 const WET_SLIP := 0.9
-## Powder sleeping (velocity_update.glsl): a grain the solver stopped that moved less
-## than this (px) in a step stays put with zero velocity. Below gravity * DT^2.
-const SLEEP_DISTANCE := 0.1
+## Powder sleeping (velocity_update.glsl): a grain the solver stopped that moved slower
+## than this (px/s) in a step stays put with zero velocity. 0.1 px per 1/60 s step.
+const SLEEP_SPEED := 6.0
 
 ## Liquids (velocity_update.glsl): the speed the solver's correction may add in its own
 ## direction in one step, in units of GRAVITY * DT. Stops the solver launching water.
@@ -48,7 +51,7 @@ const LIQUID_KICK := 2.0
 
 ## Liquid density projection on a coarse grid (gpu/shaders/sim/hydro.glslinc): cell size
 ## in hash cells, the density (over rest) below which a cell is air, the SOR
-## over-relaxation, the share of a cell's compression removed per step, the density from
+## over-relaxation, the share of a cell's compression removed per 1/60 s, the density from
 ## which the cell above counts as full (thin cells under full water are pulled full), and
 ## the red-black sweeps per frame (warm-started from the last frame). Fewer sweeps don't
 ## converge in deep water: 16 left 50k water moving at 6.5 px/s with a 12 px tilt

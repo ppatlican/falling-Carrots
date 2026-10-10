@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-10. Current milestone: **2 (GPU liquid + powder + brush): code complete and run on the PC GPU. Water churn fixed on the GPU probe with a grid density projection (2026-10-10); waiting on the owner's manual play. Phone not yet measured.**
+Last updated: 2026-10-10. Current milestone: **2 (GPU liquid + powder + brush): code complete and run on the PC GPU. Water churn fixed on the GPU probe with a grid density projection (2026-10-10). Water no longer floaty (2 substeps, drag per second, lattice brush; branch `water-feel`, 2026-10-10). The owner played it and saw mid-air clumps of sand (fixed on branch `worktree-clump-hover`, waiting on manual play) and hovering water drops (cause known, not fixed; see Known issues). Phone not yet measured.**
 
 Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `docs/SPEC.md`.
 
@@ -15,7 +15,9 @@ Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `d
 - **Liquid** (`gpu/shaders/sim/liquid.glslinc`): PBF density constraint, s_corr and XSPH viscosity, plus:
   - Wall density, so liquid doesn't crowd into the walls.
   - Density projection grid (`hydro.glslinc`, pass `hydro`, then `solve_pressure`): 16 px cells; liquid and powder particles splat their density with integer atomics, 32 red-black SOR sweeps (one dispatch each, warm-started) solve for a pressure p ≥ 0 that removes `HYDRO_K` 0.5 of each cell's compression and closes air bubbles under full water, and liquid particles are pushed by −∇p·dt² before the PBF iterations. It reaches the whole tank in one step, so deep water stays at rest density with gravity acting as usual.
-  - Water drag 0.01 per step (`materials.json`), so a slosh dies within seconds.
+  - Water drag 0.15 per second (`materials.json`, v × exp(−drag·dt)), so a slosh dies within about 10 s while falls and pours barely slow. Sand keeps the old 0.01 per step as 0.6 per second.
+  - Substeps (`config.json` `substeps`, default 2): predict to velocity run twice per frame at dt/2 and the frame renders once. A move is still capped at `MAX_STEP` 4 px per substep, so the top speed went from 240 to 480 px/s. Drag, sleeping (`SLEEP_SPEED` 6 px/s), XSPH and `HYDRO_K` are per second or per 1/60 s, and `SCORR_K` (a position push standing in for a force) scales with dt², so none of them change with the substep count. Unscaled s_corr was 4× too strong at 2 substeps: the top layer of a resting pool drifted sideways at 3–7 px/s, up to 50 px/s (owner saw it); scaled, 0.35–0.6 px/s, max 2 (old code: 0.9, max 3).
+  - Circle brush, liquids: new particles go only on free spots of a rest-spacing lattice (shifted each frame, checked against the last step's hash), up to the brush rate. Random spawn points used to land on each other and on existing water, and the solver blew them into a 300 px spray dome that drifted down. Pours are now a stream, but slower: about 930 particles in 3 s instead of about 4100, since new water fits only where the last has fallen away. Sand uses the same lattice (see Powder).
   - Kick cap (`LIQUID_KICK` 2, `velocity_update.glsl`): the solver's correction may stop water but add at most 2 × gravity × dt of speed per step in its own direction, so overshoot can't launch water.
 - **Powder** (`powder.glslinc`, `solve_apply.glsl`, `velocity_update.glsl`): mass-weighted contacts with static/kinetic friction, averaged over contacts.
   - Height mass scaling (`STACK_K` 0.3), so piles aren't crushed under load.
@@ -23,6 +25,7 @@ Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `d
   - Water yields to sand (`POWDER_LIQUID_SHARE` 0.1), and wet grains slip (`WET_SLIP` 0.9), so sand sinks through water and settles under it.
   - Floor friction, and Coulomb friction on the side walls.
   - Sleeping (`SLEEP_DISTANCE` 0.1 px) brings piles to rest; it fixed the pudding.
+  - Circle brush (2026-10-10): sand goes on free lattice spots like water. Random points stacked new grains on each other and on the last frame's grains, and the inelastic push-out can't spring them apart, so a held brush built a packed blob that expanded up to the ceiling and hung there, shedding slow pairs (owner: "sand clumps in the air, against gravity"). Grains that fall freely were never affected: sparse sand falls at free fall less drag 0.6/s.
 - **Brush:**
   - Left mouse adds the selected material and right mouse erases any material.
   - Toolbar has Sand/Water, the two block fills ("+10k sand", "+10k water") and Clear.
@@ -52,6 +55,14 @@ Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `d
 | Same fix, 50k sand at rest; 10k sand into 10k water | PC, GPU probe | Sand unchanged: drift 0.000 px, top grains at y≈105 resting on 7–9 grains, no wall grains rising. Sand rests on the floor (0.01 px/s); the water over it moves at 5.2 px/s (was ~11) |
 | Same fix, CPU tests | headless | 15 passed, 0 failed |
 | Manual play with a mouse | PC | Owner on PR #2 (2026-10-10): "way too churny", 50k water shooting up. The fix above is **not yet** played |
+| Water feel, 2 substeps (`tools/water_feel_probe.gd`) | PC, RTX 3080 Ti | 40×40 px block falls at 91–97% of free-fall speed, 440 px/s by the floor, and lands at 1.30 s (ideal 1.25 s). Before: speed capped at 238 px/s from 0.75 s, landed at 1.65 s. Dam break (100×240 px column): front at 430 px/s (Martin & Moyce lab ≈ 410), at the far wall at 1.65 s; before: capped at 245 px/s, 2.5 s |
+| Same, 50k water (5 blocks, consecutive and gap=30) | PC, GPU probe, 2400 frames | Plateau 0.23–0.29 px/s, tilt 0.0–0.2 px, roughness 0.3 px, no spray, floor at rest density; under 300 particles at the floor moving 3–8 px/s. GPU ~1.56 ms/frame (1 substep: ~1.06 ms) |
+| Same, 50k sand at rest | PC, GPU probe | Drift 0.000 px, all asleep. Top grain y≈45 (was 112): the pile is no longer squeezed about 25% |
+| Same, 10k sand into 10k water | PC, GPU probe | Sand at rest density with water in its pores (was 1.5× rest and dry). Sand 0.38 px/s (was 0.01), water over it 7.2 px/s (was 5.2): slow seepage at the bottom of the bed |
+| Same, top layer of a 126 px pool at rest (`water_feel_probe surface`) | PC, 28 s | After the s_corr dt² fix: 0.35–0.6 px/s sideways, max ~2 px/s, 0–2 particles over 2 px/s. 50k water at the floor: 450–950 particles at 3–12 px/s between repeat runs (noise; surface still) |
+| Sand brush on the lattice (`water_feel_probe sandair r=10 n=94 spawn=60 move=0`: brush held still 1 s at y=40) | PC, RTX 3080 Ti | Grains still above y=150 at t=2 s: 2655 of 5640 → 0 of 267; no blob at the ceiling. Held still the brush now pours ~4.5 grains/frame (only where the last have fallen away); moved, the full ~78 lattice spots per frame. Not a substep regression: 1 substep clumped the same |
+| Water hover above the surface (`water_feel_probe hover`: 20k pool at rest) | PC, RTX 3080 Ti | Not fixed. 8–14 loose drops (< 3 neighbours) hover 4–15 px above the surface at 0 ± 1 px/s from 6 s on. With the grid push off: none, so the grid's push holds them (see Known issues) |
+| Same, CPU tests | headless | 15 passed, 0 failed |
 | Phone | — | **Not yet** |
 
 Run tests: `Godot_v4.7.1-stable_win64_console.exe --headless --path <project> --script res://tests/run_tests.gd`
@@ -81,6 +92,12 @@ Solve dominates once particles are settled and packed, so measure the settled st
 6. The log has no errors, and no leaked-RID warnings on quit.
 
 ## Known issues
+- **Water feel (branch `water-feel`), waiting on manual play.** Water fell and spread in slow motion: the 4 px move cap made 240 px/s the top speed, and drag 0.01 per step took 45% of the speed every second. Brushing water sprayed a dome. Fixed with substeps, drag per second and the lattice brush (see Done).
+  - Left over: the water brush pours about 4× slower than before. If it feels weak, options are a bigger brush, an initial downward speed (a tap), or spawning only part of each spot's clearance.
+  - Left over: sand under water seeps at ~0.4 px/s and the water over it moves at ~7 px/s.
+  - Not done: gravity is 400 px/s², so the 360 px tank behaves like one about 9 m tall. Real-size water (a tank about 1 m tall) needs ~1000 px/s² and 3–4 substeps to keep the speed cap above the fall speed. It changes sand too, so it's the owner's call.
+  - Not changed: `LIQUID_KICK` 2 (the dam front already matches lab data) and XSPH 0.05.
+  - Left over (owner saw it): hovering, loose drops held in a ~10 px fuzzy band above a resting surface. Cause: the grid's pressure is sampled bilinearly with p = 0 at the centre of the air cell, half a coarse cell (8 px) above the real surface, and the gradient is a central difference over ±8 px, so the push that holds water up against gravity reaches 8 px above the surface in full and fades out by ~24 px. Tried, all reverted (`water_feel_probe hover`, GPU probe `water 2400 5 gap=30`, `water_feel_probe surface`, repeat runs since single runs are noisy): scaling the push by the particle's own density (0 at 0.5 → 1 at 0.75, or 0.35 → 0.55) removed the hover, but 50k water churned at 1.3–3.3 px/s, up to 200 (unfixed 0.4, up to 15); the same only near the surface (cell above under 0.95 full) still churned; scaling by the grid density above the particle sloshed 50k water at 4–6 px/s, tilt ±14 px; density scaling with an 80% floor kept 50k water at 0.43 px/s and no drop hovered, but the 20k pool's top layer burst to 3–6 px/s, up to 51, for ~8 s in 2 of 3 runs (unfixed: 0.5, max 2.5). The hover band seems to be what damps the surface. A real fix probably puts p = 0 at the surface itself (a ghost-fluid boundary in the grid solve), which is a bigger change. Or leave it to the M5 density render, which would hide the band.
 - **Water churn: fixed on the probe (2026-10-10), waiting on manual play.** The owner played PR #2 and found 50k water shooting up and churning. Screenshots then showed the surface 60–70 px higher at one wall, spray, and dark gaps opening and closing near the top.
   - Cause: PBF with 4 Jacobi iterations can't build pressure that grows with depth, and both workarounds churned. Liquid stack scaling lifts every squeezed pair, so water held slopes like a sand pile and boiled at the surface. Without it 50k water squeezed to 2.5× rest density at the floor. A per-particle pressure strong enough to hold the floor sloshed (keep 0.99: tilt swinging ±70 px; gain 0.3: 38 px/s).
   - Fix: a grid density projection (`hydro.glslinc`, see Done) replaces both, and water got drag 0.01 because the now nearly frictionless water sloshed for 40+ s after a big drop (the tank's fundamental mode, 4.7 s period).
@@ -107,11 +124,13 @@ Solve dominates once particles are settled and packed, so measure the settled st
 - **Water looks noisy** as plain 2×2 points, with dark gaps and some spray when blocks land. Metaball rendering is M5.
 - The fixed 1/60 s step per frame means a slow device runs the sim in slow motion rather than unstably. That's intended.
 - **MCP runtime tools fail** with "registry entry ... has no token path; relaunch the editor". Suspected cause: headless test runs also start the MCP addon's runtime autoload. If it recurs, the test runner should keep that autoload from starting.
+- **Untracked spike files in the main checkout** (`gpu/shaders/sim/projection_*.glsl`, `gpu/mpm_water.gd`, `gpu/shaders/mpm/`, `tools/mpm_probe.gd`): the projection shaders fail `test_shader_imports_newer_than_includes` there, since they never get the stamp bump. Run tests in a clean copy, or delete them if they're no longer wanted.
 - **Stale editor state:** delete the stray `node_2d.tscn` in the main checkout, and reopen the editor before saving.
 - `config.json` and `data/materials.json` are not auto-exported. The Android preset needs `*.json` in its non-resource include filter.
 - No keyboard shortcuts for materials (the toolbar only), so input stays inside the action layer.
 
 ## Next
-1. Owner plays the fix (50k water via "+10k water", and sand into water). If the water now looks too still or too thick when pouring, lower water drag (0.005) before touching the grid.
-2. Re-measure GPU pass times at the settled state, then measure the cap on a phone (the Milestone 2 goal). The `hydro` pass is new and is mostly dispatch overhead (64 SOR dispatches).
-3. Milestone 3 (cluster solids): shape-matched carrot boxes colliding and floating or sinking in water and sand. The density projection grid is a natural place for buoyancy and for solids displacing water.
+1. Owner plays branch `worktree-clump-hover` (`water-feel` plus the sand brush fix): sand poured with the brush held still and moving, then pouring, "+10k water", sand into water. On approval merge it into `water-feel`. If the held brush pours too little sand, give new grains an initial downward speed. If water sloshes too long, raise water drag (0.3 per second). If the GPU budget is tight, `substeps` 1 restores the old cost (and the old speed cap).
+2. Owner decides on hovering water drops: a free-surface boundary in the density projection grid (p = 0 at the surface itself; a bigger solver change), or leave them to the M5 density render. Branch `hover-experiment` holds the best particle-side attempt for reference (not for merge). Judge any attempt on repeat runs of `water_feel_probe hover` and `surface` and GPU probe `water 2400 5 gap=30`, against an unfixed run the same day.
+3. Re-measure GPU pass times at the settled state, then measure the cap on a phone (the Milestone 2 goal). The `hydro` pass is new and is mostly dispatch overhead (64 SOR dispatches).
+4. Milestone 3 (cluster solids): shape-matched carrot boxes colliding and floating or sinking in water and sand. The density projection grid is a natural place for buoyancy and for solids displacing water.

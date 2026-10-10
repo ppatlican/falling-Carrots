@@ -56,7 +56,7 @@ func _ready() -> void:
 	_overlay.compute = ctx
 	_overlay.view_toggled.connect(_on_view_toggled)
 	_overlay.check_requested.connect(func(): _sim.request_check())
-	_sim = ParticleSim.new(ctx, _config.particle_cap, _config.solver_iterations, _table)
+	_sim = ParticleSim.new(ctx, _config.particle_cap, _config.solver_iterations, _table, _config.substeps)
 	_sim.setup_finished.connect(_on_setup_finished)
 	_sim.check_finished.connect(_on_check_finished)
 	_view.texture = _sim.texture

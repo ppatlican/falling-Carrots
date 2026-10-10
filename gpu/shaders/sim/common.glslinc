@@ -119,6 +119,12 @@ ivec2 cell_coord(vec2 p) {
 
 uint cell_index(ivec2 c) { return uint(c.y) * params.grid_w + uint(c.x); }
 
+// Circle brush: spots per side of the rest-spacing lattice over the brush's bounding
+// square, plus one for the per-frame shift. Mirror: ParticleSim.brush_lattice_spots().
+uint brush_lattice_side(float radius, float spacing) {
+	return uint(ceil(2.0 * radius / spacing)) + 1u;
+}
+
 // Keeps a particle inside the world. Each slot gets its own inset (0.5 to 0.75
 // spacing) so wall clamping can't stack particles on exactly the same point.
 vec2 clamp_to_world(vec2 p, uint slot) {

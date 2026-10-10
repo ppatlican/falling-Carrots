@@ -13,10 +13,11 @@ func test_config_file_loads_cleanly() -> void:
 
 func test_config_rejects_bad_values() -> void:
 	var cfg = GameConfig.new()
-	cfg.apply({"particle_cap": 10, "solver_iterations": 2.5})
+	cfg.apply({"particle_cap": 10, "solver_iterations": 2.5, "substeps": 0})
 	expect_eq(cfg.particle_cap, 1024, "particle_cap clamped to minimum")
 	expect_eq(cfg.solver_iterations, 4, "fractional iterations fall back to default")
-	expect_eq(cfg.errors.size(), 2, "both problems reported")
+	expect_eq(cfg.substeps, 1, "substeps clamped to minimum")
+	expect_eq(cfg.errors.size(), 3, "all three problems reported")
 
 
 func test_input_actions_exist() -> void:

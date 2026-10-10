@@ -71,7 +71,7 @@ func _initialize() -> void:
 	mat_id = seq[seq.size() - 1]
 	print("probe fill=%s mat=%d cap=%d frames=%d" % [fill_name, mat_id, cap, max_frames])
 	ctx = ComputeContext.new()
-	sim = ParticleSim.new(ctx, cap, config.solver_iterations, table)
+	sim = ParticleSim.new(ctx, cap, config.solver_iterations, table, config.substeps)
 	sim.setup_finished.connect(_on_setup)
 	var err: String = sim.start()
 	if err != "":

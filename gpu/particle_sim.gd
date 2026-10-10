@@ -4,7 +4,8 @@
 ## frame, PBF liquids and frictional powders, drawn as plain points into an
 ## art-resolution texture shown through `texture` (a Texture2DRD).
 ##
-## Passes per frame, each timed separately in the debug overlay:
+## Passes per frame, each timed separately in the debug overlay. predict to velocity run
+## once per substep, with dt = SimParams.DT / substeps (times summed over substeps):
 ##   brush     add (spawn + finalize) or erase (erase + finalize)
 ##   predict   gravity, predicted positions
 ##   hash      clear, count, 3-step prefix sum, scatter (copies state into cell order)
@@ -63,6 +64,7 @@ var cap: int
 
 var _ctx
 var _iterations: int
+var _substeps: int
 var _material_bytes: PackedByteArray
 var _grid: Vector2i
 var _n_cells: int
@@ -74,10 +76,11 @@ var _clear_pending := false
 var _check: Dictionary = {}
 
 
-func _init(ctx, particle_cap: int, solver_iterations: int, material_table) -> void:
+func _init(ctx, particle_cap: int, solver_iterations: int, material_table, substeps := 1) -> void:
 	_ctx = ctx
 	cap = particle_cap
 	_iterations = solver_iterations
+	_substeps = maxi(1, substeps)
 	_material_bytes = material_table.pack_gpu()
 	_grid = SimParams.grid_size()
 	_n_cells = _grid.x * _grid.y
@@ -179,22 +182,23 @@ func _build_passes_rt() -> void:
 	var d := func(k: String, groups: int) -> Array: return [k, k, groups]
 	# Brush dispatch sizes are set per frame (0 = skipped).
 	_ctx.add_pass("brush", [d.call("brush_spawn", 0), d.call("brush_erase", 0), d.call("brush_finalize", 0)])
-	_ctx.add_pass("predict", [d.call("predict", all)])
-	_ctx.add_pass("hash", [
-		d.call("hash_clear", cells), d.call("hash_count", all),
-		d.call("scan_local", ceili(float(_n_cells + 1) / SCAN_BLOCK)), d.call("scan_blocks", 1),
-		d.call("scan_add", cells), d.call("hash_scatter", all),
-	])
 	var hydro := ComputeContext.groups_for(_hydro_cells())
 	var hydro_pass := [d.call("hydro_splat", all), d.call("hydro_phi", hydro)]
 	for _i in SimParams.HYDRO_SWEEPS:
 		hydro_pass.append_array([d.call("hydro_red", hydro), d.call("hydro_black", hydro)])
-	_ctx.add_pass("hydro", hydro_pass)
 	var solve := [d.call("solve_pressure", all), d.call("solve_apply", all)]
 	for _i in _iterations:
 		solve.append_array([d.call("solve_lambda", all), d.call("solve_delta", all), d.call("solve_apply", all)])
-	_ctx.add_pass("solve", solve)
-	_ctx.add_pass("velocity", [d.call("velocity_update", all), d.call("velocity_xsph", all), d.call("velocity_commit", all)])
+	for _s in _substeps:
+		_ctx.add_pass("predict", [d.call("predict", all)])
+		_ctx.add_pass("hash", [
+			d.call("hash_clear", cells), d.call("hash_count", all),
+			d.call("scan_local", ceili(float(_n_cells + 1) / SCAN_BLOCK)), d.call("scan_blocks", 1),
+			d.call("scan_add", cells), d.call("hash_scatter", all),
+		])
+		_ctx.add_pass("hydro", hydro_pass)
+		_ctx.add_pass("solve", solve)
+		_ctx.add_pass("velocity", [d.call("velocity_update", all), d.call("velocity_xsph", all), d.call("velocity_commit", all)])
 	_ctx.add_pass("render", [d.call("render_clear", pixels), d.call("render_points", all)])
 
 
@@ -220,7 +224,8 @@ func frame(brush: Dictionary, view_flags: int) -> void:
 	_clear_pending = false
 	if clear:
 		live_count = 0
-	RenderingServer.call_on_render_thread(_frame_rt.bind(_push(brush, view_flags), int(brush.op), int(brush.count), clear))
+	RenderingServer.call_on_render_thread(_frame_rt.bind(_push(brush, view_flags), int(brush.op), int(brush.count),
+			float(brush.get("radius", SimParams.BRUSH_RADIUS)), clear))
 
 
 ## Empties the pool at the start of the next frame.
@@ -228,15 +233,16 @@ func request_clear() -> void:
 	_clear_pending = true
 
 
-func _frame_rt(push: PackedByteArray, op: int, count: int, clear: bool) -> void:
+func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear: bool) -> void:
 	if not _gpu_ready:
 		return
 	if clear:
 		_ctx.update_buffer_rt("free_stack", 0, ParticlePool.initial_stack(cap).to_byte_array())
 		_ctx.update_buffer_rt("counters", 0, _initial_counters())
 		_ctx.rd.buffer_clear(_ctx.buffer("mat_flags"), 0, cap * 4)
-	var spawning := op == BRUSH_CIRCLE or op == BRUSH_BLOCK
-	_ctx.set_groups_rt("brush", 0, ComputeContext.groups_for(count) if spawning else 0)
+	# Circle: one thread per lattice spot (brush_spawn.glsl).
+	var spawn_threads := brush_lattice_spots(radius) if op == BRUSH_CIRCLE else count if op == BRUSH_BLOCK else 0
+	_ctx.set_groups_rt("brush", 0, ComputeContext.groups_for(spawn_threads) if spawn_threads > 0 else 0)
 	_ctx.set_groups_rt("brush", 1, ComputeContext.groups_for(cap) if op == BRUSH_ERASE else 0)
 	_ctx.set_groups_rt("brush", 2, 1 if op != BRUSH_NONE else 0)
 	_ctx.set_push_all_rt(push)
@@ -244,6 +250,13 @@ func _frame_rt(push: PackedByteArray, op: int, count: int, clear: bool) -> void:
 	if not _counter_in_flight:
 		_counter_in_flight = true
 		_ctx.readback_async_rt("counters", _on_counters_rt)
+
+
+## Circle brush threads: the rest-spacing lattice over the brush's bounding square
+## (brush_lattice_side() in common.glslinc).
+static func brush_lattice_spots(radius: float) -> int:
+	var side := ceili(2.0 * radius / SimParams.SPACING) + 1
+	return side * side
 
 
 func _on_counters_rt(data: PackedByteArray) -> void:
@@ -273,7 +286,7 @@ func _push(brush: Dictionary, view_flags: int) -> PackedByteArray:
 	b.encode_float(36, SimParams.WORLD_SIZE.y)
 	b.encode_u32(40, _grid.x)
 	b.encode_u32(44, _grid.y)
-	b.encode_float(48, SimParams.DT)
+	b.encode_float(48, SimParams.DT / _substeps)
 	b.encode_float(52, SimParams.GRAVITY)
 	b.encode_float(56, SimParams.MAX_STEP)
 	b.encode_float(60, _rest_density)
