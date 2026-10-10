@@ -19,7 +19,7 @@
 // walls. A cap of 0 would stop the water levelling, since the slow sideways push from a
 // higher surface starts from rest. Depth pressure comes from the grid (hydro.glslinc).
 
-// common.glslinc stamp: Params 108 B, v9. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v10. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Fastest speed (px/s) that still counts as resting: 0.1 px per 1/60 s step, below the

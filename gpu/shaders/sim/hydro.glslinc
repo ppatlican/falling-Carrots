@@ -62,9 +62,9 @@ float hydro_k() {
 // Density over rest from which the cell above counts as full (see hydro_sweep).
 // Mirror: SimParams.HYDRO_FULL.
 const float HYDRO_FULL = 0.95;
-// Powder density over rest above which a thin cell isn't pulled full (see hydro_sweep).
-// Mirror: SimParams.HYDRO_POWDER.
-const float HYDRO_POWDER = 0.05;
+// Share of a cell one unit of powder density fills: sand packs to about 1.4x the
+// water's rest density, so 1 / 1.4. Mirror: SimParams.HYDRO_POWDER_VOL.
+const float HYDRO_POWDER_VOL = 0.7;
 
 ivec2 hydro_size() {
 	return ivec2((int(params.grid_w) + HYDRO_CELL - 1) / HYDRO_CELL,
@@ -171,16 +171,21 @@ void hydro_sweep(uint parity) {
 		hydro_p[c] = n > 0.0 ? sum / n : 0.0;
 		return;
 	}
-	// Compression is always corrected. A thin cell is pulled full only under full water
-	// (the cell above it at least HYDRO_FULL) and with almost no powder in it: an air
-	// bubble trapped in the water closes from the top, while cells at the free surface,
-	// which are rightly part-filled, aren't pulled together. Requiring all four
-	// neighbours full left 30k water full of bubbles next to each other; counting cells
-	// part-filled with sand as bubbles pulled water into a sand bed forever, and water
-	// over sand churned at 9 px/s (GPU probe).
-	bool covered = ci.y > 0 && hydro_phi[hydro_index(ci - ivec2(0, 1))].x >= HYDRO_FULL
-			&& hydro_phi[c].y < HYDRO_POWDER;
-	float err = covered ? phi - 1.0 : max(phi - 1.0, 0.0);
+	// Compression is always corrected. A cell with room left is pulled full only under a
+	// full cell (the one above at least HYDRO_FULL): an air bubble trapped in the water
+	// closes from the top, while cells at the free surface, which are rightly
+	// part-filled, aren't pulled together. Requiring all four neighbours full left 30k
+	// water full of bubbles next to each other. Powder fills room too (HYDRO_POWDER_VOL):
+	// counting only the liquid made a wet sand bed look like a bubble, pulled water into
+	// it forever, and water over sand churned at 9 px/s. Skipping cells with any powder
+	// instead left air pockets riding on every clump of sand sinking through water
+	// (water_feel_probe sink, owner screenshot 2026-10-10).
+	vec2 above = ci.y > 0 ? hydro_phi[hydro_index(ci - ivec2(0, 1))] : vec2(0.0);
+	bool covered = above.x + above.y * HYDRO_POWDER_VOL >= HYDRO_FULL;
+	float err = max(phi - 1.0, 0.0);
+	if (covered) {
+		err += min(phi + hydro_phi[c].y * HYDRO_POWDER_VOL - 1.0, 0.0);
+	}
 	float a = hydro_cell_size();
 	float rhs = -a * a * hydro_k() * err / (params.dt * params.dt);
 	// Warm start: a cell that was air last frame holds a negative ghost.

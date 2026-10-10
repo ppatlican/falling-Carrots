@@ -20,6 +20,9 @@
 ##   shaft  the erase pile, then the eraser cut straight down at x=300 and x=345: dry sand
 ##          should cave in to its angle of repose, so the empty 2 px cells left in
 ##          x 285..360, y 260..356 should drop back towards 0, not stay open
+##   sink   40k water as four +10k blocks 30 frames apart, then +10k sand at frame SINK_SAND
+##          (as the owner does): sand grains that are still (< 0.5 px/s) with water right
+##          under them are held up by water, a raft (should be 0), and the sand's mean depth
 ##   hover  the surface pool: water particles in the loose fringe above the dense surface
 ##          (the first 2 px row at least half full), and their mean vy (> 0 is falling)
 ## Every sample (every=N frames, default 3): one line per scenario, see _analyse.
@@ -135,6 +138,8 @@ func _process(_delta: float) -> bool:
 		brush = _erase_brush()
 	if scenario == "shaft":
 		brush = _shaft_brush()
+	if scenario == "sink":
+		brush = _sink_brush()
 	sim.frame(brush, 0)
 	if frame_i in shots:
 		RenderingServer.call_on_render_thread(_shot_rt.bind(frame_i))
@@ -210,6 +215,56 @@ func _shaft_brush() -> Dictionary:
 		brush.op = ParticleSim.BRUSH_ERASE
 		brush.pos = Vector2(300.0 if k <= 110 else 345.0, 140.0 + 2.0 * float((k - 1) % 110))
 	return brush
+
+
+const SINK_SAND := 600
+
+
+func _sink_brush() -> Dictionary:
+	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": 0.0,
+			"material": water, "count": 0, "cols": 1}
+	if (frame_i - 1) % 30 == 0 and frame_i <= 91 or frame_i == SINK_SAND:
+		brush.op = ParticleSim.BRUSH_BLOCK
+		brush.material = sand if frame_i == SINK_SAND else water
+		brush.count = SimParams.BENCH_BLOCK
+		brush.cols = SimParams.BENCH_COLS
+		brush.pos = Vector2((SimParams.WORLD_SIZE.x - SimParams.BENCH_COLS * SimParams.SPACING) * 0.5, 8.0)
+	return brush
+
+
+func _sink_stats(b: Dictionary, t: float) -> void:
+	var wet := {}
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) != 0 and (fl & 0xFF) == water:
+			var y: float = b.pos.decode_float(i * 8 + 4)
+			wet[Vector2i(int(b.pos.decode_float(i * 8) / 2.0), int(y / 2.0))] = true
+	var n := 0
+	var still := 0
+	var raft := 0
+	var raft_y := 0.0
+	var sum_y := 0.0
+	var sum_vy := 0.0
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0 or (fl & 0xFF) != sand:
+			continue
+		var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		var v := Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4))
+		n += 1
+		sum_y += p.y
+		sum_vy += v.y
+		if v.length() >= 0.5:
+			continue
+		still += 1
+		var c := Vector2i(int(p.x / 2.0), int(p.y / 2.0))
+		if wet.has(c + Vector2i(0, 1)) or wet.has(c + Vector2i(0, 2)):
+			raft += 1
+			raft_y += p.y
+	if n == 0:
+		return
+	print("SINK t=%.2f sand=%d mean_y=%.0f mean_vy=%.1f still=%d raft(still, water under)=%d raft_mean_y=%.0f" % [
+			t, n, sum_y / n, sum_vy / n, still, raft, raft_y / maxi(raft, 1)])
 
 
 func _shaft_stats(b: Dictionary, t: float) -> void:
@@ -298,6 +353,9 @@ func _analyse(b: Dictionary, f: int) -> void:
 		return
 	if scenario == "shaft":
 		_shaft_stats(b, t)
+		return
+	if scenario == "sink":
+		_sink_stats(b, t)
 		return
 	var xs := PackedFloat32Array()
 	var n := 0

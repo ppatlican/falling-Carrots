@@ -4,7 +4,7 @@
 // Hash 2/6: count live particles per cell. The atomic's return value is the
 // particle's rank inside its cell, which the scatter pass uses as its offset.
 
-// common.glslinc stamp: Params 108 B, v9. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v10. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

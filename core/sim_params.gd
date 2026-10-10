@@ -61,8 +61,9 @@ const HYDRO_AIR := 0.3
 const HYDRO_SOR := 1.8
 const HYDRO_K := 0.5
 const HYDRO_FULL := 0.95
-## Powder density over rest above which a thin cell isn't pulled full: it is sand, not air.
-const HYDRO_POWDER := 0.05
+## Share of a cell one unit of powder density fills (sand packs to ~1.4x the water's rest
+## density). Powder counts toward a cell being full, so a gap next to sinking sand closes.
+const HYDRO_POWDER_VOL := 0.7
 ## Free surface (ghost fluid): liquid density over rest at the surface, and the smallest
 ## share of a cell the surface may sit from a liquid cell's centre.
 const HYDRO_SURFACE := 0.5
