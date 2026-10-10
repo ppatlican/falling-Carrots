@@ -150,8 +150,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		var v := (pred[i] - pos[i]) / dt
 		var v_pre := vel[i].limit_length(SimParams.MAX_STEP / dt)
 		if _class(mat[i]) == POWDER:
-			# Sleeping (velocity_update.glsl): a stopped grain that barely moved stays put.
-			var stopped := (v - v_pre).length() > 0.5 * SimParams.GRAVITY * dt
+			# Sleeping (velocity_update.glsl): a grain held up that barely moved stays put.
+			var stopped := v_pre.y - v.y > 0.5 * SimParams.GRAVITY * dt  # held up, not just pushed
 			if stopped and pred[i].distance_to(pos[i]) < SimParams.SLEEP_SPEED * dt:
 				pred[i] = pos[i]
 				v = Vector2.ZERO

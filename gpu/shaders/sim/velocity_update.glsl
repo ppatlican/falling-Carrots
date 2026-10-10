@@ -6,7 +6,7 @@
 // Powders: the solver's push-out may stop a grain but not launch it faster than
 // max_separation in the push direction (keeps settled sand from hopping).
 // Powders also sleep (Macklin et al. 2014, "particle sleeping"): a grain the solver
-// stopped (its move differs from the predicted one) that moved slower than
+// held up (took away at least half of gravity's speed this step) that moved slower than
 // SLEEP_SPEED this step stays where it started, with zero velocity. Without it a
 // settled 50k pile never came to rest: the few Jacobi iterations leave ~2.5 px/s of
 // back-and-forth in every grain ("pudding", Milestone 2 GPU measurement). It is decided
@@ -46,7 +46,14 @@ void main() {
 	float sep = 0.0;
 	float kick = 0.0;
 	if (s_class(t) == CLASS_POWDER) {
-		bool stopped = length(v - v_pre) > 0.5 * params.gravity * params.dt;
+		// Held up: the solver took away at least half a step of gravity's fall (y points
+		// down). Counting a change of speed in any direction let grains with nothing
+		// under them sleep: a falling grain moves g dt^2 (0.03 px at 2 substeps) in its
+		// first step, under the sleep distance, so small groups whose contacts pushed
+		// sideways froze in mid-air, held still every step from then on (owner: a
+		// brushed pile erased with the eraser left clumps in the air;
+		// water_feel_probe erase: 7-11 grains).
+		bool stopped = v_pre.y - v.y > 0.5 * params.gravity * params.dt;
 		if (stopped && length(s_pred[t] - s_pos[t]) < SLEEP_SPEED * params.dt) {
 			s_pred[t] = s_pos[t];
 			v = vec2(0.0);
