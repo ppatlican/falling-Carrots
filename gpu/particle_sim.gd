@@ -13,7 +13,7 @@
 ##   solve     grid pressure push (pressure, apply), then
 ##             solver_iterations x (lambda, delta, apply)
 ##   velocity  update, XSPH, commit
-##   render    clear image, draw points
+##   render    clear image, draw liquid points, then powder points on top
 ##
 ## The live particle count comes back through a 16-byte async readback each frame
 ## (SPEC 2.7). It lags a frame or two. The GPU enforces the cap on its own.
@@ -33,7 +33,7 @@ const KERNELS := [
 	"hash_clear", "hash_count", "scan_local", "scan_blocks", "scan_add", "hash_scatter",
 	"hydro_splat", "hydro_phi", "hydro_red", "hydro_black", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
 	"velocity_update", "velocity_xsph", "velocity_commit",
-	"render_clear", "render_points",
+	"render_clear", "render_points", "render_powder",
 ]
 ## Must match Params in common.glslinc.
 const PUSH_SIZE := 108
@@ -199,7 +199,7 @@ func _build_passes_rt() -> void:
 		_ctx.add_pass("hydro", hydro_pass)
 		_ctx.add_pass("solve", solve)
 		_ctx.add_pass("velocity", [d.call("velocity_update", all), d.call("velocity_xsph", all), d.call("velocity_commit", all)])
-	_ctx.add_pass("render", [d.call("render_clear", pixels), d.call("render_points", all)])
+	_ctx.add_pass("render", [d.call("render_clear", pixels), d.call("render_points", all), d.call("render_powder", all)])
 
 
 ## Coarse cells of the density projection grid (hydro_size() in hydro.glslinc).
