@@ -54,7 +54,7 @@ Buoyancy comes from per-material density in the density-constraint and contact r
 - Phase and state changes are threshold rules in the table: water → steam above its boiling point, flour + water → dough, and so on.
 
 ### 2.6 Per-frame pipeline
-1. Apply input: brush, fan, heat, and drag writes. The circle brush places liquid only on free spots of a rest-spacing lattice, so new water never lands inside existing water.
+1. Apply input: brush, fan, heat, and drag writes. The circle brush places every material only on free spots of a rest-spacing lattice, so new particles never land inside existing ones (packed sand, which can't spring apart, hung in the air).
 
 Steps 2–5 run `substeps` times per frame (`config.json`, default 2) with dt = 1/60 ÷ substeps. A move is capped at `MAX_STEP` (4 px, one kernel radius) per substep, so the top speed is `MAX_STEP` ÷ dt: 240 px/s at 1 substep, which held falling and spreading water to slow motion; 480 px/s at 2. Per-step quantities are written per second or per 1/60 s (drag, sleeping speed, XSPH), so the substep count changes accuracy and cost but not the materials.
 

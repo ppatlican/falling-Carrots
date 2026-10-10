@@ -240,8 +240,8 @@ func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear:
 		_ctx.update_buffer_rt("free_stack", 0, ParticlePool.initial_stack(cap).to_byte_array())
 		_ctx.update_buffer_rt("counters", 0, _initial_counters())
 		_ctx.rd.buffer_clear(_ctx.buffer("mat_flags"), 0, cap * 4)
-	# Circle: liquids take one thread per lattice spot, powders one per particle (brush_spawn.glsl).
-	var spawn_threads := maxi(count, brush_lattice_spots(radius)) if op == BRUSH_CIRCLE else count if op == BRUSH_BLOCK else 0
+	# Circle: one thread per lattice spot (brush_spawn.glsl).
+	var spawn_threads := brush_lattice_spots(radius) if op == BRUSH_CIRCLE else count if op == BRUSH_BLOCK else 0
 	_ctx.set_groups_rt("brush", 0, ComputeContext.groups_for(spawn_threads) if spawn_threads > 0 else 0)
 	_ctx.set_groups_rt("brush", 1, ComputeContext.groups_for(cap) if op == BRUSH_ERASE else 0)
 	_ctx.set_groups_rt("brush", 2, 1 if op != BRUSH_NONE else 0)

@@ -3,14 +3,15 @@
 
 // Brush, add: thread t fills one free slot, popped from the top of the free stack.
 // Block: thread t is the t-th particle of the block, min(brush_count, free count) threads.
-// Circle, liquid: thread t is one spot of a lattice at rest spacing over the brush's
-// bounding square, shifted randomly each frame. A spot outside the circle, or with a live particle
+// Circle: thread t is one spot of a lattice at rest spacing over the brush's bounding
+// square, shifted randomly each frame. A spot outside the circle, or with a live particle
 // closer than SPAWN_CLEARANCE (from the last step's hash), is skipped; the others claim a
 // slot with an atomic counter (counters[2]) until brush_count are placed. Random points
-// used to land on top of each other and on existing water, and the solver blew them
-// apart: pouring water sprayed a 300 px dome that drifted down (water feel probe, pour).
-// Circle, powder: a random point in the circle, min(brush_count, free count) threads
-// (inelastic push-outs keep overlapping grains from spraying).
+// used to land on top of each other and on existing particles. Water sprayed a 300 px
+// dome that drifted down (water feel probe, pour). Sand, whose push-outs can't add speed
+// (MAX_SEPARATION), was packed tighter each frame the brush was held: the blob expanded up
+// to the ceiling and hung there, 2655 of 5640 grains still in the air 1 s after a 1 s pour
+// would have landed them (water feel probe, sandair r=10 n=94 spawn=60 move=0).
 // brush_finalize.glsl then lowers the free count. Mirror: cpu_ref/particle_pool.gd.
 
 // common.glslinc stamp: Params 108 B, v8. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
@@ -45,23 +46,12 @@ void main() {
 	uint wanted = min(params.brush_count, free_count);
 	vec2 p;
 	uint k;
-	bool liquid = materials[params.brush_material & MAT_MASK].info.x == CLASS_LIQUID;
 	if (params.brush_op == BRUSH_BLOCK) {
 		if (t >= wanted) {
 			return;
 		}
 		// Square lattice at rest spacing, block_cols per row, growing downward.
 		p = params.brush_pos + vec2(float(t % params.block_cols), float(t / params.block_cols)) * params.spacing;
-		k = t;
-	} else if (!liquid) {
-		if (t >= wanted) {
-			return;
-		}
-		// Random point in the brush circle (sqrt for uniform area density).
-		uint seed = t * 2u + params.frame * 9781u;
-		float angle = hash_unit(seed) * 2.0 * PI;
-		float r = sqrt(hash_unit(seed + 1u)) * params.brush_radius;
-		p = params.brush_pos + vec2(cos(angle), sin(angle)) * r;
 		k = t;
 	} else {
 		uint side = brush_lattice_side(params.brush_radius, params.spacing);

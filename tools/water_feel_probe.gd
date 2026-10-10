@@ -10,6 +10,11 @@
 ##          highest particle per 4 px column and those within 3 px below it)
 ##   pour   a 40 px deep pool, a brush pouring into it for 3 s, then a 4000-particle
 ##          block dropped into it (look at it with shots=)
+##   sandair  sand spawned by a brush in mid-air (r=1.5 px, n=2 grains per frame, spawn=20
+##          frames, move=1 steps the brush 28 px per frame, move=0 holds it still): how many grains are still in the air (y < 150) once free fall
+##          would have landed them all (should be 0)
+##   hover  the surface pool: water particles in the loose fringe above the dense surface
+##          (the first 2 px row at least half full), and their mean vy (> 0 is falling)
 ## Every sample (every=N frames, default 3): one line per scenario, see _analyse.
 ##   shots=F1,F2,...  save the rendered frame at these frames as user://feel_<scenario>_<F>.png
 extends SceneTree
@@ -31,6 +36,7 @@ var sample_every := 3
 var ctx
 var sim
 var water := -1
+var sand := -1
 var cap := 50000
 var frame_i := 0
 var ready := false
@@ -41,6 +47,10 @@ var landed := false
 var last_front := 0.0
 var last_front_t := 0.0
 var shots := PackedInt32Array()
+var sand_r := 1.5
+var sand_n := 2
+var sand_frames := 20
+var sand_moving := 1
 
 
 func _initialize() -> void:
@@ -52,6 +62,14 @@ func _initialize() -> void:
 	for a in args:
 		if a.begins_with("every="):
 			sample_every = maxi(1, int(a.substr(6)))
+		if a.begins_with("r="):
+			sand_r = float(a.substr(2))
+		if a.begins_with("n="):
+			sand_n = int(a.substr(2))
+		if a.begins_with("spawn="):
+			sand_frames = int(a.substr(6))
+		if a.begins_with("move="):
+			sand_moving = int(a.substr(5))
 		if a.begins_with("shots="):
 			for v in a.substr(6).split(","):
 				shots.append(int(v))
@@ -62,6 +80,7 @@ func _initialize() -> void:
 	if problems.size() > 0:
 		print("MATERIAL PROBLEMS: ", problems)
 	water = table.id_of("water")
+	sand = table.id_of("sand")
 	print("feel probe scenario=%s frames=%d g=%.0f dt=%.5f" % [scenario, max_frames, SimParams.GRAVITY, SimParams.DT])
 	ctx = ComputeContext.new()
 	sim = ParticleSim.new(ctx, cap, config.solver_iterations, table, config.substeps)
@@ -88,7 +107,7 @@ func _process(_delta: float) -> bool:
 			"material": water, "count": 0, "cols": 1}
 	if frame_i == 1:
 		brush.op = ParticleSim.BRUSH_BLOCK
-		if scenario == "surface":
+		if scenario == "surface" or scenario == "hover":
 			brush.count = 20000
 			brush.cols = 319
 			brush.pos = Vector2(1.0, SimParams.WORLD_SIZE.y - 1.0 - 63 * SimParams.SPACING)
@@ -103,6 +122,8 @@ func _process(_delta: float) -> bool:
 			y0 = 8.0 + (FALL_COUNT / FALL_COLS - 1) * SimParams.SPACING * 0.5
 	if scenario == "pour":
 		brush = _pour_brush()
+	if scenario == "sandair":
+		brush = _sandair_brush()
 	sim.frame(brush, 0)
 	if frame_i in shots:
 		RenderingServer.call_on_render_thread(_shot_rt.bind(frame_i))
@@ -137,6 +158,16 @@ func _pour_brush() -> Dictionary:
 	return brush
 
 
+func _sandair_brush() -> Dictionary:
+	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": sand_r,
+			"material": sand, "count": 0, "cols": 1}
+	if frame_i <= sand_frames:
+		brush.op = ParticleSim.BRUSH_CIRCLE
+		brush.pos = Vector2(40.0 + 28.0 * (frame_i % 20) * sand_moving + 280.0 * (1 - sand_moving), 40.0)
+		brush.count = sand_n
+	return brush
+
+
 func _shot_rt(f: int) -> void:
 	var data: PackedByteArray = ctx.rd.texture_get_data(ctx.texture("image"), 0)
 	var size := Vector2i(SimParams.WORLD_SIZE)
@@ -161,6 +192,12 @@ func _on_data(data: PackedByteArray, name: String, f: int) -> void:
 func _analyse(b: Dictionary, f: int) -> void:
 	# Frame 1 spawns and steps once, so frame f has had f steps of gravity.
 	var t := f * SimParams.DT
+	if scenario == "sandair":
+		_sandair(b, t)
+		return
+	if scenario == "hover":
+		_hover(b, t)
+		return
 	var xs := PackedFloat32Array()
 	var n := 0
 	var sum_y := 0.0
@@ -250,3 +287,78 @@ func _surface(b: Dictionary, t: float) -> void:
 			moving += 1
 	print("SURFACE t=%.1f top_layer=%d mean|vx|=%.2f max|vx|=%.1f mean|vy|=%.2f moving(|vx|>2)=%d  body_mean=%.2f" % [
 			t, n, sum_vx / maxi(n, 1), max_vx, sum_vy / maxi(n, 1), moving, all_sum / maxi(all_n, 1)])
+
+
+func _sandair(b: Dictionary, t: float) -> void:
+	var n := 0
+	var air := 0
+	var air_vy := 0.0
+	var slow := 0
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0 or (fl & 0xFF) != sand:
+			continue
+		n += 1
+		if b.pos.decode_float(i * 8 + 4) < 150.0:
+			air += 1
+			var vy: float = b.vel.decode_float(i * 8 + 4)
+			air_vy += vy
+			if vy < 0.5 * SimParams.GRAVITY * t:
+				slow += 1
+	print("SANDAIR t=%.2f grains=%d in_air=%d air_mean_vy=%.1f slow(vy<g*t/2)=%d" % [
+			t, n, air, air_vy / maxi(air, 1), slow])
+
+
+func _hover(b: Dictionary, t: float) -> void:
+	var rows := int(SimParams.WORLD_SIZE.y / 2.0)
+	var hist := PackedInt32Array()
+	hist.resize(rows)
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0 or (fl & 0xFF) != water:
+			continue
+		hist[clampi(int(b.pos.decode_float(i * 8 + 4) / 2.0), 0, rows - 1)] += 1
+	var full := int(SimParams.WORLD_SIZE.x / SimParams.SPACING)
+	var dense := rows - 1
+	for r in rows:
+		if hist[r] >= full / 2:
+			dense = r
+			break
+	var line := dense * 2.0 - 4.0
+	var n := 0
+	var sum_vy := 0.0
+	var sum_speed := 0.0
+	var top := 1e9
+	var near := PackedVector2Array()  # every particle that can neighbour a fringe one
+	var fringe := PackedVector2Array()
+	var fringe_v := PackedVector2Array()
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0 or (fl & 0xFF) != water:
+			continue
+		var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		if p.y < line + SimParams.H:
+			near.append(p)
+		if p.y >= line:
+			continue
+		var v := Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4))
+		n += 1
+		sum_vy += v.y
+		sum_speed += v.length()
+		top = minf(top, p.y)
+		fringe.append(p)
+		fringe_v.append(v)
+	# Loose: fewer than 3 neighbours within H, so nothing holds it up but the grid.
+	var loose := 0
+	var loose_vy := 0.0
+	for f in fringe.size():
+		var nb := 0
+		for p in near:
+			if p.distance_squared_to(fringe[f]) < SimParams.H * SimParams.H:
+				nb += 1
+		if nb - 1 < 3:
+			loose += 1
+			loose_vy += fringe_v[f].y
+	print("HOVER t=%.2f dense_surface_y=%.0f fringe=%d fringe_height=%.1f mean_vy=%.2f mean_speed=%.2f loose=%d loose_vy=%.1f" % [
+			t, dense * 2.0, n, dense * 2.0 - top if n > 0 else 0.0, sum_vy / maxi(n, 1), sum_speed / maxi(n, 1),
+			loose, loose_vy / maxi(loose, 1)])
