@@ -13,6 +13,13 @@
 ##   sandair  sand spawned by a brush in mid-air (r=1.5 px, n=2 grains per frame, spawn=20
 ##          frames, move=1 steps the brush 28 px per frame, move=0 holds it still): how many grains are still in the air (y < 150) once free fall
 ##          would have landed them all (should be 0)
+##   erase  sand pile built with the moving brush (frames 1-PILE), then the eraser scrubbing
+##          sideways across it while rising from the floor (to ERASE_END), as the owner
+##          does: grains with nothing under them (no grain within 4 px below and not on
+##          the floor) that are still (< SLEEP_SPEED) are clumps held in the air (should be 0)
+##   shaft  the erase pile, then the eraser cut straight down at x=300 and x=345: dry sand
+##          should cave in to its angle of repose, so the empty 2 px cells left in
+##          x 285..360, y 260..356 should drop back towards 0, not stay open
 ##   hover  the surface pool: water particles in the loose fringe above the dense surface
 ##          (the first 2 px row at least half full), and their mean vy (> 0 is falling)
 ## Every sample (every=N frames, default 3): one line per scenario, see _analyse.
@@ -124,6 +131,10 @@ func _process(_delta: float) -> bool:
 		brush = _pour_brush()
 	if scenario == "sandair":
 		brush = _sandair_brush()
+	if scenario == "erase":
+		brush = _erase_brush()
+	if scenario == "shaft":
+		brush = _shaft_brush()
 	sim.frame(brush, 0)
 	if frame_i in shots:
 		RenderingServer.call_on_render_thread(_shot_rt.bind(frame_i))
@@ -168,6 +179,90 @@ func _sandair_brush() -> Dictionary:
 	return brush
 
 
+const ERASE_PILE := 360
+const ERASE_END := 840
+
+
+func _erase_brush() -> Dictionary:
+	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": SimParams.BRUSH_RADIUS,
+			"material": sand, "count": 0, "cols": 1}
+	if frame_i <= ERASE_PILE:
+		# Brush swept over x 240..400 at y 200, 8 px per frame, like a held mouse.
+		var ph := (frame_i * 8) % 320
+		brush.op = ParticleSim.BRUSH_CIRCLE
+		brush.pos = Vector2(240.0 + (ph if ph < 160 else 320 - ph), 200.0)
+		brush.count = SimParams.brush_rate()
+	elif frame_i > ERASE_PILE + 60 and frame_i <= ERASE_END:
+		# Eraser scrubbing x 200..440 at 12 px per frame, rising from the floor.
+		var k := frame_i - ERASE_PILE - 60
+		var ph := (k * 12) % 480
+		brush.op = ParticleSim.BRUSH_ERASE
+		brush.pos = Vector2(200.0 + (ph if ph < 240 else 480 - ph), SimParams.WORLD_SIZE.y - 4.0 - 0.3 * k)
+	return brush
+
+
+func _shaft_brush() -> Dictionary:
+	var brush := _erase_brush() if frame_i <= ERASE_PILE else {"op": ParticleSim.BRUSH_NONE,
+			"pos": Vector2.ZERO, "radius": SimParams.BRUSH_RADIUS, "material": sand, "count": 0, "cols": 1}
+	var k := frame_i - ERASE_PILE - 60
+	if k > 0 and k <= 220:
+		# Down at 2 px per frame from y 140, first at x 300, then at x 345.
+		brush.op = ParticleSim.BRUSH_ERASE
+		brush.pos = Vector2(300.0 if k <= 110 else 345.0, 140.0 + 2.0 * float((k - 1) % 110))
+	return brush
+
+
+func _shaft_stats(b: Dictionary, t: float) -> void:
+	var cells := {}
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0 or (fl & 0xFF) != sand:
+			continue
+		cells[Vector2i(int(b.pos.decode_float(i * 8) / 2.0), int(b.pos.decode_float(i * 8 + 4) / 2.0))] = true
+	var empty := 0
+	for cy in range(130, 178):
+		for cx in range(143, 180):
+			if not cells.has(Vector2i(cx, cy)):
+				empty += 1
+	print("SHAFT t=%.2f empty_cells=%d of %d" % [t, empty, 48 * 37])
+
+
+func _erase_stats(b: Dictionary, t: float) -> void:
+	var cells := {}
+	var ps := PackedVector2Array()
+	var vs := PackedVector2Array()
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0 or (fl & 0xFF) != sand:
+			continue
+		var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		ps.append(p)
+		vs.append(Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4)))
+		cells[Vector2i(int(p.x / 2.0), int(p.y / 2.0))] = true
+	var unsupported := 0
+	var stuck := 0
+	var stuck_y := 0.0
+	for i in ps.size():
+		var p := ps[i]
+		if p.y > SimParams.WORLD_SIZE.y - 4.0:
+			continue
+		var c := Vector2i(int(p.x / 2.0), int(p.y / 2.0))
+		var below := false
+		for dy in [1, 2]:
+			for dx in [-1, 0, 1]:
+				if cells.has(c + Vector2i(dx, dy)):
+					below = true
+		if below:
+			continue
+		unsupported += 1
+		if vs[i].length() < SimParams.SLEEP_SPEED:
+			stuck += 1
+			stuck_y += p.y
+	print("ERASE t=%.2f phase=%s grains=%d unsupported=%d stuck(still, nothing below)=%d stuck_mean_y=%.0f" % [
+			t, "pile" if frame_i <= ERASE_PILE else ("erase" if frame_i <= ERASE_END else "after"),
+			ps.size(), unsupported, stuck, stuck_y / maxi(stuck, 1)])
+
+
 func _shot_rt(f: int) -> void:
 	var data: PackedByteArray = ctx.rd.texture_get_data(ctx.texture("image"), 0)
 	var size := Vector2i(SimParams.WORLD_SIZE)
@@ -197,6 +292,12 @@ func _analyse(b: Dictionary, f: int) -> void:
 		return
 	if scenario == "hover":
 		_hover(b, t)
+		return
+	if scenario == "erase":
+		_erase_stats(b, t)
+		return
+	if scenario == "shaft":
+		_shaft_stats(b, t)
 		return
 	var xs := PackedFloat32Array()
 	var n := 0

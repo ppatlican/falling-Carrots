@@ -150,9 +150,9 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		var v := (pred[i] - pos[i]) / dt
 		var v_pre := vel[i].limit_length(SimParams.MAX_STEP / dt)
 		if _class(mat[i]) == POWDER:
-			# Sleeping (velocity_update.glsl): a stopped grain that barely moved stays put.
-			var stopped := (v - v_pre).length() > 0.5 * SimParams.GRAVITY * dt
-			if stopped and pred[i].distance_to(pos[i]) < SimParams.SLEEP_SPEED * dt:
+			# Sleeping (velocity_update.glsl): a grain held up that barely moved stays put.
+			var stopped := v_pre.y - v.y > 0.5 * SimParams.GRAVITY * dt  # held up, not just pushed
+			if stopped and pred[i].distance_to(pos[i]) < SimParams.SLEEP_SPEED * dt and _cradled(i, pred, mat, neighbours[i]):
 				pred[i] = pos[i]
 				v = Vector2.ZERO
 			v = limit_separation(v, v_pre, SimParams.MAX_SEPARATION, 0.0)
@@ -337,6 +337,25 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 				var k := 1.0 - pow(1.0 - SimParams.HYDRO_K, dt * 60.0)  # share per step (hydro_k())
 				var rhs := -a * a * k * err / (dt * dt)
 				p[c] = maxf(lerpf(p[c], (sum - rhs) / n, SimParams.HYDRO_SOR), 0.0)
+
+
+## True when grain i rests in a pocket: on the floor, or touched below on each side by a
+## grain or a wall (velocity_update.glsl cradled()).
+func _cradled(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: PackedInt32Array) -> bool:
+	var sp := SimParams.SPACING
+	var pt := pred[i]
+	if pt.y >= world_size.y - 0.6 * sp:
+		return true
+	var left := pt.x <= 0.6 * sp
+	var right := pt.x >= world_size.x - 0.6 * sp
+	for j in nb:
+		if j == i or _class(mat[j]) != POWDER:
+			continue
+		var d := pred[j] - pt
+		if d.y > 0.1 * sp and d.length_squared() < 1.44 * sp * sp:
+			left = left or d.x < -0.2 * sp
+			right = right or d.x > 0.2 * sp
+	return left and right
 
 
 ## Pressure at coarse cell c, mirrored past the grid edge (hydro_p_at).

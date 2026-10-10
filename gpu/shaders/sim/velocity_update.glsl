@@ -6,7 +6,8 @@
 // Powders: the solver's push-out may stop a grain but not launch it faster than
 // max_separation in the push direction (keeps settled sand from hopping).
 // Powders also sleep (Macklin et al. 2014, "particle sleeping"): a grain the solver
-// stopped (its move differs from the predicted one) that moved slower than
+// held up (took away at least half of gravity's speed this step), cradled (see cradled())
+// and that moved slower than
 // SLEEP_SPEED this step stays where it started, with zero velocity. Without it a
 // settled 50k pile never came to rest: the few Jacobi iterations leave ~2.5 px/s of
 // back-and-forth in every grain ("pudding", Milestone 2 GPU measurement). It is decided
@@ -29,6 +30,29 @@ const float SLEEP_SPEED = 6.0;
 // of gravity * dt. Mirror: SimParams.LIQUID_KICK.
 const float LIQUID_KICK = 2.0;
 
+// A grain can only rest in a pocket: with a grain (or a wall) touching it below on each
+// side, or on the floor. A grain on top of a single grain, as on a vertical face, isn't
+// cradled and keeps sliding. Mirror: cpu_ref/particle_step.gd _cradled.
+bool cradled(uint t) {
+	vec2 pt = s_pred[t];
+	float sp = params.spacing;
+	if (pt.y >= params.world_size.y - 0.6 * sp) {
+		return true;
+	}
+	bool left = pt.x <= 0.6 * sp;
+	bool right = pt.x >= params.world_size.x - 0.6 * sp;
+	FOR_EACH_NEIGHBOUR(t) {
+		uint j = k;
+		if (j == t || materials[s_material(j)].info.x != CLASS_POWDER) continue;
+		vec2 d = s_pred[j] - pt;
+		if (d.y > 0.1 * sp && dot(d, d) < 1.44 * sp * sp) {
+			left = left || d.x < -0.2 * sp;
+			right = right || d.x > 0.2 * sp;
+		}
+	} END_NEIGHBOURS
+	return left && right;
+}
+
 void main() {
 	uint t;
 	if (!sorted_particle(t)) {
@@ -46,8 +70,15 @@ void main() {
 	float sep = 0.0;
 	float kick = 0.0;
 	if (s_class(t) == CLASS_POWDER) {
-		bool stopped = length(v - v_pre) > 0.5 * params.gravity * params.dt;
-		if (stopped && length(s_pred[t] - s_pos[t]) < SLEEP_SPEED * params.dt) {
+		// Held up: the solver took away at least half a step of gravity's fall (y points
+		// down). Counting a change of speed in any direction let grains with nothing
+		// under them sleep: a falling grain moves g dt^2 (0.03 px at 2 substeps) in its
+		// first step, under the sleep distance, so small groups whose contacts pushed
+		// sideways froze in mid-air, held still every step from then on (owner: a
+		// brushed pile erased with the eraser left clumps in the air;
+		// water_feel_probe erase: 7-11 grains).
+		bool stopped = v_pre.y - v.y > 0.5 * params.gravity * params.dt;
+		if (stopped && length(s_pred[t] - s_pos[t]) < SLEEP_SPEED * params.dt && cradled(t)) {
 			s_pred[t] = s_pos[t];
 			v = vec2(0.0);
 		}
