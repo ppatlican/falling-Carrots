@@ -60,7 +60,7 @@ _Avoid_: Heap (in docs), stack
 ## Player tools
 
 **Brush**:
-The tool that adds the selected material in a circle; right-click with it is the eraser.
+The tool that adds the selected material in a circle; right-click with it is the eraser. Liquid goes only into free spots, so it never lands inside existing liquid.
 
 **Eraser**:
 The brush's remove mode; the only thing that deletes particles besides gas lifetime.
@@ -93,12 +93,28 @@ A coherent column of liquid rising through the bulk at rest density, part of chu
 Particles pressed well above rest density under the weight of what sits on them.
 _Avoid_: Compression (fine in prose, but squeezing is the bug name)
 
+**Floaty**:
+Liquid that falls, spreads or splashes in slow motion compared with real water: a speed cap, too much drag, or particles blown apart on spawn.
+_Avoid_: Viscous (unless the liquid really is thick, like batter)
+
+**Surface drift**:
+Particles in the top layer of a liquid at rest sliding sideways along the surface, part of churn.
+
 **Slosh**:
 The whole body of liquid swinging from side to side, the surface tilting one way then the other. Real water does it; it is churn only if it doesn't die down.
 
 **Density projection grid**:
 The coarse grid (16 px cells) that gives liquids their pressure with depth: it measures each cell's liquid density, solves for the pressure that removes compression across the whole tank, and pushes liquid particles down its gradient before the PBF iterations (`hydro.glslinc`).
 _Avoid_: Hydro grid (the shader names say hydro, but it isn't hydrostatic: pressure comes only from compression)
+
+## Simulation step
+
+**Frame**:
+One 1/60 s update of the simulation and one render.
+
+**Substep**:
+One pass of predict to velocity inside a frame, at the frame time divided by the substep count (`config.json`). Settings are per second or per 1/60 s, so the substep count changes accuracy and cost, not how materials behave.
+_Avoid_: Step (when a frame and a substep differ), tick
 
 ## Verification
 
@@ -109,6 +125,9 @@ _Avoid_: CPU mirror, CPU sim
 **GPU probe**:
 The script that fills the GPU simulation with block fills and prints settling metrics from a real window.
 _Avoid_: Probe script, harness
+
+**Water feel probe**:
+The script that measures how real water moves on the GPU: free fall, dam-break front speed, surface drift, and pour screenshots (`tools/water_feel_probe.gd`).
 
 **GPU check**:
 The debug-overlay button that checks the pool and the spatial hash agree.

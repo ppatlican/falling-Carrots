@@ -118,6 +118,7 @@ Solve dominates once particles are settled and packed, so measure the settled st
 - **Water looks noisy** as plain 2×2 points, with dark gaps and some spray when blocks land. Metaball rendering is M5.
 - The fixed 1/60 s step per frame means a slow device runs the sim in slow motion rather than unstably. That's intended.
 - **MCP runtime tools fail** with "registry entry ... has no token path; relaunch the editor". Suspected cause: headless test runs also start the MCP addon's runtime autoload. If it recurs, the test runner should keep that autoload from starting.
+- **Untracked spike files in the main checkout** (`gpu/shaders/sim/projection_*.glsl`, `gpu/mpm_water.gd`, `gpu/shaders/mpm/`, `tools/mpm_probe.gd`): the projection shaders fail `test_shader_imports_newer_than_includes` there, since they never get the stamp bump. Run tests in a clean copy, or delete them if they're no longer wanted.
 - **Stale editor state:** delete the stray `node_2d.tscn` in the main checkout, and reopen the editor before saving.
 - `config.json` and `data/materials.json` are not auto-exported. The Android preset needs `*.json` in its non-resource include filter.
 - No keyboard shortcuts for materials (the toolbar only), so input stays inside the action layer.
