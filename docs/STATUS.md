@@ -58,7 +58,7 @@ Run tests: `Godot_v4.7.1-stable_win64_console.exe --headless --path <project> --
 Run validator: `... --headless --path <project> --script res://tools/validate_materials.gd`
 
 ## Measured numbers (GPU µs per pass, 1 s average)
-`solver_iterations` 4, cap 50k. **Measured before the 2026-10-09 solver changes** (wall density, sleeping); re-measure the settled state.
+`solver_iterations` 4, cap 50k. The first four rows were **measured before the 2026-10-09 solver changes** (wall density, sleeping); re-measure the settled state.
 
 | Device | Particles | FPS | predict | hash | solve | velocity | render | TOTAL GPU |
 |---|---|---|---|---|---|---|---|---|
@@ -66,9 +66,11 @@ Run validator: `... --headless --path <project> --script res://tools/validate_ma
 | PC RTX 3080 Ti | 30k water, settled | 165 | 9 | 28 | 826 | 143 | 65 | ~1070 |
 | PC RTX 3080 Ti | 50k (30k sand + 20k water), settling | 164 | 9 | 26 | 1253 | 161 | 45 | ~1495 |
 | PC RTX 3080 Ti | 20k (10k sand, then 10k water on top), 15 s | 165 | 8 | 24 | 637 | 57 | 12 | ~738 |
+| PC RTX 3080 Ti, 2026-10-10, probe `TIME`, back to back | 50k water, PR #2 (before the grid) | 165 | 17 | 38 | 873 | 124 | 24 | ~1075 |
+| PC RTX 3080 Ti, 2026-10-10, probe `TIME`, back to back | 50k water, density projection grid (adds `hydro` 395) | 165 | 12 | 27 | 807 | 45 | 16 | ~1300 |
 | Phone | | | | | | | | |
 
-Solve dominates once particles are settled and packed, so measure the settled state.
+Solve dominates once particles are settled and packed, so measure the settled state. The 2026-10-10 rows are averaged from frame 600 while the water settles. Clocks swing 2–3× between runs at vsync'd 165 fps, so compare totals measured back to back (see `docs/agents/gpu-probe.md`).
 
 ## Hardware checklist (PC and phone)
 1. Drawing with left mouse/tap adds the selected material; right mouse erases any material.
@@ -94,7 +96,7 @@ Solve dominates once particles are settled and packed, so measure the settled st
     - Water over sand moves at ~5 px/s along the sand slope. The grid counts sand only to skip the bubble pull; it doesn't treat sand as solid.
     - Cost: the new pass adds ~200–300 µs at 50k on the 3080 Ti, mostly the 64 small SOR dispatches; not measured on a phone.
     - Probe timings are noisy (the GPU downclocks at vsync'd 165 fps); compare totals within one session, back to back.
-  - Probe additions: `SURF` line (tilt, roughness, spray, top-band speed, floor density), `gap=N` (blocks N frames apart, 30 ≈ clicking pace), `every=N` (sample interval; 60 hid a 1 s bounce), and per-pass `TIME` averages at the end.
+  - The probe gained surface metrics, `gap=`, `every=` and pass timing; how to use them is in `docs/agents/gpu-probe.md`.
 - **Sleeping trade-off:** a grain sliding slower than ~6 px/s on a slope stops, so piles freeze instead of creeping.
   - The churn can't be removed by softening contacts instead: averaged contacts or CONTACT_RELAX 0.15 stopped it but crushed the 50k pile (centroid y 244 → 302–342).
   - Also not the churn's cause: friction, iterations up to 32, CONTACT_RELAX 0.25, dt 1/120, MAX_SEPARATION 15.
