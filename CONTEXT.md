@@ -60,7 +60,7 @@ _Avoid_: Heap (in docs), stack
 ## Player tools
 
 **Brush**:
-The tool that adds the selected material in a circle; right-click with it is the eraser. Liquid goes only into free spots, so it never lands inside existing liquid.
+The tool that adds the selected material in a circle; right-click with it is the eraser. Every material goes only into free spots, so it never lands inside existing particles; held still, it adds only as fast as the last particles fall away.
 
 **Eraser**:
 The brush's remove mode; the only thing that deletes particles besides gas lifetime.
@@ -100,6 +100,14 @@ _Avoid_: Viscous (unless the liquid really is thick, like batter)
 **Surface drift**:
 Particles in the top layer of a liquid at rest sliding sideways along the surface, part of churn.
 
+**Mid-air clump**:
+Grains packed into each other that hang together in the air instead of falling, so the clump seems to defy gravity. Packed grains can't spring apart (push-outs add no speed), so they only spread slowly.
+_Avoid_: Sticky sand (grains have no cohesion)
+
+**Hovering**:
+Loose liquid drops held a few pixels above a liquid surface at rest instead of falling onto it, making the surface look fuzzy.
+_Avoid_: Floating (keep that for solids buoyed up by liquid)
+
 **Slosh**:
 The whole body of liquid swinging from side to side, the surface tilting one way then the other. Real water does it; it is churn only if it doesn't die down.
 
@@ -127,7 +135,7 @@ The script that fills the GPU simulation with block fills and prints settling me
 _Avoid_: Probe script, harness
 
 **Water feel probe**:
-The script that measures how real water moves on the GPU: free fall, dam-break front speed, surface drift, and pour screenshots (`tools/water_feel_probe.gd`).
+The script that measures how real water moves on the GPU: free fall, dam-break front speed, surface drift, hovering, pour screenshots, and sand from a brush falling through the air (`tools/water_feel_probe.gd`).
 
 **GPU check**:
 The debug-overlay button that checks the pool and the spatial hash agree.
