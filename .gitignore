@@ -1,3 +1,7 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+
+# Claude Code machine-local working trees (nested checkouts, never commit)
+.claude/worktrees/
+
