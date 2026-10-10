@@ -171,6 +171,32 @@ float hydro_p_sample(vec2 x) {
 	return mix(mix(p00, p10, f.x), mix(p01, p11, f.x), f.y);
 }
 
+// Experiment, not for merge: density weighting with a floor (see STATUS Known issues, water hover).
+const float HYDRO_LONE_LO = 0.35;
+const float HYDRO_LONE_HI = 0.55;
+const float HYDRO_LONE_MIN = 0.8;
+
+// Bilinear liquid density over rest at x (cell centres at (i + 0.5) * cell size).
+float hydro_phi_sample(vec2 x) {
+	vec2 g = x / hydro_cell_size() - 0.5;
+	ivec2 b = ivec2(floor(g));
+	vec2 f = g - vec2(b);
+	ivec2 hi = hydro_size() - ivec2(1);
+	float p00 = hydro_phi[hydro_index(clamp(b, ivec2(0), hi))].x;
+	float p10 = hydro_phi[hydro_index(clamp(b + ivec2(1, 0), ivec2(0), hi))].x;
+	float p01 = hydro_phi[hydro_index(clamp(b + ivec2(0, 1), ivec2(0), hi))].x;
+	float p11 = hydro_phi[hydro_index(clamp(b + ivec2(1, 1), ivec2(0), hi))].x;
+	return mix(mix(p00, p10, f.x), mix(p01, p11, f.x), f.y);
+}
+
+bool hydro_submerged(vec2 x) {
+	return hydro_phi_sample(x - vec2(0.0, 0.5 * hydro_cell_size())) >= HYDRO_FULL;
+}
+
+float hydro_support(float density) {
+	return mix(HYDRO_LONE_MIN, 1.0, smoothstep(HYDRO_LONE_LO, HYDRO_LONE_HI, density));
+}
+
 // Position change this step from the pressure: -grad p * dt^2 (central difference over
 // half a coarse cell).
 vec2 hydro_delta(vec2 x) {

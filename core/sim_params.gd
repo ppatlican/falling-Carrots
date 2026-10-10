@@ -64,6 +64,12 @@ const HYDRO_FULL := 0.95
 ## Powder density over rest above which a thin cell isn't pulled full: it is sand, not air.
 const HYDRO_POWDER := 0.05
 const HYDRO_SWEEPS := 32
+## Liquid density over rest below which a particle takes none of the grid's push, and from
+## which it takes all of it (hydro_support in hydro.glslinc): loose drops above the surface
+## fall instead of hovering on the pressure sampled past the surface.
+const HYDRO_LONE_LO := 0.35
+const HYDRO_LONE_HI := 0.55
+const HYDRO_LONE_MIN := 0.8
 
 ## Brush: radius in px, and the fraction of the circle's empty capacity added per frame.
 const BRUSH_RADIUS := 10.0

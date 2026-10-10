@@ -123,8 +123,13 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	var delta := PackedVector2Array()
 	delta.resize(n)
 	for i in n:
-		delta[i] = _hydro_delta(pred[i], phi, hydro_p, dt).limit_length(0.5 * SimParams.SPACING) \
-				if _class(mat[i]) == LIQUID else Vector2.ZERO
+		if _class(mat[i]) != LIQUID:
+			delta[i] = Vector2.ZERO
+			continue
+		var d := _hydro_delta(pred[i], phi, hydro_p, dt)
+		if not _hydro_submerged(pred[i], phi):
+			d *= hydro_support(_density(i, pred, neighbours[i], h))
+		delta[i] = d.limit_length(0.5 * SimParams.SPACING)
 	for i in n:
 		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i])
 
@@ -354,6 +359,39 @@ func _hydro_p_sample(x: Vector2, phi: PackedVector2Array, p: PackedFloat32Array)
 	var top := lerpf(_hydro_p_at(b, phi, p), _hydro_p_at(b + Vector2i(1, 0), phi, p), f.x)
 	var bottom := lerpf(_hydro_p_at(b + Vector2i(0, 1), phi, p), _hydro_p_at(b + Vector2i(1, 1), phi, p), f.x)
 	return lerpf(top, bottom, f.y)
+
+
+## Bilinear liquid density over rest at x (hydro_phi_sample).
+func _hydro_phi_sample(x: Vector2, phi: PackedVector2Array) -> float:
+	var size := hydro_size(world_size)
+	var g := x / hydro_cell_size() - Vector2(0.5, 0.5)
+	var b := Vector2i(g.floor())
+	var f := g - Vector2(b)
+	var at := func(c: Vector2i) -> float:
+		var cc := c.clamp(Vector2i.ZERO, size - Vector2i.ONE)
+		return phi[cc.y * size.x + cc.x].x
+	var top := lerpf(at.call(b), at.call(b + Vector2i(1, 0)), f.x)
+	var bottom := lerpf(at.call(b + Vector2i(0, 1)), at.call(b + Vector2i(1, 1)), f.x)
+	return lerpf(top, bottom, f.y)
+
+
+## Under full water: takes all of the grid's push (hydro_submerged).
+func _hydro_submerged(x: Vector2, phi: PackedVector2Array) -> bool:
+	return _hydro_phi_sample(x - Vector2(0.0, 0.5 * hydro_cell_size()), phi) >= SimParams.HYDRO_FULL
+
+
+## Share of the grid's push a liquid particle near the surface takes, from its density
+## over rest (hydro_support).
+static func hydro_support(density: float) -> float:
+	return lerpf(SimParams.HYDRO_LONE_MIN, 1.0, smoothstep(SimParams.HYDRO_LONE_LO, SimParams.HYDRO_LONE_HI, density))
+
+
+## Density over rest at i: itself, its neighbours and the walls (liquid_density).
+func _density(i: int, pred: PackedVector2Array, nb: PackedInt32Array, h: float) -> float:
+	var density: float = poly6(0.0, h) + wall_density(pred[i], h, rest_density, world_size).x
+	for j in nb:
+		density += poly6((pred[i] - pred[j]).length_squared(), h)
+	return density / rest_density
 
 
 ## Position change this step from the grid pressure: -grad p * dt^2 (hydro_delta).

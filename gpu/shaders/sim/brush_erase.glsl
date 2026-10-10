@@ -4,7 +4,7 @@
 // Brush, erase: every live particle (any material) inside the brush circle is
 // removed and its slot pushed back onto the free stack.
 
-// common.glslinc stamp: Params 108 B, v8. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v9. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

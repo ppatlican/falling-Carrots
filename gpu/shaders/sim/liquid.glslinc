@@ -81,6 +81,20 @@ float liquid_lambda(uint t) {
 	return min(-c / (grad_sum + dot(grad_t, grad_t) + params.lambda_eps), 0.0);
 }
 
+// Density over rest at t: itself, every neighbour and the walls, as liquid_lambda sums it.
+float liquid_density(uint t) {
+	vec2 pt = s_pred[t];
+	vec2 wall_grad;
+	float density = poly6(0.0) + wall_density(pt, wall_grad);
+	FOR_EACH_NEIGHBOUR(t) {
+		uint j = k;
+		if (j == t) continue;
+		vec2 rv = pt - s_pred[j];
+		density += poly6(dot(rv, rv));
+	} END_NEIGHBOURS
+	return density / params.rest_density;
+}
+
 vec2 liquid_delta(uint t) {
 	vec2 pt = s_pred[t];
 	float lt = lambda[t];
