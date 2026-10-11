@@ -75,6 +75,7 @@ var landed := false
 var last_front := 0.0
 var last_front_t := 0.0
 var shots := PackedInt32Array()
+var dump_at := -1  # from "dump=F": write every live particle (material, x, y, vx, vy) to user://feel_<scenario>_<F>.csv
 var sand_r := 1.5
 var sand_n := 2
 var sand_frames := 20
@@ -114,6 +115,8 @@ func _initialize() -> void:
 			mounds_sand = int(a.substr(5))
 		if a.begins_with("water="):
 			mounds_water = int(a.substr(6))
+		if a.begins_with("dump="):
+			dump_at = int(a.substr(5))
 		if a == "nosand":
 			bowl_sand = false
 		if a.begins_with("move="):
@@ -206,6 +209,8 @@ func _process(_delta: float) -> bool:
 		_bowl_pressure_print()
 		if mounds:
 			_mounds_profile()
+	if frame_i >= max_frames and scenario == "sink":
+		_bowl_pressure_print()
 	if frame_i >= max_frames:
 		print("done after %d frames, live %d" % [frame_i, sim.live_count])
 		sim.shutdown()
@@ -588,6 +593,134 @@ func _sink_stats(b: Dictionary, t: float) -> void:
 		return
 	print("SINK t=%.2f sand=%d mean_y=%.0f mean_vy=%.1f still=%d raft(still, water under)=%d raft_mean_y=%.0f" % [
 			t, n, sum_y / n, sum_vy / n, still, raft, raft_y / maxi(raft, 1)])
+	_sink_gap(b, t)
+	_bowl_pressure(b, t)
+
+
+var sink_samples := 0
+
+
+## Gap between the settled sand and the water on it, per 2 px column: the bed top is the
+## highest grain of the run of grains (each within 5 px of the one below) that starts at
+## the floor, and the gap is from it up to the lowest water particle above it. Water
+## resting on the grains sits one contact distance (SPACING, 2 px) up. Also the empty 2 px
+## cells (no particle) in the water between the bed top and the water surface. Every 10th
+## sample, per 16 px column, the density projection grid at the bed top: the cell holding
+## it and the one above, as liquid+powder*HYDRO_POWDER_FULL fill and p in head below the
+## surface (hydrostatic: depth of the cell centre below the water surface / 16).
+func _sink_gap(b: Dictionary, t: float) -> void:
+	var cols := int(SimParams.WORLD_SIZE.x / 2.0)
+	var sand_y := []
+	var water_y := []
+	sand_y.resize(cols)
+	water_y.resize(cols)
+	for c in cols:
+		sand_y[c] = PackedFloat32Array()
+		water_y[c] = PackedFloat32Array()
+	var occ := {}
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0:
+			continue
+		var x: float = b.pos.decode_float(i * 8)
+		var y: float = b.pos.decode_float(i * 8 + 4)
+		var c := clampi(int(x / 2.0), 0, cols - 1)
+		occ[Vector2i(c, int(y / 2.0))] = true
+		if (fl & 0xFF) == sand:
+			sand_y[c].append(y)
+		elif (fl & 0xFF) == water:
+			water_y[c].append(y)
+	var tops := PackedFloat32Array()
+	tops.resize(cols)
+	var surf := PackedFloat32Array()
+	surf.resize(cols)
+	var gaps := PackedFloat32Array()
+	var q_sum := [0.0, 0.0, 0.0, 0.0]
+	var q_n := [0, 0, 0, 0]
+	var over3 := 0
+	var over5 := 0
+	var air := 0
+	var air_near := 0
+	for c in cols:
+		tops[c] = -1.0
+		var ss: PackedFloat32Array = sand_y[c]
+		var ws: PackedFloat32Array = water_y[c]
+		if ss.is_empty() or ws.is_empty():
+			continue
+		ss.sort()
+		var k := ss.size() - 1
+		if ss[k] < SimParams.WORLD_SIZE.y - 6.0:
+			continue
+		while k > 0 and ss[k] - ss[k - 1] <= 5.0:
+			k -= 1
+		var top: float = ss[k]
+		var low := -1.0
+		var wtop := 1e9
+		for y in ws:
+			wtop = minf(wtop, y)
+			if y < top and y > low:
+				low = y
+		if low < 0.0:
+			continue
+		tops[c] = top
+		surf[c] = wtop
+		var gap := top - low
+		gaps.append(gap)
+		q_sum[c * 4 / cols] += gap
+		q_n[c * 4 / cols] += 1
+		if gap > 3.0:
+			over3 += 1
+		if gap > 5.0:
+			over5 += 1
+		for cy in range(int(wtop / 2.0) + 1, int(top / 2.0)):
+			if not occ.has(Vector2i(c, cy)):
+				air += 1
+				if cy * 2.0 > top - 8.0:
+					air_near += 1
+	if gaps.is_empty():
+		return
+	gaps.sort()
+	var mean := 0.0
+	for g in gaps:
+		mean += g
+	mean /= gaps.size()
+	print("SINKGAP t=%.2f cols=%d gap mean=%.2f p50=%.2f p90=%.2f max=%.1f >3px=%d >5px=%d quarters=%.2f/%.2f/%.2f/%.2f | empty 2px cells in water above bed=%d (within 8 px of bed)=%d" % [
+			t, gaps.size(), mean, gaps[gaps.size() / 2], gaps[int(gaps.size() * 0.9)], gaps[gaps.size() - 1],
+			over3, over5, q_sum[0] / maxi(q_n[0], 1), q_sum[1] / maxi(q_n[1], 1),
+			q_sum[2] / maxi(q_n[2], 1), q_sum[3] / maxi(q_n[3], 1), air, air_near])
+	sink_samples += 1
+	if sink_samples % 10 != 0 or not b.has("hydro_p"):
+		return
+	var gw := ceili(SimParams.WORLD_SIZE.x / 16.0)
+	var head := SimParams.GRAVITY * 16.0
+	var line := ""
+	for gx in gw:
+		var ts := PackedFloat32Array()
+		var ws := PackedFloat32Array()
+		for c in range(gx * 8, mini(gx * 8 + 8, cols)):
+			if tops[c] > 0.0:
+				ts.append(tops[c])
+				ws.append(surf[c])
+		if ts.is_empty():
+			line += " | ."
+			continue
+		ts.sort()
+		ws.sort()
+		var top: float = ts[ts.size() / 2]
+		var wsurf: float = ws[ws.size() / 2]
+		var gy := int(top / 16.0)
+		var s := ""
+		for dy in [1, 0]:
+			var cy: int = gy - dy
+			if cy < 0:
+				continue
+			var ci: int = cy * gw + gx
+			var phi := Vector2(b.hydro_phi.decode_float(ci * 8), b.hydro_phi.decode_float(ci * 8 + 4))
+			var p: float = b.hydro_p.decode_float(ci * 4) / head
+			var hyd := ((cy + 0.5) * 16.0 - wsurf) / 16.0
+			s += " %.3f+%.2f=%.3f p%+.2f" % [phi.x, phi.y, phi.x + 0.9 * phi.y, p - hyd]
+		line += " | x%d top%d%s" % [gx * 16, roundi(top), s]
+	print("SINKGRID t=%.2f (per 16 px column: bed top y; cell above then cell at the top: liquid+powder=fill, p minus hydrostatic in head)%s" % [t, line])
 
 
 func _shaft_stats(b: Dictionary, t: float) -> void:
@@ -656,7 +789,7 @@ func _request(f: int) -> void:
 
 
 func _readback_names() -> Array:
-	if scenario == "bowl":
+	if scenario == "bowl" or scenario == "sink":
 		return ["pos", "vel", "mat_flags", "hydro_p", "hydro_phi"]
 	return ["pos", "vel", "mat_flags"]
 
@@ -671,6 +804,16 @@ func _on_data(data: PackedByteArray, name: String, f: int) -> void:
 func _analyse(b: Dictionary, f: int) -> void:
 	# Frame 1 spawns and steps once, so frame f has had f steps of gravity.
 	var t := f * SimParams.DT
+	if dump_at > 0 and f >= dump_at:
+		dump_at = -1
+		var file := FileAccess.open("user://feel_%s_%d.csv" % [scenario, f], FileAccess.WRITE)
+		for i in cap:
+			var fl := int(b.mat_flags.decode_u32(i * 4))
+			if (fl & 0x100) != 0:
+				file.store_line("%d,%.3f,%.3f,%.2f,%.2f" % [fl & 0xFF, b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4),
+						b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4)])
+		file.close()
+		print("DUMP ", ProjectSettings.globalize_path("user://feel_%s_%d.csv" % [scenario, f]))
 	if scenario == "sandair":
 		_sandair(b, t)
 		return
