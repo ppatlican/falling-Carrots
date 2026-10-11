@@ -1,0 +1,22 @@
+// Point drawing shared by render_points.glsl and render_powder.glsl. Included after
+// common.glslinc.
+
+// Draws a 2x2 point centred at x. Overlapping points overwrite each other (no blending).
+void draw_point(vec2 x, vec3 color) {
+	ivec2 p = ivec2(floor(x - 0.5));
+	ivec2 size = ivec2(params.world_size);
+	for (int y = 0; y < 2; y++) {
+		for (int dx = 0; dx < 2; dx++) {
+			ivec2 q = p + ivec2(dx, y);
+			if (q.x >= 0 && q.y >= 0 && q.x < size.x && q.y < size.y) {
+				imageStore(out_image, q, vec4(color, 1.0));
+			}
+		}
+	}
+}
+
+// Powder grain colour: the material colour with a little brightness variation fixed per
+// slot.
+vec3 grain_color(uint material, uint slot) {
+	return materials[material].color.rgb * (0.85 + 0.3 * hash_unit(slot));
+}
