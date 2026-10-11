@@ -112,7 +112,7 @@ _Avoid_: Floating (keep that for solids buoyed up by liquid)
 The whole body of liquid swinging from side to side, the surface tilting one way then the other. Real water does it; it is churn only if it doesn't die down.
 
 **Density projection grid**:
-The coarse grid (16 px cells) that gives liquids their pressure with depth: it measures each cell's liquid density, solves for the pressure that removes compression across the whole tank, and pushes liquid particles down its gradient before the PBF iterations (`hydro.glslinc`). Cells mostly full of sand are a bed that holds the water's weight, with the pressure carried on into its pores.
+The coarse grid (16 px cells) that gives liquids their pressure with depth: it measures each cell's liquid density, solves for the pressure that removes compression across the whole tank, and pushes liquid particles down its gradient before the PBF iterations (`hydro.glslinc`). Cells mostly full of sand are a bed that holds the water's weight, with the pressure carried on into its pores; the floor holds it the same way.
 _Avoid_: Hydro grid (the shader names say hydro, but it isn't hydrostatic: pressure comes from compression, and from the weight of water resting on a sand bed)
 
 ## Simulation step
