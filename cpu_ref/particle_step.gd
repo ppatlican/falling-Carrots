@@ -329,7 +329,11 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 				var wall_sum := 0.0
 				for off in offs:
 					var nc: Vector2i = ci + off
-					if nc.x < 0 or nc.y < 0 or nc.x >= size.x or nc.y >= size.y:
+					if nc.y >= size.y:  # the floor holds the water's weight, as a sand bed does
+						if not solid and not air:
+							wall_sum += head
+						continue
+					if nc.x < 0 or nc.y < 0 or nc.x >= size.x:
 						continue
 					var ni := nc.y * size.x + nc.x
 					var solid_n := hydro_solid(phi[ni])
@@ -360,7 +364,8 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 					p[c] = maxf(p[c], 0.0)
 					continue
 				# Under a full cell (water and powder), a cell with room left is pulled full (a trapped bubble).
-				var covered := ci.y > 0 and phi[c - size.x].x + phi[c - size.x].y * SimParams.HYDRO_POWDER_VOL >= SimParams.HYDRO_FULL
+				# Never in the floor row: half outside the world, it reads a little short of full.
+				var covered := ci.y > 0 and ci.y < size.y - 1 and phi[c - size.x].x + phi[c - size.x].y * SimParams.HYDRO_POWDER_VOL >= SimParams.HYDRO_FULL
 				var err := maxf(phi[c].x - 1.0, 0.0)
 				if covered:
 					err += minf(phi[c].x + phi[c].y * SimParams.HYDRO_POWDER_FULL - 1.0, 0.0)
