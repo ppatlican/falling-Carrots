@@ -1,7 +1,7 @@
 #[compute]
 #version 450
 
-// Render 2/3: draw each live liquid particle as a 2x2 point in its material colour
+// Render 2/4: draw each live liquid particle as a 2x2 point in its material colour
 // (powders follow in render_powder.glsl, on top). Liquid in the pores of a powder bed is
 // drawn as the nearest grain darkened, so a bed under water reads as wet sand where no
 // grain covers the pore. Drawn plainly, pore water scattered blue specks over about a
