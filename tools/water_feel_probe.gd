@@ -29,7 +29,9 @@
 ##          of the mean water velocity per 20 px cell (jitter averages out, a current doesn't),
 ##          and water inside the sand bed (6 of the 9 2 px cells around it hold sand). nosand
 ##          drops the sand (control). cols=N rows=N size the sand columns (default 75x100,
-##          which leaves a steep right mound; 110x60 slumps into gentle slopes). Every 10th
+##          which leaves a steep right mound; 110x60 slumps into gentle slopes; cols=0 none).
+##          floor=N rows of the sand floor (default 16; floor=12 cols=0 lines only the floor
+##          of an otherwise pure pool, a control for the floor's grid boundary). Every 10th
 ##          sample a flow map of the 20 px cells, and at the end the flow averaged from 30 s
 ##          and the density projection grid averaged from 30 s: BOWLP the pressure in cells
 ##          of hydrostatic head (open water at rest rises 1.00 per cell), BOWLF each cell's
@@ -106,6 +108,8 @@ func _initialize() -> void:
 			bowl_col_cols = int(a.substr(5))
 		if a.begins_with("rows="):
 			bowl_col_rows = int(a.substr(5))
+		if a.begins_with("floor="):
+			bowl_floor_rows = int(a.substr(6))
 		if a.begins_with("sand="):
 			mounds_sand = int(a.substr(5))
 		if a.begins_with("water="):
@@ -288,7 +292,7 @@ func _sink_brush() -> Dictionary:
 
 
 const BOWL_WATER := 300
-const BOWL_FLOOR_ROWS := 16
+var bowl_floor_rows := 16  # from "floor=N": rows of the sand floor
 var bowl_col_cols := 75  # from "cols=N": width of each sand column, in particles
 var bowl_col_rows := 100  # from "rows=N"; cols=110 rows=60 slumps into gentle slopes
 
@@ -299,16 +303,16 @@ func _bowl_brush() -> Dictionary:
 	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": 0.0,
 			"material": sand, "count": 0, "cols": 1}
 	var w := SimParams.WORLD_SIZE
-	var floor_top := w.y - 1.0 - BOWL_FLOOR_ROWS * SimParams.SPACING
+	var floor_top := w.y - 1.0 - bowl_floor_rows * SimParams.SPACING
 	var col_w := bowl_col_cols * SimParams.SPACING
 	if frame_i <= 3 and not bowl_sand:
 		return brush
 	if frame_i == 1:
 		brush.op = ParticleSim.BRUSH_BLOCK
 		brush.cols = int(w.x / SimParams.SPACING) - 1
-		brush.count = brush.cols * BOWL_FLOOR_ROWS
+		brush.count = brush.cols * bowl_floor_rows
 		brush.pos = Vector2(1.0, floor_top)
-	elif frame_i == 2 or frame_i == 3:
+	elif (frame_i == 2 or frame_i == 3) and bowl_col_cols > 0:
 		brush.op = ParticleSim.BRUSH_BLOCK
 		brush.cols = bowl_col_cols
 		brush.count = bowl_col_cols * bowl_col_rows
@@ -546,7 +550,7 @@ func _bowl_pressure_print() -> void:
 			var powder := phi.y * 0.7 >= 0.5
 			var tag := "m" if liquid and powder else ("w" if liquid else ("s" if powder else " "))
 			row += "%5.2f%s" % [p, tag] if liquid else "     %s" % tag
-			rowf += " %3.2f/%3.2f" % [phi.x, phi.y]
+			rowf += " %5.3f/%4.2f" % [phi.x, phi.y]
 		print("BOWLP %2d %s" % [gy, row])
 		print("BOWLF %2d %s" % [gy, rowf])
 

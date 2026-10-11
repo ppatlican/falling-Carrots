@@ -134,7 +134,8 @@ vec2 hydro_density(ivec2 ci) {
 
 // One projected red-black SOR sweep over the cells of one parity ((x + y) % 2), in
 // place. Per cell, with a the cell size: sum over in-grid neighbours of (p_n - p) =
-// -a^2 HYDRO_K err / dt^2. Out-of-grid neighbours are walls and drop out. Air
+// -a^2 HYDRO_K err / dt^2. Side walls and the ceiling drop out; the floor holds the
+// water's weight (dp/dn = rho g). Air
 // neighbours have p = 0. Each sweep is its own dispatch: one workgroup doing all the
 // sweeps in shared memory was 3x slower (latency-bound on one compute unit).
 // Share of the way from a liquid cell (phi_f) to its air neighbour (phi_a) at which
@@ -172,7 +173,19 @@ void hydro_sweep(uint parity) {
 	for (int k = 0; k < 4; k++) {
 		ivec2 off = k == 0 ? ivec2(1, 0) : (k == 1 ? ivec2(-1, 0) : (k == 2 ? ivec2(0, 1) : ivec2(0, -1)));
 		ivec2 nc = ci + off;
-		if (nc.x < 0 || nc.y < 0 || nc.x >= size.x || nc.y >= size.y) {
+		if (nc.y >= size.y) {
+			// The floor holds the water's weight, as a sand bed does (solid_n below). As a
+			// zero-gradient wall it held none: the floor row carried the whole column by
+			// staying ~0.6% compressed, which at ~1.7 head per 1% of fill error read 0.2-0.7
+			// head under hydrostatic and noisy cell to cell, and pure water circulated along
+			// the floor at up to 4-5 px/s while water on a sand floor came to rest
+			// (water_feel_probe bowl nosand, 2026-10-11).
+			if (!solid && !air) {
+				wall_sum += head;
+			}
+			continue;
+		}
+		if (nc.x < 0 || nc.y < 0 || nc.x >= size.x) {
 			continue;
 		}
 		uint ni = hydro_index(nc);
@@ -233,9 +246,14 @@ void hydro_sweep(uint parity) {
 	// it forever, and water over sand churned at 9 px/s. Skipping cells with any powder
 	// instead left air pockets riding on every clump of sand sinking through water
 	// (water_feel_probe sink, owner screenshot 2026-10-10). Powder counts at its packing
-	// under water here (HYDRO_POWDER_FULL), so a sand surface isn't a bubble.
+	// under water here (HYDRO_POWDER_FULL), so a sand surface isn't a bubble. The floor row
+	// is never pulled: its cells are half outside the world, and water keeps a gap from the
+	// floor, so they read 0.1-0.4% short of full (0.996-1.000), and the pull, stiff as it is,
+	// held their p 0.2-0.5 head under hydrostatic and noisy. A floor lined with sand, whose
+	// bottom cells are bed and never pulled, calmed pure water from 0.74-0.78 px/s to 0.26
+	// (water_feel_probe bowl nosand vs floor=12 cols=0, 2026-10-11).
 	vec2 above = ci.y > 0 ? hydro_phi[hydro_index(ci - ivec2(0, 1))] : vec2(0.0);
-	bool covered = above.x + above.y * HYDRO_POWDER_VOL >= HYDRO_FULL;
+	bool covered = above.x + above.y * HYDRO_POWDER_VOL >= HYDRO_FULL && ci.y < size.y - 1;
 	float err = max(phi - 1.0, 0.0);
 	if (covered) {
 		err += min(phi + phi_c.y * HYDRO_POWDER_FULL - 1.0, 0.0);
@@ -246,7 +264,9 @@ void hydro_sweep(uint parity) {
 }
 
 // Pressure at coarse cell c (the ghost in air cells). Past the grid edge it is mirrored,
-// so walls let nothing through.
+// so walls let nothing through. (Continuing p hydrostatically past the floor, to match
+// hydro_sweep, held the bottom layer up twice, with the walls' share of the PBF density:
+// 50k water's bottom 20 px thinned to 0.97 of rest, GPU probe.)
 float hydro_p_at(ivec2 c) {
 	return hydro_p[hydro_index(clamp(c, ivec2(0), hydro_size() - ivec2(1)))];
 }
