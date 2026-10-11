@@ -68,6 +68,12 @@ const HYDRO_POWDER_VOL := 0.7
 ## wall that holds the water's weight (dp/dn = rho g . n), with the water's pressure
 ## continued hydrostatically into its pores.
 const HYDRO_SOLID := 0.5
+## Share of a cell one unit of powder density fills when the grid checks a cell for room
+## left (an air bubble to pull closed): sand under water packs to only ~1.1 and water can't
+## get into its pores, so such a cell is full. With HYDRO_POWDER_VOL every cell at a sand
+## surface looked ~3% short and sucked water in: a pool over sand mounds circulated over
+## the peaks (water_feel_probe mounds).
+const HYDRO_POWDER_FULL := 0.9
 ## Free surface (ghost fluid): liquid density over rest at the surface, and the smallest
 ## share of a cell the surface may sit from a liquid cell's centre.
 const HYDRO_SURFACE := 0.5
