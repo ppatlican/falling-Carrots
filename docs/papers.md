@@ -38,6 +38,25 @@ Read only the section for the problem at hand. Fetch one paper section at a time
 - **Screen Space Fluid Rendering with Curvature Flow** (van der Laan et al. 2009): https://wstahw.win.tue.nl/edu/2IV06/andrei/particle_rendering/provided/p91-van_der_laan.pdf
   Splat → smooth → threshold/shade.
 
+## Soft & rigid bodies, ropes (OE-CAKE-style features; ADR 0001)
+- **Meshless Deformations Based on Shape Matching** (Müller et al. 2005): https://graphics.stanford.edu/courses/cs468-05-fall/Papers/p471-muller.pdf
+  Core of the cluster-solid class: rigid blocks (R only), jelly (linear/quadratic blend), overlapping clusters, plasticity for dough.
+- **Position Based Dynamics** (Müller et al. 2007): https://www.cs.toronto.edu/~jacobson/seminar/mueller-et-al-2007.pdf
+  Distance/bending constraints for ropes and cloth, attachments for grabbing, collision projection; base for breaking/tearing by dropping overstretched constraints.
+- **A Survey on Position Based Dynamics** (Bender, Müller, Macklin 2017): https://animation.rwth-aachen.de/media/papers/2017-EG-CourseNotes.pdf
+  One-stop tutorial: XPBD compliance, rods, cloth, volumetric bodies, rigid bodies, plasticity, solver convergence. Use it when Opus needs the math for a new constraint type.
+- **Unified Particle Physics for Real-Time Applications** (FleX, Macklin et al. 2014): already listed above; see sections 5 (rigid shape matching, SDF particle collisions, stack mass scaling for rigid stacking) and 7.1 (solid-fluid coupling, buoyancy from mass ratios; also the fix for liquids ignoring material density).
+- **Ten Minute Physics #10 soft bodies, #14 cloth, #09 XPBD** (Müller): https://matthias-research.github.io/pages/tenMinutePhysics/index.html
+  Short readable JS for stable soft bodies and cloth with XPBD distance/volume constraints; good templates for rope/cloth shaders and tearing.
+- **nialltl/unity_burst_shape_matching**: https://github.com/nialltl/unity_burst_shape_matching
+  Compact 2D parallel shape-matching deformable bodies; readable reference for the per-cluster reduction (centroid, covariance, polar decomposition) on parallel hardware.
+
+## Stickiness & thick liquids (cohesion, adhesion, viscosity range)
+- **Particle-based Viscoelastic Fluid Simulation** (Clavet, Beaudoin, Poulin 2005): http://www.ligum.umontreal.ca/Clavet-2005-PVFS/pvfs.pdf
+  Sticky and stringy fluids from a particle model: viscosity impulses that go well past XSPH, springs between neighbours for elasticity and plasticity, stickiness to objects.
+- **Versatile Surface Tension and Adhesion for SPH Fluids** (Akinci, Akinci, Teschner 2013): https://cg.informatik.uni-freiburg.de/publications/2013_SIGGRAPH_surfaceTensionAdhesion.pdf
+  Separate cohesion and adhesion terms that stay stable; maps onto the `cohesion` and `adhesion` columns.
+
 ## Readable code & talks
 - **Ten Minute Physics** (Matthias Müller): https://matthias-research.github.io/pages/tenMinutePhysics/index.html
   Short demos: XPBD (#09), spatial hash (#11), GPU sim (#16), FLIP water (#18).

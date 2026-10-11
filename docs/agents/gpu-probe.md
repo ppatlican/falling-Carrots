@@ -1,6 +1,6 @@
 # GPU probe, timing and screenshots
 
-How to measure the GPU sim: run the probe, read it, time passes, and capture what the owner sees. Arguments and output fields are listed in the header of `tools/gpu_probe.gd`; this file covers how to use them.
+How to measure the GPU sim: run the probe, read it, time passes, and capture what the owner sees. Arguments and output fields are listed in the header of `tools/gpu_probe.gd`; this file covers how to use them. For how water and sand move in the owner's scenes (fall, dam, surface, pour, sandair, erase, shaft, sink, bowl, mounds, hover), use `tools/water_feel_probe.gd`; its scenarios and outputs are in its header, and it runs the same way.
 
 ## Running variants
 - One tmp copy per variant (`$CLAUDE_JOB_DIR/tmp/wc/<name>`), each imported once. Several probes run fine in parallel as separate windows; a 2400-frame run takes a few minutes.
@@ -18,6 +18,7 @@ How to measure the GPU sim: run the probe, read it, time passes, and capture wha
 - **Grid dump** (every 5th sample): high speed (S) with mean vy (V) near 0 is jitter; matching S and V across a region is flow. N≈100 per 20 px cell is water at rest density, and sand packs to ≈130–150. Low N inside water (25–65) is a trapped air bubble.
 - **Slosh vs churn:** a tilt swinging at the tank's fundamental period, 2L/√(g·depth) (≈4.7 s for 30k water), is a slosh: physical, and damped by water drag. Churn is motion that never dies down.
 - **Energy injection:** start the material at rest (`spawn_y` 279 for 10k) and run 1800+ frames. A plateau means something injects energy.
+- **Any new or adjusted parameter** (ADR 0001): run the scenario it affects at both ends of the parameter's safe range, and the sand checks below.
 - **Sand checks after any contact, friction or liquid change:** 50k sand at rest (`sand 3000 5 279 top`: drift 0.000, top grains resting on grains below, no wall grains rising), and sand into water (`water,sand 1800 2`: sand at rest on the floor, no water inside the pile). With sleeping, anything that makes grains cling becomes permanent; the `top` list shows whether the highest grains sit on grains below.
 
 ## Timing passes

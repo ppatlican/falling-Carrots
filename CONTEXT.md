@@ -1,6 +1,6 @@
 # Cooking Sandbox
 
-A 2D side-view falling-sand sandbox where the player mixes, heats and cooks materials to discover recipes. Everything that moves is a particle in one shared simulation.
+A 2D side-view particle sandbox in the spirit of OE-Cake, where the player mixes, heats and cooks materials to discover recipes. Everything that moves is a particle in one shared simulation: liquids, powders, rigid bodies and soft bodies.
 
 ## Materials
 
@@ -20,8 +20,19 @@ A behaviour class made of frictional grains that pile up (sand, flour).
 _Avoid_: Granular, dust
 
 **Cluster solid**:
-A behaviour class where a group of particles keeps a shape, stiff (carrot) or soft (dough).
-_Avoid_: Rigid body, soft body
+The behaviour class where a group of particles keeps a shape by shape matching. It covers both rigid bodies and soft bodies; one group is a body.
+_Avoid_: Cluster (alone, when the class is meant)
+
+**Rigid body**:
+A cluster solid at stiffness 1: keeps its shape exactly (carrot, a drawn block).
+_Avoid_: Solid (ambiguous with static solid)
+
+**Soft body**:
+A cluster solid below stiffness 1: bends and springs back (jelly), or keeps its dents if it has plasticity (dough).
+_Avoid_: Deformable
+
+**Jelly**:
+The springy soft-body material, as in OE-Cake.
 
 **Gas**:
 A behaviour class of light, short-lived particles moved by heat and wind (fire, smoke, steam).
@@ -29,6 +40,14 @@ A behaviour class of light, short-lived particles moved by heat and wind (fire, 
 **Static solid**:
 Material painted into the world grid instead of being particles (steel, wood). Particles collide with it.
 _Avoid_: Wall, terrain
+
+**Parameter**:
+One adjustable column of a material's row (viscosity, stickiness, density, stiffness and so on). Parameters belong to the material, not to single particles, and each has a safe range.
+_Avoid_: Setting (config.json holds settings), property
+
+**Stickiness**:
+How strongly a material's particles hold on: cohesion to particles of the same material, adhesion to other materials and walls. A capped force, so a sticky clump still breaks under enough weight.
+_Avoid_: Glue, friction (friction resists sliding; stickiness resists pulling apart)
 
 **Reaction**:
 A table rule that turns input materials into output materials when they touch or reach a temperature.
@@ -62,6 +81,13 @@ _Avoid_: Heap (in docs), stack
 **Brush**:
 The tool that adds the selected material in a circle; right-click with it is the eraser. Every material goes only into free spots, so it never lands inside existing particles; held still, it adds only as fast as the last particles fall away.
 
+**Body brush**:
+The tool that draws a shape which becomes one rigid or soft body, by the material's stiffness.
+
+**Parameter panel**:
+The in-game panel of sliders for the selected material's parameters, with copy to a free slot and reset.
+_Avoid_: Material editor, inspector
+
 **Eraser**:
 The brush's remove mode; the only thing that deletes particles besides gas lifetime.
 
@@ -80,7 +106,7 @@ A grain held at rest because it barely moved in a step while something supported
 
 **Pudding**:
 A pile that has settled overall but whose grains keep moving back and forth inside it, so it wobbles.
-_Avoid_: Wobble, jelly
+_Avoid_: Wobble, jelly (jelly is a material)
 
 **Churn**:
 Ongoing motion inside a body of liquid that should be at rest: jitter, convection plumes or spray.
@@ -101,8 +127,8 @@ _Avoid_: Viscous (unless the liquid really is thick, like batter)
 Particles in the top layer of a liquid at rest sliding sideways along the surface, part of churn.
 
 **Mid-air clump**:
-Grains packed into each other that hang together in the air instead of falling, so the clump seems to defy gravity. Packed grains can't spring apart (push-outs add no speed), so they only spread slowly.
-_Avoid_: Sticky sand (grains have no cohesion)
+Grains packed into each other that hang together in the air instead of falling, so the clump seems to defy gravity. Packed grains can't spring apart (push-outs add no speed), so they only spread slowly. A bug, unlike a clump a sticky material holds together on purpose.
+_Avoid_: Sticky sand (sand has no stickiness)
 
 **Hovering**:
 Loose liquid drops held a few pixels above a liquid surface at rest instead of falling onto it, making the surface look fuzzy.
@@ -135,7 +161,7 @@ The script that fills the GPU simulation with block fills and prints settling me
 _Avoid_: Probe script, harness
 
 **Water feel probe**:
-The script that measures how real water moves on the GPU: free fall, dam-break front speed, surface drift, hovering, pour screenshots, and sand from a brush falling through the air (`tools/water_feel_probe.gd`).
+The script that measures how real water and sand move on the GPU, one scenario per run (`tools/water_feel_probe.gd`, list in its header): free fall, dam break, surface drift, pour, hovering, sand from a brush in the air, sand left in the air by the eraser, shafts cut into a pile, sand sinking through water, a pool in a sand bowl, and water over sand mounds.
 
 **GPU check**:
 The debug-overlay button that checks the pool and the spatial hash agree.

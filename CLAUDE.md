@@ -14,7 +14,8 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 ## Project docs
 
-- `CONTEXT.md`: the glossary. Use its terms (grain, pile, block fill, churn, slosh, squeezing, pudding, sleeping, density projection grid, CPU reference, GPU probe).
+- `CONTEXT.md`: the glossary. Use its terms (grain, pile, block fill, churn, slosh, squeezing, pudding, sleeping, density projection grid, rigid body, soft body, parameter, stickiness, CPU reference, GPU probe).
+- `docs/adr/`: decisions. `0001-oe-cake-direction.md` sets the direction (OE-Cake-style, rigid and soft bodies as cluster solids, per-material parameters the player adjusts) and lists what in the code still works against it.
 - `docs/SPEC.md`: what we're building and the rules the code must keep, including the GPU plumbing rules in 2.7. Read 2.7 before touching a shader.
 - `docs/STATUS.md`: what works, what's verified, open bugs with everything already tried, and what's next. Read Known issues before tuning the solver.
 - `docs/papers.md`: reference papers and code, grouped by symptom. Before changing solver, boundary, sand, MPM or fluid-rendering behaviour, read only the matching section; cite what you used.
