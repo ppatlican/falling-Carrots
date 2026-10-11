@@ -55,7 +55,8 @@
 ##          with sand above, below (or the floor) and on both sides within 24 px (the water
 ##          held in the bed); pocket: enclosed water with sand in at most 5 of the 25 2 px
 ##          cells around it (open water inside the bed, not pore water); groups: connected
-##          pockets of 6+ 2 px cells, and the biggest
+##          pockets of 6+ 2 px cells, and the biggest. sink, sandpour and soak also print
+##          the grid averaged from 30 s at the end (BOWLP, BOWLF, as in bowl)
 ##   hover  the surface pool: water particles in the loose fringe above the dense surface
 ##          (the first 2 px row at least half full), and their mean vy (> 0 is falling)
 ## Every sample (every=N frames, default 3): one line per scenario, see _analyse.
@@ -232,6 +233,8 @@ func _process(_delta: float) -> bool:
 		_bowl_pressure_print()
 		if mounds:
 			_mounds_profile()
+	if frame_i >= max_frames and scenario in ["sink", "sandpour", "soak"]:
+		_bowl_pressure_print()
 	if frame_i >= max_frames:
 		print("done after %d frames, live %d" % [frame_i, sim.live_count])
 		sim.shutdown()
@@ -802,7 +805,7 @@ func _request(f: int) -> void:
 
 
 func _readback_names() -> Array:
-	if scenario == "bowl":
+	if scenario in ["bowl", "sink", "sandpour", "soak"]:
 		return ["pos", "vel", "mat_flags", "hydro_p", "hydro_phi"]
 	return ["pos", "vel", "mat_flags"]
 
@@ -832,6 +835,7 @@ func _analyse(b: Dictionary, f: int) -> void:
 	if scenario == "sink" or scenario == "sandpour" or scenario == "soak":
 		_sink_stats(b, t)
 		_pocket_stats(b, t)
+		_bowl_pressure(b, t)
 		return
 	if scenario == "bowl":
 		_bowl_stats(b, t)

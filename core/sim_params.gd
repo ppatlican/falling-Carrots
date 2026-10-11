@@ -33,6 +33,16 @@ const STACK_K := 0.3
 ## Share of a powder-liquid contact's push-out that the powder takes; the liquid takes
 ## the rest. Low, so water yields and can't push sand grains apart (see powder.glslinc).
 const POWDER_LIQUID_SHARE := 0.1
+## Contact distance of a powder-liquid pair, in spacings: water passes between grains, so a
+## sand bed can drain and pack (see powder.glslinc).
+const POWDER_LIQUID_REACH := 0.6
+## Share of a liquid's density one powder grain counts for, its solid volume: sand under
+## water packs to ~1.1 and is ~60% grain, 40% pore, so 0.6 x HYDRO_POWDER_FULL (see
+## liquid.glslinc).
+const LIQUID_POWDER_SHARE := 0.54
+## Quadratic drag of a grain toward the liquid around it, per px/s of relative speed per
+## second: grains sink through water at ~sqrt(GRAVITY / it) (see powder.glslinc).
+const POWDER_LIQUID_DRAG := 0.06
 ## Fastest a powder grain may move away from a contact because of the push-out alone
 ## (px/s). 0 makes sand inelastic: overlap is still resolved, but a push-out never adds
 ## velocity away from a contact. At 15 the impacts of falling grains rebounded them

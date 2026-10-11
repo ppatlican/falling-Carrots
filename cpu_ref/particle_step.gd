@@ -160,7 +160,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 			v = limit_separation(v, v_pre, 0.0, SimParams.LIQUID_KICK * SimParams.GRAVITY * dt)
 		vel[i] = v * exp(-materials[mat[i]].drag * dt)
 	for i in n:
-		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h, dt)
+		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h, dt) \
+				+ _powder_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt)
 	for i in n:
 		vel[i] = new_vel[i]
 		pos[i] = pred[i]
@@ -231,15 +232,21 @@ func _find_neighbours(pred: PackedVector2Array, h: float) -> Array:
 	return out
 
 
-## PBF lambda. Every neighbour counts toward density (sand fills volume too),
-## but only liquid neighbours move, so only they add to the gradient sum.
+## PBF lambda. Liquid neighbours count toward density, grains at their solid share
+## (LIQUID_POWDER_SHARE, liquid.glslinc), but only liquid neighbours move, so only they
+## add to the gradient sum.
 func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: PackedInt32Array, h: float) -> float:
 	var wall := wall_density(pred[i], h, rest_density, world_size)
 	var density: float = poly6(0.0, h) + wall.x
 	var grad_i := Vector2(wall.y, wall.z) / rest_density
 	var grad_sum := 0.0
 	for j in nb:
-		if _class(mat[j]) != LIQUID:  # powder is left out: water fills a sand bed's pores (liquid.glslinc)
+		if _class(mat[j]) == POWDER:
+			var rp := pred[i] - pred[j]
+			density += SimParams.LIQUID_POWDER_SHARE * poly6(rp.length_squared(), h)
+			grad_i += SimParams.LIQUID_POWDER_SHARE * spiky_grad(rp, h, i, j) / rest_density
+			continue
+		if _class(mat[j]) != LIQUID:
 			continue
 		var rv := pred[i] - pred[j]
 		density += poly6(rv.length_squared(), h)
@@ -255,6 +262,9 @@ func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lamb
 	var wall := wall_density(pred[i], h, rest_density, world_size)
 	var d := lambda[i] * Vector2(wall.y, wall.z)
 	for j in nb:
+		if _class(mat[j]) == POWDER:
+			d += lambda[i] * SimParams.LIQUID_POWDER_SHARE * spiky_grad(pred[i] - pred[j], h, i, j)
+			continue
 		if _class(mat[j]) != LIQUID:
 			continue
 		var rv := pred[i] - pred[j]
@@ -461,8 +471,8 @@ static func stack_weight(m_i: float, m_j: float, rv_y: float) -> float:
 	return m_j / (m_i * exp(clampf(SimParams.STACK_K * rv_y, -8.0, 8.0)) + m_j)
 
 
-## Contacts with any particle closer than SPACING, where at least one side is a
-## powder. Mass-weighted push-out; powders also get static/kinetic friction on the
+## Contacts with any particle closer than SPACING (POWDER_LIQUID_REACH x SPACING for a
+## powder-liquid pair), where at least one side is a powder. Mass-weighted push-out; powders also get static/kinetic friction on the
 ## relative sideways motion. Scaled by CONTACT_RELAX; summed for powders, averaged over the
 ## grains it touches for a liquid (see powder.glslinc).
 func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, mat: PackedInt32Array,
@@ -484,13 +494,15 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			n_near += 1
 			if mj["class"] == LIQUID:
 				n_wet += 1
-		if dist >= SimParams.SPACING:
+		var mixed: bool = (mi["class"] == POWDER) != (mj["class"] == POWDER)
+		var reach := SimParams.SPACING * (SimParams.POWDER_LIQUID_REACH if mixed else 1.0)
+		if dist >= reach:
 			continue
 		n_touch += 1.0
 		var normal := pair_dir(rv, dist, i, j)
-		var pen := SimParams.SPACING - dist
+		var pen := reach - dist
 		var w: float
-		if (mi["class"] == POWDER) != (mj["class"] == POWDER):
+		if mixed:
 			# Powder-liquid: the liquid yields (see POWDER_LIQUID_SHARE).
 			w = SimParams.POWDER_LIQUID_SHARE if mi["class"] == POWDER else 1.0 - SimParams.POWDER_LIQUID_SHARE
 		else:
@@ -516,6 +528,27 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	if mi["class"] != POWDER:
 		sum /= maxf(n_touch, 1.0)  # liquid: averaged over the grains it touches (powder.glslinc)
 	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet)) * SimParams.CONTACT_RELAX
+
+
+## Quadratic drag of a grain toward its liquid neighbours' kernel-weighted velocity,
+## scaled by how much liquid is around it (powder_liquid_drag in powder.glslinc).
+func _powder_liquid_drag(i: int, pred: PackedVector2Array, vel: PackedVector2Array,
+		mat: PackedInt32Array, nb: PackedInt32Array, h: float, dt: float) -> Vector2:
+	if _class(mat[i]) != POWDER:
+		return Vector2.ZERO
+	var sum := Vector2.ZERO
+	var w_sum := 0.0
+	for j in nb:
+		if _class(mat[j]) != LIQUID:
+			continue
+		var w := poly6((pred[i] - pred[j]).length_squared(), h)
+		sum += (vel[j] - vel[i]) * w
+		w_sum += w
+	if w_sum <= 0.0:
+		return Vector2.ZERO
+	var rel := sum / w_sum
+	var rate := SimParams.POWDER_LIQUID_DRAG * rel.length()
+	return rel * ((1.0 - exp(-rate * dt)) * minf(w_sum / rest_density, 1.0))
 
 
 ## XSPH viscosity: liquids blend toward their liquid neighbours' velocity. The material
