@@ -363,7 +363,7 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 				var covered := ci.y > 0 and phi[c - size.x].x + phi[c - size.x].y * SimParams.HYDRO_POWDER_VOL >= SimParams.HYDRO_FULL
 				var err := maxf(phi[c].x - 1.0, 0.0)
 				if covered:
-					err += minf(phi[c].x + phi[c].y * SimParams.HYDRO_POWDER_VOL - 1.0, 0.0)
+					err += minf(phi[c].x + phi[c].y * SimParams.HYDRO_POWDER_FULL - 1.0, 0.0)
 				var k := 1.0 - pow(1.0 - SimParams.HYDRO_K, dt * 60.0)  # share per step (hydro_k())
 				var rhs := -a * a * k * err / (dt * dt)
 				p[c] = maxf(lerpf(maxf(p[c], 0.0), (sum + wall_sum - rhs) / n, SimParams.HYDRO_SOR), 0.0)

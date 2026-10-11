@@ -34,6 +34,11 @@
 ##          and the density projection grid averaged from 30 s: BOWLP the pressure in cells
 ##          of hydrostatic head (open water at rest rises 1.00 per cell), BOWLF each cell's
 ##          liquid/powder density over rest.
+##   mounds the owner's scene of 2026-10-11: two sand columns at x 210 and 430 (sand=N grains
+##          each, default 6000) that slump into mounds reaching the walls with a V between,
+##          then water blocks 30 frames apart from BOWL_WATER (water=N in total, default
+##          32000) until the peaks (y ~190) are ~70 px under: the bowl's stats and dumps, and at the end MOUNDS, the sand top and water
+##          surface y per 20 px column
 ##   hover  the surface pool: water particles in the loose fringe above the dense surface
 ##          (the first 2 px row at least half full), and their mean vy (> 0 is falling)
 ## Every sample (every=N frames, default 3): one line per scenario, see _analyse.
@@ -73,6 +78,9 @@ var sand_n := 2
 var sand_frames := 20
 var sand_moving := 1
 var bowl_sand := true
+var mounds := false
+var mounds_water := 32000
+var mounds_sand := 6000
 var bowl_samples := 0
 var bowl_avg_v := {}  # 20 px cell -> summed mean water velocity over samples from BOWL_AVG_FROM
 var bowl_avg_n := {}
@@ -98,6 +106,10 @@ func _initialize() -> void:
 			bowl_col_cols = int(a.substr(5))
 		if a.begins_with("rows="):
 			bowl_col_rows = int(a.substr(5))
+		if a.begins_with("sand="):
+			mounds_sand = int(a.substr(5))
+		if a.begins_with("water="):
+			mounds_water = int(a.substr(6))
 		if a == "nosand":
 			bowl_sand = false
 		if a.begins_with("move="):
@@ -105,6 +117,9 @@ func _initialize() -> void:
 		if a.begins_with("shots="):
 			for v in a.substr(6).split(","):
 				shots.append(int(v))
+	if scenario == "mounds":
+		scenario = "bowl"
+		mounds = true
 	var config = GameConfig.load_from_file()
 	cap = config.particle_cap
 	var table = MaterialTable.new()
@@ -185,6 +200,8 @@ func _process(_delta: float) -> bool:
 				row += "%+3d,%+3d" % [roundi(m.x), roundi(m.y)]
 			print("BOWLAVG ", row)
 		_bowl_pressure_print()
+		if mounds:
+			_mounds_profile()
 	if frame_i >= max_frames:
 		print("done after %d frames, live %d" % [frame_i, sim.live_count])
 		sim.shutdown()
@@ -277,6 +294,8 @@ var bowl_col_rows := 100  # from "rows=N"; cols=110 rows=60 slumps into gentle s
 
 
 func _bowl_brush() -> Dictionary:
+	if mounds:
+		return _mounds_brush()
 	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": 0.0,
 			"material": sand, "count": 0, "cols": 1}
 	var w := SimParams.WORLD_SIZE
@@ -304,7 +323,70 @@ func _bowl_brush() -> Dictionary:
 	return brush
 
 
+const MOUND_COLS := 60
+const MOUND_X := [210.0, 430.0]
+
+
+func _mounds_brush() -> Dictionary:
+	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": 0.0,
+			"material": sand, "count": 0, "cols": 1}
+	var w := SimParams.WORLD_SIZE
+	if frame_i == 1 or frame_i == 2:
+		var rows := mounds_sand / MOUND_COLS
+		brush.op = ParticleSim.BRUSH_BLOCK
+		brush.cols = MOUND_COLS
+		brush.count = rows * MOUND_COLS
+		brush.pos = Vector2(MOUND_X[frame_i - 1] - MOUND_COLS * SimParams.SPACING * 0.5,
+				w.y - 1.0 - rows * SimParams.SPACING)
+	elif frame_i >= BOWL_WATER and (frame_i - BOWL_WATER) % 30 == 0:
+		var left := mounds_water - (frame_i - BOWL_WATER) / 30 * SimParams.BENCH_BLOCK
+		if left > 0:
+			brush.op = ParticleSim.BRUSH_BLOCK
+			brush.material = water
+			brush.count = mini(left, SimParams.BENCH_BLOCK)
+			brush.cols = SimParams.BENCH_COLS
+			brush.pos = Vector2((w.x - SimParams.BENCH_COLS * SimParams.SPACING) * 0.5, 8.0)
+	return brush
+
+
+var mounds_last := {}
+
+
+## Sand top (highest grain) and water surface (highest water particle) y per 20 px column,
+## from the last sample.
+func _mounds_profile() -> void:
+	if mounds_last.is_empty():
+		return
+	var b: Dictionary = mounds_last
+	var cols := int(SimParams.WORLD_SIZE.x / 20.0)
+	var sand_top := PackedFloat32Array()
+	var water_top := PackedFloat32Array()
+	sand_top.resize(cols)
+	water_top.resize(cols)
+	sand_top.fill(SimParams.WORLD_SIZE.y)
+	water_top.fill(SimParams.WORLD_SIZE.y)
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0:
+			continue
+		var x: float = b.pos.decode_float(i * 8)
+		var y: float = b.pos.decode_float(i * 8 + 4)
+		var c := clampi(int(x / 20.0), 0, cols - 1)
+		if (fl & 0xFF) == sand:
+			sand_top[c] = minf(sand_top[c], y)
+		elif (fl & 0xFF) == water:
+			water_top[c] = minf(water_top[c], y)
+	var rs := ""
+	var rw := ""
+	for c in cols:
+		rs += " %3d" % roundi(sand_top[c])
+		rw += " %3d" % roundi(water_top[c])
+	print("MOUNDS sand_top  ", rs)
+	print("MOUNDS water_top ", rw)
+
+
 func _bowl_stats(b: Dictionary, t: float) -> void:
+	mounds_last = b
 	var sand_cells := {}
 	var sand_n := 0
 	var sand_speed := 0.0

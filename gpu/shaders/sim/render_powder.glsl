@@ -6,7 +6,7 @@
 // overlapping pixel followed the cell sort, which changes every frame: a settled bed
 // under water flickered between sand and water on ~20% of its pixels.
 
-// common.glslinc stamp: Params 108 B, v11. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v12. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "render.glslinc"
 

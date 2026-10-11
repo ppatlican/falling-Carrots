@@ -7,7 +7,7 @@
 // under water reads as wet sand where no grain covers the pore. Drawn plainly, pore
 // water scattered blue specks over about a third of a settled bed (owner).
 
-// common.glslinc stamp: Params 108 B, v11. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v12. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "render.glslinc"
 

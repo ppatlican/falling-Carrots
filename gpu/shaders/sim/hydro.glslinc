@@ -71,6 +71,14 @@ const float HYDRO_FULL = 0.95;
 // Share of a cell one unit of powder density fills: sand packs to about 1.4x the
 // water's rest density, so 1 / 1.4. Mirror: SimParams.HYDRO_POWDER_VOL.
 const float HYDRO_POWDER_VOL = 0.7;
+// Share of a cell one unit of powder density fills when checking a cell for room left
+// (the bubble pull in hydro_sweep): sand under water packs to only ~1.1 (bed cells read
+// 1.07-1.17), and water can't get into its pores, so a cell of such sand is full. At 0.7 a
+// cell half sand and half water read ~0.97 full, and the pull, ~3-4 cells of hydrostatic
+// head per 1% of room, sucked water into every sand surface cell: p at the peaks of
+// mounds under a pool fell 0.7-2.5 head under hydrostatic, and the water circulated over
+// them at up to 17 px/s (water_feel_probe mounds, 2026-10-11). Mirror: SimParams.HYDRO_POWDER_FULL.
+const float HYDRO_POWDER_FULL = 0.9;
 
 ivec2 hydro_size() {
 	return ivec2((int(params.grid_w) + HYDRO_CELL - 1) / HYDRO_CELL,
@@ -224,12 +232,13 @@ void hydro_sweep(uint parity) {
 	// counting only the liquid made a wet sand bed look like a bubble, pulled water into
 	// it forever, and water over sand churned at 9 px/s. Skipping cells with any powder
 	// instead left air pockets riding on every clump of sand sinking through water
-	// (water_feel_probe sink, owner screenshot 2026-10-10).
+	// (water_feel_probe sink, owner screenshot 2026-10-10). Powder counts at its packing
+	// under water here (HYDRO_POWDER_FULL), so a sand surface isn't a bubble.
 	vec2 above = ci.y > 0 ? hydro_phi[hydro_index(ci - ivec2(0, 1))] : vec2(0.0);
 	bool covered = above.x + above.y * HYDRO_POWDER_VOL >= HYDRO_FULL;
 	float err = max(phi - 1.0, 0.0);
 	if (covered) {
-		err += min(phi + phi_c.y * HYDRO_POWDER_VOL - 1.0, 0.0);
+		err += min(phi + phi_c.y * HYDRO_POWDER_FULL - 1.0, 0.0);
 	}
 	float rhs = -a * a * hydro_k() * err / (params.dt * params.dt);
 	// Warm start: a cell that was air last frame holds a negative ghost.
