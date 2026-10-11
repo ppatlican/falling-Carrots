@@ -3,9 +3,11 @@
 
 // Solve, once per frame before the iterations: liquids are pushed down the gradient of
 // the density projection grid's pressure (hydro_delta in hydro.glslinc), into scratch,
-// clamped like solve_delta. solve_apply then applies it.
+// clamped like solve_delta. solve_apply then applies it. The upward part of the push is
+// scaled by what holds the particle from below (hydro_support), so water over a cavity
+// falls into it.
 
-// common.glslinc stamp: Params 108 B, v13. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v14. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
 
@@ -17,6 +19,9 @@ void main() {
 	vec2 d = vec2(0.0);
 	if (s_class(t) == CLASS_LIQUID) {
 		d = hydro_delta(s_pred[t]);
+		if (d.y < 0.0) {
+			d.y *= hydro_support(t);
+		}
 	}
 	float len = length(d);
 	float max_len = 0.5 * params.spacing;

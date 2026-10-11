@@ -292,3 +292,47 @@ vec2 hydro_delta(vec2 x) {
 			hydro_p_sample(x + vec2(0.0, e)) - hydro_p_sample(x - vec2(0.0, e))) / (2.0 * e);
 	return -grad * params.dt * params.dt;
 }
+
+// Share of the grid's upward push a liquid particle at t gets: how much holds it from below.
+// The share of its neighbours' weight (poly6, any class) that lies below it, each weighted
+// by dy / r, smoothstep from HYDRO_SUPPORT_NONE to HYDRO_SUPPORT_FULL; the floor counts as
+// full. Water in the bulk reads 0.25-0.40, at a side wall 0.30-0.50, the top layer of a
+// pool 0.15-0.30 (mostly 0.20-0.25), and the roof of a cavity 0-0.15 (water_feel_probe sink
+// dump). The grid's pressure rises hydrostatically into a sand bed, so its push held each
+// water particle up with its own weight whether or not anything was under it: a 16 px cell
+// can't see a 2-3 px cavity, and cells at a bed top read 1.2-1.7 full (pore water at ~0.95
+// plus the sand), so the bubble pull never closed it. The water's bottom layer floated as a
+// lid over the dips of settled sand, a dark strip 1-2 px tall along the bed in 36-70% of
+// pixel columns that never closed (water_feel_probe sink, owner screenshot 2026-10-11).
+// Without the push a cavity's roof falls in and the air rises out through the water.
+// The share of the neighbours, not their sum: the sum over a full kernel at rest
+// (thresholds 0.10-0.25 of it) halved at the side walls, and 50k water at rest slid down
+// the walls and jittered at 3.8 px/s, up to 86 (0.7 without, GPU probe water 2400 5). A
+// stricter share or a shorter kernel can't do better: the top layer reads below the bulk,
+// and the dark pixels left along the bed sit within contact distance of water above them
+// (the 2 px water-sand contact drawn as 2x2 points), not over holes.
+// Mirror: ParticleStep._hydro_support.
+const float HYDRO_SUPPORT_NONE = 0.10;
+const float HYDRO_SUPPORT_FULL = 0.20;
+
+float hydro_support(uint t) {
+	vec2 pt = s_pred[t];
+	if (params.world_size.y - pt.y < params.h) {
+		return 1.0;
+	}
+	float below = 0.0;
+	float total = 0.0;
+	FOR_EACH_NEIGHBOUR(t) {
+		uint j = k;
+		if (j == t) continue;
+		vec2 rv = s_pred[j] - pt;
+		float r2 = dot(rv, rv);
+		if (r2 >= params.h * params.h || r2 < 1e-8) continue;
+		float w = poly6(r2);
+		total += w;
+		if (rv.y > 0.0) {
+			below += w * rv.y * inversesqrt(r2);
+		}
+	} END_NEIGHBOURS
+	return smoothstep(HYDRO_SUPPORT_NONE, HYDRO_SUPPORT_FULL, below / max(total, 1e-12));
+}

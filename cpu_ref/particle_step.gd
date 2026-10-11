@@ -123,8 +123,12 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	var delta := PackedVector2Array()
 	delta.resize(n)
 	for i in n:
-		delta[i] = _hydro_delta(pred[i], phi, hydro_p, dt).limit_length(0.5 * SimParams.SPACING) \
-				if _class(mat[i]) == LIQUID else Vector2.ZERO
+		if _class(mat[i]) != LIQUID:
+			continue
+		var d := _hydro_delta(pred[i], phi, hydro_p, dt)
+		if d.y < 0.0:
+			d.y *= _hydro_support(i, pred, neighbours[i], h)
+		delta[i] = d.limit_length(0.5 * SimParams.SPACING)
 	for i in n:
 		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i])
 
@@ -428,6 +432,25 @@ func _hydro_delta(x: Vector2, phi: PackedVector2Array, p: PackedFloat32Array, dt
 			_hydro_p_sample(x + Vector2(e, 0.0), phi, p) - _hydro_p_sample(x - Vector2(e, 0.0), phi, p),
 			_hydro_p_sample(x + Vector2(0.0, e), phi, p) - _hydro_p_sample(x - Vector2(0.0, e), phi, p)) / (2.0 * e)
 	return -grad * dt * dt
+
+
+## Share of the grid's upward push liquid particle i gets: how much holds it from below
+## (hydro_support).
+func _hydro_support(i: int, pred: PackedVector2Array, nb: PackedInt32Array, h: float) -> float:
+	if world_size.y - pred[i].y < h:
+		return 1.0
+	var below := 0.0
+	var total := 0.0
+	for j in nb:
+		var rv := pred[j] - pred[i]
+		var r2 := rv.length_squared()
+		if r2 >= h * h or r2 < 1e-8:
+			continue
+		var w := poly6(r2, h)
+		total += w
+		if rv.y > 0.0:
+			below += w * rv.y / sqrt(r2)
+	return smoothstep(SimParams.HYDRO_SUPPORT_NONE, SimParams.HYDRO_SUPPORT_FULL, below / maxf(total, 1e-12))
 
 
 ## Density a wall at distance d adds (poly6 over the half-plane past it, at rest

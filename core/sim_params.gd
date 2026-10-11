@@ -76,6 +76,10 @@ const HYDRO_SOLID := 0.5
 const HYDRO_POWDER_FULL := 0.9
 ## Free surface (ghost fluid): liquid density over rest at the surface, and the smallest
 ## share of a cell the surface may sit from a liquid cell's centre.
+## Support from below (the share of a liquid particle's neighbour weight below it, times
+## dy / r) from no upward grid push to the full push (hydro_support in hydro.glslinc).
+const HYDRO_SUPPORT_NONE := 0.10
+const HYDRO_SUPPORT_FULL := 0.20
 const HYDRO_SURFACE := 0.5
 const HYDRO_THETA_MIN := 0.1
 const HYDRO_SWEEPS := 32
