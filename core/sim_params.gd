@@ -64,6 +64,10 @@ const HYDRO_FULL := 0.95
 ## Share of a cell one unit of powder density fills (sand packs to ~1.4x the water's rest
 ## density). Powder counts toward a cell being full, so a gap next to sinking sand closes.
 const HYDRO_POWDER_VOL := 0.7
+## A cell whose powder fills at least this share (powder * HYDRO_POWDER_VOL) is sand bed: a
+## wall that holds the water's weight (dp/dn = rho g . n), with the water's pressure
+## continued hydrostatically into its pores.
+const HYDRO_SOLID := 0.5
 ## Free surface (ghost fluid): liquid density over rest at the surface, and the smallest
 ## share of a cell the surface may sit from a liquid cell's centre.
 const HYDRO_SURFACE := 0.5

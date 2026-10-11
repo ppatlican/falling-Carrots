@@ -8,6 +8,12 @@
 // Between two powder grains the push-out is also mass-scaled by height (stack_weight):
 // the upper grain gives way, so a pile is held up from the bottom instead of being
 // crushed. Powder-liquid pairs don't use that: they use POWDER_LIQUID_SHARE, so water yields.
+// A liquid particle's push from the grains it touches is averaged, not summed: the density
+// projection grid holds water up at a sand bed (hydro_sweep), so the push only has to keep
+// water off the grains. Summed, it threw water touching several grains out of the bed along
+// the slope's normal, and a pool in a sand bowl kept an eddy over the slopes at 2 px/s,
+// up to 19 (water_feel_probe bowl). Averaged before the grid held the bed, 12-15k of 27k
+// water soaked into the sand, since the push was all that held water out of it.
 // Friction is cut for grains surrounded by liquid (wet_slip), see the end of contact_delta.
 
 // Share of a powder-liquid contact's push-out that the powder takes (liquid takes the rest).
@@ -30,6 +36,7 @@ vec2 contact_delta(uint t) {
 	float n_near = 0.0;
 	float n_wet = 0.0;
 	float fric_w = 0.0;
+	float n_touch = 0.0;
 	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
 		if (j == t) continue;
@@ -42,6 +49,7 @@ vec2 contact_delta(uint t) {
 			n_wet += mj.info.x == CLASS_LIQUID ? 1.0 : 0.0;
 		}
 		if (dist >= params.spacing) continue;
+		n_touch += 1.0;
 
 		vec2 normal = pair_dir(rv, dist, t, j);
 		float pen = params.spacing - dist;
@@ -72,5 +80,8 @@ vec2 contact_delta(uint t) {
 	// Wet grains slip: friction drops with the share of liquid neighbours, so sand
 	// under water slumps and sinks instead of holding water pockets inside the pile.
 	float wet = n_near > 0.0 ? n_wet / n_near : 0.0;
+	if (!t_powder) {
+		sum /= max(n_touch, 1.0);  // liquid: averaged over the grains it touches (see top)
+	}
 	return (sum + fric * (1.0 - params.wet_slip * wet)) * params.contact_relax;
 }

@@ -30,7 +30,10 @@
 ##          and water inside the sand bed (6 of the 9 2 px cells around it hold sand). nosand
 ##          drops the sand (control). cols=N rows=N size the sand columns (default 75x100,
 ##          which leaves a steep right mound; 110x60 slumps into gentle slopes). Every 10th
-##          sample a flow map of the 20 px cells, and at the end the flow averaged from 30 s.
+##          sample a flow map of the 20 px cells, and at the end the flow averaged from 30 s
+##          and the density projection grid averaged from 30 s: BOWLP the pressure in cells
+##          of hydrostatic head (open water at rest rises 1.00 per cell), BOWLF each cell's
+##          liquid/powder density over rest.
 ##   hover  the surface pool: water particles in the loose fringe above the dense surface
 ##          (the first 2 px row at least half full), and their mean vy (> 0 is falling)
 ## Every sample (every=N frames, default 3): one line per scenario, see _analyse.
@@ -181,6 +184,7 @@ func _process(_delta: float) -> bool:
 				var m: Vector2 = bowl_avg_v[g] / float(bowl_avg_n[g])
 				row += "%+3d,%+3d" % [roundi(m.x), roundi(m.y)]
 			print("BOWLAVG ", row)
+		_bowl_pressure_print()
 	if frame_i >= max_frames:
 		print("done after %d frames, live %d" % [frame_i, sim.live_count])
 		sim.shutdown()
@@ -392,6 +396,7 @@ func _bowl_stats(b: Dictionary, t: float) -> void:
 			flow_max, flow_max_at.x * 20 + 10, flow_max_at.y * 20 + 10,
 			bed_n, bed_speed / maxi(bed_n, 1), bed_vy / maxi(bed_n, 1), sand_n, sand_speed / maxi(sand_n, 1), sand_moving])
 	bowl_samples += 1
+	_bowl_pressure(b, t)
 	if t >= BOWL_AVG_FROM:
 		for g in cell_n:
 			if cell_n[g] >= 20:
@@ -417,6 +422,51 @@ func _bowl_stats(b: Dictionary, t: float) -> void:
 				row += "%s%2d" % [a, mini(int(m.length()), 99)]
 			rows.append(row)
 		print("BOWLMAP t=%.2f\n%s" % [t, "\n".join(rows)])
+
+
+var bowl_p_sum := PackedFloat32Array()
+var bowl_phi_sum := PackedVector2Array()
+var bowl_p_n := 0
+
+
+## Density projection grid pressure, in cells of hydrostatic head (p / (GRAVITY * 16 px)):
+## a column at rest carried by the grid rises by 1.0 per cell below its surface. Summed
+## from BOWL_AVG_FROM, printed as BOWLP at the end with each cell's fill: w liquid,
+## s powder (powder * 0.7 over 0.5), m both, ' ' air.
+func _bowl_pressure(b: Dictionary, t: float) -> void:
+	var gw := ceili(SimParams.WORLD_SIZE.x / 16.0)
+	var gh := ceili(SimParams.WORLD_SIZE.y / 16.0)
+	if bowl_p_sum.is_empty():
+		bowl_p_sum.resize(gw * gh)
+		bowl_phi_sum.resize(gw * gh)
+	if t < BOWL_AVG_FROM:
+		return
+	bowl_p_n += 1
+	for c in gw * gh:
+		bowl_p_sum[c] += b.hydro_p.decode_float(c * 4)
+		bowl_phi_sum[c] += Vector2(b.hydro_phi.decode_float(c * 8), b.hydro_phi.decode_float(c * 8 + 4))
+
+
+func _bowl_pressure_print() -> void:
+	if bowl_p_n == 0:
+		return
+	var gw := ceili(SimParams.WORLD_SIZE.x / 16.0)
+	var gh := ceili(SimParams.WORLD_SIZE.y / 16.0)
+	var head := SimParams.GRAVITY * 16.0
+	for gy in gh:
+		var row := ""
+		var rowf := ""
+		for gx in gw:
+			var c := gy * gw + gx
+			var phi: Vector2 = bowl_phi_sum[c] / float(bowl_p_n)
+			var p: float = bowl_p_sum[c] / float(bowl_p_n) / head
+			var liquid := phi.x >= 0.3
+			var powder := phi.y * 0.7 >= 0.5
+			var tag := "m" if liquid and powder else ("w" if liquid else ("s" if powder else " "))
+			row += "%5.2f%s" % [p, tag] if liquid else "     %s" % tag
+			rowf += " %3.2f/%3.2f" % [phi.x, phi.y]
+		print("BOWLP %2d %s" % [gy, row])
+		print("BOWLF %2d %s" % [gy, rowf])
 
 
 func _sink_stats(b: Dictionary, t: float) -> void:
@@ -515,13 +565,19 @@ func _shot_rt(f: int) -> void:
 
 
 func _request(f: int) -> void:
-	for name in ["pos", "vel", "mat_flags"]:
+	for name in _readback_names():
 		ctx.readback_async_rt(name, _on_data.bind(name, f))
+
+
+func _readback_names() -> Array:
+	if scenario == "bowl":
+		return ["pos", "vel", "mat_flags", "hydro_p", "hydro_phi"]
+	return ["pos", "vel", "mat_flags"]
 
 
 func _on_data(data: PackedByteArray, name: String, f: int) -> void:
 	got[name] = data
-	if got.size() == 3:
+	if got.size() == _readback_names().size():
 		pending = false
 		_analyse(got, f)
 

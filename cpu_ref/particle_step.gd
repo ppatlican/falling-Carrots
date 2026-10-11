@@ -315,22 +315,33 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 	var size := hydro_size(world_size)
 	var a := hydro_cell_size()
 	var offs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	var head := SimParams.GRAVITY * a  # hydrostatic rise of p per cell of depth
 	for _s in SimParams.HYDRO_SWEEPS:
 		for parity in 2:
 			for c in phi.size():
 				var ci := Vector2i(c % size.x, c / size.x)
 				if (ci.x + ci.y) % 2 != parity:
 					continue
-				var air := phi[c].x < SimParams.HYDRO_AIR
+				var solid := hydro_solid(phi[c])
+				var air := not solid and phi[c].x < SimParams.HYDRO_AIR
 				var sum := 0.0
 				var n := 0.0
+				var wall_sum := 0.0
 				for off in offs:
 					var nc: Vector2i = ci + off
 					if nc.x < 0 or nc.y < 0 or nc.x >= size.x or nc.y >= size.y:
 						continue
 					var ni := nc.y * size.x + nc.x
-					var air_n := phi[ni].x < SimParams.HYDRO_AIR
-					if air:
+					var solid_n := hydro_solid(phi[ni])
+					var air_n := not solid_n and phi[ni].x < SimParams.HYDRO_AIR
+					if solid:
+						if not air_n:  # sand bed: the water's pressure continued hydrostatically
+							sum += p[ni] - head * off.y
+							n += 1.0
+					elif solid_n:
+						if not air:  # a wall holding the water's weight: dp/dn = rho g . n
+							wall_sum += head * off.y
+					elif air:
 						if not air_n:  # ghost: liquid p extrapolated through 0 at the surface
 							sum += p[ni] * (1.0 - 1.0 / _hydro_theta(phi[ni].x, phi[c].x))
 							n += 1.0
@@ -339,8 +350,14 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 					else:
 						n += 1.0
 						sum += p[ni]
+				if solid:
+					p[c] = maxf(sum / n, 0.0) if n > 0.0 else 0.0
+					continue
 				if air:
 					p[c] = sum / n if n > 0.0 else 0.0
+					continue
+				if n == 0.0:  # walled in by sand on every side
+					p[c] = maxf(p[c], 0.0)
 					continue
 				# Under a full cell (water and powder), a cell with room left is pulled full (a trapped bubble).
 				var covered := ci.y > 0 and phi[c - size.x].x + phi[c - size.x].y * SimParams.HYDRO_POWDER_VOL >= SimParams.HYDRO_FULL
@@ -349,7 +366,12 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 					err += minf(phi[c].x + phi[c].y * SimParams.HYDRO_POWDER_VOL - 1.0, 0.0)
 				var k := 1.0 - pow(1.0 - SimParams.HYDRO_K, dt * 60.0)  # share per step (hydro_k())
 				var rhs := -a * a * k * err / (dt * dt)
-				p[c] = maxf(lerpf(maxf(p[c], 0.0), (sum - rhs) / n, SimParams.HYDRO_SOR), 0.0)
+				p[c] = maxf(lerpf(maxf(p[c], 0.0), (sum + wall_sum - rhs) / n, SimParams.HYDRO_SOR), 0.0)
+
+
+## True when a cell is sand bed: a solid wall for the grid (hydro_solid).
+static func hydro_solid(phi_c: Vector2) -> bool:
+	return phi_c.y * SimParams.HYDRO_POWDER_VOL >= SimParams.HYDRO_SOLID
 
 
 ## Share of the way from a liquid cell to its air neighbour where phi crosses the
@@ -436,7 +458,8 @@ static func stack_weight(m_i: float, m_j: float, rv_y: float) -> float:
 
 ## Contacts with any particle closer than SPACING, where at least one side is a
 ## powder. Mass-weighted push-out; powders also get static/kinetic friction on the
-## relative sideways motion. Scaled by CONTACT_RELAX, not averaged (see powder.glslinc).
+## relative sideways motion. Scaled by CONTACT_RELAX; summed for powders, averaged over the
+## grains it touches for a liquid (see powder.glslinc).
 func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, mat: PackedInt32Array,
 		nb: PackedInt32Array) -> Vector2:
 	var mi: Dictionary = materials[mat[i]]
@@ -445,6 +468,7 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	var n_near := 0
 	var n_wet := 0
 	var fric_w := 0.0
+	var n_touch := 0.0
 	for j in nb:
 		var mj: Dictionary = materials[mat[j]]
 		if mi["class"] != POWDER and mj["class"] != POWDER:
@@ -457,6 +481,7 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 				n_wet += 1
 		if dist >= SimParams.SPACING:
 			continue
+		n_touch += 1.0
 		var normal := pair_dir(rv, dist, i, j)
 		var pen := SimParams.SPACING - dist
 		var w: float
@@ -483,6 +508,8 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	fric /= maxf(fric_w, 1.0)
 	# Wet grains slip (WET_SLIP): friction drops with the share of liquid neighbours.
 	var wet := float(n_wet) / n_near if n_near > 0 else 0.0
+	if mi["class"] != POWDER:
+		sum /= maxf(n_touch, 1.0)  # liquid: averaged over the grains it touches (powder.glslinc)
 	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet)) * SimParams.CONTACT_RELAX
 
 
