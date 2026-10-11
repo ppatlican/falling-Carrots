@@ -306,69 +306,53 @@ float hydro_powder_sample(vec2 x) {
 	return mix(mix(p00, p10, f.x), mix(p01, p11, f.x), f.y);
 }
 
-// Share of the grid's upward push a liquid particle at t loses because it hangs over air
-// next to sand. Looks along three rays into its lower half (down-left 45 degrees, down,
-// down-right): a ray is open when no particle of any class has its centre within
-// HYDRO_HANG_DEPTH along it and HYDRO_HANG_HALF across, and the first thing past that is a
-// grain (within HYDRO_HANG_GRAIN_DEPTH along, HYDRO_HANG_GRAIN_HALF across, and inside the
-// kernel radius, which the neighbour window always covers). Returns 1 when any ray is open
-// (solve_pressure scales the upward push by 1 minus it); 1/3 per open ray left a roof
-// held by the other two (sink strip 43-51%, 35-48% with the full cut). Only where the coarse cell holds
-// powder (bilinear phi.y > HYDRO_HANG_POWDER), so open water and the pool surface are
-// untouched; the floor counts as something below.
+// True when the liquid particle at t hangs over air next to sand: its coarse cell holds
+// powder (bilinear phi.y > HYDRO_HANG_POWDER) and no particle of any class has its centre
+// in the box HYDRO_HANG_DEPTH deep and 2 * HYDRO_HANG_HALF wide right below it (the floor
+// counts as something), and the first thing under that box is a grain (one within
+// HYDRO_HANG_GRAIN_DEPTH down and HYDRO_HANG_GRAIN_HALF across; the neighbour window reaches
+// at least 4 px). Such a particle gets no upward grid push (solve_pressure).
 // The grid's pressure rises hydrostatically into a sand bed, so its push held each water
 // particle up with its own weight whether or not anything was under it: a 16 px cell
 // can't see a 2-3 px cavity, and cells at a bed top read 1.2-1.7 full (pore water ~0.95
 // plus the sand), so the bubble pull never closed it. The water's bottom layer lay as a
-// flat lid over each dip of settled sand, or as a face 2-4 px off a 45-degree slope, a dark
-// strip along the bed in 47-74% of pixel columns that never closed (water_feel_probe sink,
-// owner screenshot 2026-10-11). A kernel sum of the support below (poly6 * dy / r) couldn't
-// tell a lid from the pool's top layer or water at a side wall, and either left the lids or
-// let water slide down the walls.
-// A box straight down alone (no ray sideways, no grain needed) flagged 1% of the bulk water
-// in sandy cells, over gaps in its own lattice, and losing its push a step at a time made a
-// pool over sand mounds flow down the right slope (bulk 3.5 px/s, a 23 px/s cell; 1.0 and 7
-// without, water_feel_probe mounds). Needing a grain past the gap (air between water and
-// sand, which is what the strip is) cut that tenfold. Straight down it still missed the
-// faces over slopes, held by water diagonally below them: on a sink dump with many cavities
-// it reached 18% of the water drawn right above a dark pixel over the bed, the three rays
-// 44% (0.6% of bulk water and 0.2% of water touching grains lose any push).
-// Mirror: ParticleStep._hydro_hang_share.
+// flat lid over each dip of settled sand, a dark strip along the bed in 67-71% of pixel
+// columns that never closed (water_feel_probe sink, owner screenshot 2026-10-11). A kernel
+// sum of the support below (poly6 * dy / r) couldn't tell a lid from the pool's top layer
+// or water at a side wall, and either left the lids or let water slide down the walls.
+// On a sink dump at rest the box alone flagged 33% of the water drawn right above a dark
+// pixel over the bed, 1% of the water in sandy cells away from the bed and 0.1% of the
+// water touching grains; the other "lid" water sits on a grain or water centre at contact
+// distance diagonally below (the gaps 2x2 points leave on a disordered packing). But the
+// 1% was bulk water over gaps in its own lattice, and losing its push a step at a time made
+// a pool over sand mounds flow down the right slope (bulk 3.5 px/s, a 23 px/s cell; 1.0 and
+// 7 without, water_feel_probe mounds). Requiring a grain under the gap (air between water
+// and sand, which is what the dark strip is) flags ten times less bulk water (mounds 27 ->
+// 3 of 2716) and keeps three quarters of the lids. Away from powder nothing changes, so
+// open water and the pool surface are untouched.
+// Mirror: ParticleStep._hydro_hangs.
 const float HYDRO_HANG_POWDER = 0.05;
-const float HYDRO_HANG_DEPTH = 2.8;
-const float HYDRO_HANG_HALF = 1.2;
+const float HYDRO_HANG_DEPTH = 2.5;
+const float HYDRO_HANG_HALF = 1.5;
 const float HYDRO_HANG_GRAIN_DEPTH = 4.0;
 const float HYDRO_HANG_GRAIN_HALF = 2.0;
 
-float hydro_hang_share(uint t) {
+bool hydro_hangs(uint t) {
 	vec2 pt = s_pred[t];
 	if (params.world_size.y - pt.y < HYDRO_HANG_DEPTH || hydro_powder_sample(pt) <= HYDRO_HANG_POWDER) {
-		return 0.0;
+		return false;
 	}
-	const float S = 0.70710678;
-	vec2 rays[3] = vec2[3](vec2(-S, S), vec2(0.0, 1.0), vec2(S, S));
-	bvec3 blocked = bvec3(false);
-	bvec3 grain = bvec3(false);
+	bool grain = false;
 	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
 		if (j == t) continue;
 		vec2 rv = s_pred[j] - pt;
-		if (rv.y <= 0.0 || dot(rv, rv) >= params.h * params.h) continue;
-		bool powder = s_class(j) == CLASS_POWDER;
-		for (int r = 0; r < 3; r++) {
-			float along = dot(rv, rays[r]);
-			float across = abs(rv.x * rays[r].y - rv.y * rays[r].x);
-			if (along > 0.0 && along <= HYDRO_HANG_DEPTH && across <= HYDRO_HANG_HALF) {
-				blocked[r] = true;
-			} else if (powder && along > HYDRO_HANG_DEPTH && along <= HYDRO_HANG_GRAIN_DEPTH
-					&& across <= HYDRO_HANG_GRAIN_HALF) {
-				grain[r] = true;
-			}
+		if (rv.y <= 0.0) continue;
+		if (rv.y <= HYDRO_HANG_DEPTH && abs(rv.x) <= HYDRO_HANG_HALF) {
+			return false;
 		}
+		grain = grain || (s_class(j) == CLASS_POWDER && rv.y <= HYDRO_HANG_GRAIN_DEPTH
+				&& abs(rv.x) <= HYDRO_HANG_GRAIN_HALF);
 	} END_NEIGHBOURS
-	float open = 0.0;
-	for (int r = 0; r < 3; r++) {
-		open += grain[r] && !blocked[r] ? 1.0 : 0.0;
-	}
-	return min(open, 1.0);
+	return grain;
 }
