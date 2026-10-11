@@ -23,6 +23,14 @@
 ##   sink   40k water as four +10k blocks 30 frames apart, then +10k sand at frame SINK_SAND
 ##          (as the owner does): sand grains that are still (< 0.5 px/s) with water right
 ##          under them are held up by water, a raft (should be 0), and the sand's mean depth
+##   bowl   a sand floor and two sand columns at the walls that slump into slopes, then 3 x 9000
+##          water 30 frames apart from BOWL_WATER (the owner's pool in a sand bowl): water speed
+##          next to sand (a grain within 6 px) and away from it, and coherent flow, the length
+##          of the mean water velocity per 20 px cell (jitter averages out, a current doesn't),
+##          and water inside the sand bed (6 of the 9 2 px cells around it hold sand). nosand
+##          drops the sand (control). cols=N rows=N size the sand columns (default 75x100,
+##          which leaves a steep right mound; 110x60 slumps into gentle slopes). Every 10th
+##          sample a flow map of the 20 px cells, and at the end the flow averaged from 30 s.
 ##   hover  the surface pool: water particles in the loose fringe above the dense surface
 ##          (the first 2 px row at least half full), and their mean vy (> 0 is falling)
 ## Every sample (every=N frames, default 3): one line per scenario, see _analyse.
@@ -61,6 +69,11 @@ var sand_r := 1.5
 var sand_n := 2
 var sand_frames := 20
 var sand_moving := 1
+var bowl_sand := true
+var bowl_samples := 0
+var bowl_avg_v := {}  # 20 px cell -> summed mean water velocity over samples from BOWL_AVG_FROM
+var bowl_avg_n := {}
+const BOWL_AVG_FROM := 30.0
 
 
 func _initialize() -> void:
@@ -78,6 +91,12 @@ func _initialize() -> void:
 			sand_n = int(a.substr(2))
 		if a.begins_with("spawn="):
 			sand_frames = int(a.substr(6))
+		if a.begins_with("cols="):
+			bowl_col_cols = int(a.substr(5))
+		if a.begins_with("rows="):
+			bowl_col_rows = int(a.substr(5))
+		if a == "nosand":
+			bowl_sand = false
 		if a.begins_with("move="):
 			sand_moving = int(a.substr(5))
 		if a.begins_with("shots="):
@@ -140,6 +159,8 @@ func _process(_delta: float) -> bool:
 		brush = _shaft_brush()
 	if scenario == "sink":
 		brush = _sink_brush()
+	if scenario == "bowl":
+		brush = _bowl_brush()
 	sim.frame(brush, 0)
 	if frame_i in shots:
 		RenderingServer.call_on_render_thread(_shot_rt.bind(frame_i))
@@ -147,6 +168,19 @@ func _process(_delta: float) -> bool:
 		pending = true
 		got = {}
 		RenderingServer.call_on_render_thread(_request.bind(frame_i))
+	if frame_i >= max_frames and scenario == "bowl" and not bowl_avg_n.is_empty():
+		# Time-averaged flow from BOWL_AVG_FROM: vx,vy per 20 px cell in px/s (a steady loop
+		# survives the average, wandering eddies don't).
+		for gy in int(SimParams.WORLD_SIZE.y / 20.0):
+			var row := ""
+			for gx in int(SimParams.WORLD_SIZE.x / 20.0):
+				var g := Vector2i(gx, gy)
+				if not bowl_avg_n.has(g):
+					row += "      ."
+					continue
+				var m: Vector2 = bowl_avg_v[g] / float(bowl_avg_n[g])
+				row += "%+3d,%+3d" % [roundi(m.x), roundi(m.y)]
+			print("BOWLAVG ", row)
 	if frame_i >= max_frames:
 		print("done after %d frames, live %d" % [frame_i, sim.live_count])
 		sim.shutdown()
@@ -230,6 +264,159 @@ func _sink_brush() -> Dictionary:
 		brush.cols = SimParams.BENCH_COLS
 		brush.pos = Vector2((SimParams.WORLD_SIZE.x - SimParams.BENCH_COLS * SimParams.SPACING) * 0.5, 8.0)
 	return brush
+
+
+const BOWL_WATER := 300
+const BOWL_FLOOR_ROWS := 16
+var bowl_col_cols := 75  # from "cols=N": width of each sand column, in particles
+var bowl_col_rows := 100  # from "rows=N"; cols=110 rows=60 slumps into gentle slopes
+
+
+func _bowl_brush() -> Dictionary:
+	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": 0.0,
+			"material": sand, "count": 0, "cols": 1}
+	var w := SimParams.WORLD_SIZE
+	var floor_top := w.y - 1.0 - BOWL_FLOOR_ROWS * SimParams.SPACING
+	var col_w := bowl_col_cols * SimParams.SPACING
+	if frame_i <= 3 and not bowl_sand:
+		return brush
+	if frame_i == 1:
+		brush.op = ParticleSim.BRUSH_BLOCK
+		brush.cols = int(w.x / SimParams.SPACING) - 1
+		brush.count = brush.cols * BOWL_FLOOR_ROWS
+		brush.pos = Vector2(1.0, floor_top)
+	elif frame_i == 2 or frame_i == 3:
+		brush.op = ParticleSim.BRUSH_BLOCK
+		brush.cols = bowl_col_cols
+		brush.count = bowl_col_cols * bowl_col_rows
+		brush.pos = Vector2(1.0 if frame_i == 2 else w.x - 1.0 - col_w,
+				floor_top - 2.0 - bowl_col_rows * SimParams.SPACING)
+	elif frame_i >= BOWL_WATER and (frame_i - BOWL_WATER) % 30 == 0 and frame_i <= BOWL_WATER + 60:
+		brush.op = ParticleSim.BRUSH_BLOCK
+		brush.material = water
+		brush.count = 9000
+		brush.cols = SimParams.BENCH_COLS
+		brush.pos = Vector2((w.x - SimParams.BENCH_COLS * SimParams.SPACING) * 0.5, 8.0)
+	return brush
+
+
+func _bowl_stats(b: Dictionary, t: float) -> void:
+	var sand_cells := {}
+	var sand_n := 0
+	var sand_speed := 0.0
+	var sand_moving := 0
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0 or (fl & 0xFF) != sand:
+			continue
+		sand_n += 1
+		var sv := Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4)).length()
+		sand_speed += sv
+		if sv > 1.0:
+			sand_moving += 1
+		sand_cells[Vector2i(int(b.pos.decode_float(i * 8) / 2.0), int(b.pos.decode_float(i * 8 + 4) / 2.0))] = true
+	var n := 0
+	var near_n := 0
+	var near_speed := 0.0
+	var bulk_speed := 0.0
+	var fast := 0
+	var cell_v := {}
+	var cell_n := {}
+	var cell_near := {}
+	var bed_n := 0
+	var bed_speed := 0.0
+	var bed_vy := 0.0
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0 or (fl & 0xFF) != water:
+			continue
+		var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		var v := Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4))
+		n += 1
+		if v.length() > 3.0:
+			fast += 1
+		var c := Vector2i(int(p.x / 2.0), int(p.y / 2.0))
+		var near := false
+		for dy in range(-3, 4):
+			for dx in range(-3, 4):
+				if sand_cells.has(c + Vector2i(dx, dy)):
+					near = true
+					break
+			if near:
+				break
+		var sand_around := 0
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				if sand_cells.has(c + Vector2i(dx, dy)):
+					sand_around += 1
+		if sand_around >= 6:
+			bed_n += 1
+			bed_speed += v.length()
+			bed_vy += v.y
+		if near:
+			near_n += 1
+			near_speed += v.length()
+		else:
+			bulk_speed += v.length()
+		var g := Vector2i(int(p.x / 20.0), int(p.y / 20.0))
+		cell_v[g] = cell_v.get(g, Vector2.ZERO) + v
+		cell_n[g] = cell_n.get(g, 0) + 1
+		if near:
+			cell_near[g] = true
+	if n == 0:
+		print("BOWL t=%.2f sand=%d sand_speed=%.2f (no water yet)" % [t, sand_n, sand_speed / maxi(sand_n, 1)])
+		return
+	# Coherent flow: |mean v| per 20 px cell with at least 20 water particles.
+	var flow_near := 0.0
+	var flow_near_n := 0
+	var flow_bulk := 0.0
+	var flow_bulk_n := 0
+	var flow_max := 0.0
+	var flow_max_at := Vector2i.ZERO
+	for g in cell_n:
+		if cell_n[g] < 20:
+			continue
+		var m: float = (cell_v[g] / float(cell_n[g])).length()
+		if cell_near.has(g):
+			flow_near += m
+			flow_near_n += 1
+		else:
+			flow_bulk += m
+			flow_bulk_n += 1
+		if m > flow_max:
+			flow_max = m
+			flow_max_at = g
+	print("BOWL t=%.2f water=%d near_sand=%d speed near=%.2f bulk=%.2f fast(>3)=%d | flow near=%.2f (%d cells) bulk=%.2f (%d) max=%.1f at (%d,%d) px | in bed=%d speed=%.2f vy=%.2f | sand=%d speed=%.2f moving(>1)=%d" % [
+			t, n, near_n, near_speed / maxi(near_n, 1), bulk_speed / maxi(n - near_n, 1), fast,
+			flow_near / maxi(flow_near_n, 1), flow_near_n, flow_bulk / maxi(flow_bulk_n, 1), flow_bulk_n,
+			flow_max, flow_max_at.x * 20 + 10, flow_max_at.y * 20 + 10,
+			bed_n, bed_speed / maxi(bed_n, 1), bed_vy / maxi(bed_n, 1), sand_n, sand_speed / maxi(sand_n, 1), sand_moving])
+	bowl_samples += 1
+	if t >= BOWL_AVG_FROM:
+		for g in cell_n:
+			if cell_n[g] >= 20:
+				bowl_avg_v[g] = bowl_avg_v.get(g, Vector2.ZERO) + cell_v[g] / float(cell_n[g])
+				bowl_avg_n[g] = bowl_avg_n.get(g, 0) + 1
+	if bowl_samples % 10 == 0:
+		# Flow map: per 20 px cell, the mean water velocity as an arrow and |v| in px/s
+		# ('.' under 1, '#' sand-only, ' ' empty).
+		var rows := PackedStringArray()
+		for gy in int(SimParams.WORLD_SIZE.y / 20.0):
+			var row := ""
+			for gx in int(SimParams.WORLD_SIZE.x / 20.0):
+				var g := Vector2i(gx, gy)
+				if cell_n.get(g, 0) < 20:
+					row += "  ."
+					continue
+				var m: Vector2 = cell_v[g] / float(cell_n[g])
+				if m.length() < 1.0:
+					row += "  ."
+					continue
+				var arrows := ["→", "↘", "↓", "↙", "←", "↖", "↑", "↗"]
+				var a: String = arrows[int(round(m.angle() / (PI / 4.0))) % 8]
+				row += "%s%2d" % [a, mini(int(m.length()), 99)]
+			rows.append(row)
+		print("BOWLMAP t=%.2f\n%s" % [t, "\n".join(rows)])
 
 
 func _sink_stats(b: Dictionary, t: float) -> void:
@@ -356,6 +543,9 @@ func _analyse(b: Dictionary, f: int) -> void:
 		return
 	if scenario == "sink":
 		_sink_stats(b, t)
+		return
+	if scenario == "bowl":
+		_bowl_stats(b, t)
 		return
 	var xs := PackedFloat32Array()
 	var n := 0

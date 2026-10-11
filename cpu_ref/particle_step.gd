@@ -239,12 +239,13 @@ func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: Packed
 	var grad_i := Vector2(wall.y, wall.z) / rest_density
 	var grad_sum := 0.0
 	for j in nb:
+		if _class(mat[j]) != LIQUID:  # powder is left out: water fills a sand bed's pores (liquid.glslinc)
+			continue
 		var rv := pred[i] - pred[j]
 		density += poly6(rv.length_squared(), h)
 		var g := spiky_grad(rv, h, i, j) / rest_density
 		grad_i += g
-		if _class(mat[j]) == LIQUID:
-			grad_sum += g.length_squared()
+		grad_sum += g.length_squared()
 	var c := density / rest_density - 1.0
 	return -c / (grad_sum + grad_i.length_squared() + SimParams.LAMBDA_EPS)
 
@@ -254,9 +255,10 @@ func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lamb
 	var wall := wall_density(pred[i], h, rest_density, world_size)
 	var d := lambda[i] * Vector2(wall.y, wall.z)
 	for j in nb:
+		if _class(mat[j]) != LIQUID:
+			continue
 		var rv := pred[i] - pred[j]
-		var lj := lambda[j] if _class(mat[j]) == LIQUID else 0.0
-		d += (lambda[i] + lj + scorr(rv.length_squared(), h, dt)) * spiky_grad(rv, h, i, j)
+		d += (lambda[i] + lambda[j] + scorr(rv.length_squared(), h, dt)) * spiky_grad(rv, h, i, j)
 	return d / rest_density
 
 

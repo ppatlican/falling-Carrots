@@ -1,10 +1,17 @@
 // Behaviour class: LIQUID. PBF density constraint (Macklin & Mueller 2013).
 // Mirror: cpu_ref/particle_step.gd _lambda / _liquid_delta / _xsph.
 // All indices are sorted indices (see common.glslinc).
-// Density is normalised (1.0 = rest). Every neighbour adds to density, so liquids
-// are pushed out of powder too, but only liquid neighbours move with the constraint.
-// The constraint only pushes apart (C >= 0), which keeps free surfaces stable.
+// Density is normalised (1.0 = rest). Only liquid neighbours count toward it and move with
+// the constraint. The constraint only pushes apart (C >= 0), which keeps free surfaces stable.
 // Walls count toward density (wall_density).
+//
+// Powder is left out: water fills the pores of a sand bed, and the powder contact
+// (powder.glslinc, POWDER_LIQUID_SHARE) keeps it off the grains. Counting the grains,
+// which pack to ~1.4x the water's rest density, made every water particle at a sand bed
+// over-dense: it pushed against the bed each step, ~1000 surface grains never slept, pore
+// water drained through the bed at ~9 px/s, and a pool in a sand bowl circulated at
+// ~8 px/s forever, with jets of 20-30 px/s up the slopes (water_feel_probe bowl; owner saw
+// flows under the surface). Weighting the grains by 0.7 still filled the pores (no change).
 //
 // PBF only holds water locally: a few Jacobi iterations can't build the pressure that
 // grows with depth. That comes from the density projection grid (hydro.glslinc), whose
@@ -69,13 +76,11 @@ float liquid_lambda(uint t) {
 		if (j == t) continue;
 		vec2 rv = pt - s_pred[j];
 		float r2 = dot(rv, rv);
-		if (r2 >= params.h * params.h) continue;
+		if (r2 >= params.h * params.h || s_class(j) != CLASS_LIQUID) continue;
 		density += poly6(r2);
 		vec2 g = spiky_grad(rv, t, j) / params.rest_density;
 		grad_t += g;
-		if (s_class(j) == CLASS_LIQUID) {
-			grad_sum += dot(g, g);
-		}
+		grad_sum += dot(g, g);
 	} END_NEIGHBOURS
 	float c = density / params.rest_density - 1.0;
 	return min(-c / (grad_sum + dot(grad_t, grad_t) + params.lambda_eps), 0.0);
@@ -92,9 +97,8 @@ vec2 liquid_delta(uint t) {
 		if (j == t) continue;
 		vec2 rv = pt - s_pred[j];
 		float r2 = dot(rv, rv);
-		if (r2 >= params.h * params.h) continue;
-		float lj = s_class(j) == CLASS_LIQUID ? lambda[j] : 0.0;
-		d += (lt + lj + scorr(r2)) * spiky_grad(rv, t, j);
+		if (r2 >= params.h * params.h || s_class(j) != CLASS_LIQUID) continue;
+		d += (lt + lambda[j] + scorr(r2)) * spiky_grad(rv, t, j);
 	} END_NEIGHBOURS
 	return d / params.rest_density;
 }
