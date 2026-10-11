@@ -123,8 +123,12 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	var delta := PackedVector2Array()
 	delta.resize(n)
 	for i in n:
-		delta[i] = _hydro_delta(pred[i], phi, hydro_p, dt).limit_length(0.5 * SimParams.SPACING) \
-				if _class(mat[i]) == LIQUID else Vector2.ZERO
+		if _class(mat[i]) != LIQUID:
+			continue
+		var d := _hydro_delta(pred[i], phi, hydro_p, dt)
+		if d.y < 0.0 and _hydro_hangs(i, pred, mat, phi, neighbours[i]):
+			d.y = 0.0
+		delta[i] = d.limit_length(0.5 * SimParams.SPACING)
 	for i in n:
 		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i])
 
@@ -428,6 +432,41 @@ func _hydro_delta(x: Vector2, phi: PackedVector2Array, p: PackedFloat32Array, dt
 			_hydro_p_sample(x + Vector2(e, 0.0), phi, p) - _hydro_p_sample(x - Vector2(e, 0.0), phi, p),
 			_hydro_p_sample(x + Vector2(0.0, e), phi, p) - _hydro_p_sample(x - Vector2(0.0, e), phi, p)) / (2.0 * e)
 	return -grad * dt * dt
+
+
+## Bilinear powder density over rest at x, clamped at the grid edge (hydro_powder_sample).
+func _hydro_powder_sample(x: Vector2, phi: PackedVector2Array) -> float:
+	var size := hydro_size(world_size)
+	var g := x / hydro_cell_size() - Vector2(0.5, 0.5)
+	var b := Vector2i(g.floor())
+	var f := g - Vector2(b)
+	var v := PackedFloat32Array()
+	for o in [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)]:
+		var c: Vector2i = (b + o).clamp(Vector2i.ZERO, size - Vector2i.ONE)
+		v.append(phi[c.y * size.x + c.x].y)
+	return lerpf(lerpf(v[0], v[1], f.x), lerpf(v[2], v[3], f.x), f.y)
+
+
+## True when liquid particle i hangs over air next to sand: powder in its coarse cell and
+## no particle centre in the box right below it, with a grain under that box (hydro_hangs).
+func _hydro_hangs(i: int, pred: PackedVector2Array, mat: PackedInt32Array, phi: PackedVector2Array,
+		nb: PackedInt32Array) -> bool:
+	var pt := pred[i]
+	if world_size.y - pt.y < SimParams.HYDRO_HANG_DEPTH \
+			or _hydro_powder_sample(pt, phi) <= SimParams.HYDRO_HANG_POWDER:
+		return false
+	var grain := false
+	for j in nb:
+		if j == i:
+			continue
+		var rv := pred[j] - pt
+		if rv.y <= 0.0:
+			continue
+		if rv.y <= SimParams.HYDRO_HANG_DEPTH and absf(rv.x) <= SimParams.HYDRO_HANG_HALF:
+			return false
+		grain = grain or (_class(mat[j]) == POWDER and rv.y <= SimParams.HYDRO_HANG_GRAIN_DEPTH \
+				and absf(rv.x) <= SimParams.HYDRO_HANG_GRAIN_HALF)
+	return grain
 
 
 ## Density a wall at distance d adds (poly6 over the half-plane past it, at rest

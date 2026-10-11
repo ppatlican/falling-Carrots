@@ -78,6 +78,15 @@ const HYDRO_POWDER_FULL := 0.9
 ## share of a cell the surface may sit from a liquid cell's centre.
 const HYDRO_SURFACE := 0.5
 const HYDRO_THETA_MIN := 0.1
+## A liquid particle hanging over air next to sand gets no upward grid push: powder density
+## (bilinear, over rest) above which it applies, the box below the particle (depth, half
+## width, px) that must hold no particle centre, and the box in which a grain must lie
+## under it (hydro_hangs in hydro.glslinc).
+const HYDRO_HANG_POWDER := 0.05
+const HYDRO_HANG_DEPTH := 2.5
+const HYDRO_HANG_HALF := 1.5
+const HYDRO_HANG_GRAIN_DEPTH := 4.0
+const HYDRO_HANG_GRAIN_HALF := 2.0
 const HYDRO_SWEEPS := 32
 
 ## Brush: radius in px, and the fraction of the circle's empty capacity added per frame.
