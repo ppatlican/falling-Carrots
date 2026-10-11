@@ -126,8 +126,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		if _class(mat[i]) != LIQUID:
 			continue
 		var d := _hydro_delta(pred[i], phi, hydro_p, dt)
-		if d.y < 0.0 and _hydro_hangs(i, pred, mat, phi, neighbours[i]):
-			d.y = 0.0
+		if d.y < 0.0:
+			d.y *= 1.0 - _hydro_hang_share(i, pred, mat, phi, neighbours[i])
 		delta[i] = d.limit_length(0.5 * SimParams.SPACING)
 	for i in n:
 		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i])
@@ -447,26 +447,38 @@ func _hydro_powder_sample(x: Vector2, phi: PackedVector2Array) -> float:
 	return lerpf(lerpf(v[0], v[1], f.x), lerpf(v[2], v[3], f.x), f.y)
 
 
-## True when liquid particle i hangs over air next to sand: powder in its coarse cell and
-## no particle centre in the box right below it, with a grain under that box (hydro_hangs).
-func _hydro_hangs(i: int, pred: PackedVector2Array, mat: PackedInt32Array, phi: PackedVector2Array,
-		nb: PackedInt32Array) -> bool:
+## Share of the grid's upward push liquid particle i loses because it hangs over air next
+## to sand: all of it when one of three rays into its lower half has no particle near along
+## it and a grain past that (hydro_hang_share).
+func _hydro_hang_share(i: int, pred: PackedVector2Array, mat: PackedInt32Array, phi: PackedVector2Array,
+		nb: PackedInt32Array) -> float:
 	var pt := pred[i]
 	if world_size.y - pt.y < SimParams.HYDRO_HANG_DEPTH \
 			or _hydro_powder_sample(pt, phi) <= SimParams.HYDRO_HANG_POWDER:
-		return false
-	var grain := false
+		return 0.0
+	var rays: Array[Vector2] = [Vector2(-1, 1).normalized(), Vector2(0, 1), Vector2(1, 1).normalized()]
+	var blocked := [false, false, false]
+	var grain := [false, false, false]
+	var h := SimParams.H
 	for j in nb:
 		if j == i:
 			continue
 		var rv := pred[j] - pt
-		if rv.y <= 0.0:
+		if rv.y <= 0.0 or rv.length_squared() >= h * h:
 			continue
-		if rv.y <= SimParams.HYDRO_HANG_DEPTH and absf(rv.x) <= SimParams.HYDRO_HANG_HALF:
-			return false
-		grain = grain or (_class(mat[j]) == POWDER and rv.y <= SimParams.HYDRO_HANG_GRAIN_DEPTH \
-				and absf(rv.x) <= SimParams.HYDRO_HANG_GRAIN_HALF)
-	return grain
+		var powder := _class(mat[j]) == POWDER
+		for r in 3:
+			var along := rv.dot(rays[r])
+			var across := absf(rv.cross(rays[r]))
+			if along > 0.0 and along <= SimParams.HYDRO_HANG_DEPTH and across <= SimParams.HYDRO_HANG_HALF:
+				blocked[r] = true
+			elif powder and along > SimParams.HYDRO_HANG_DEPTH and along <= SimParams.HYDRO_HANG_GRAIN_DEPTH \
+					and across <= SimParams.HYDRO_HANG_GRAIN_HALF:
+				grain[r] = true
+	for r in 3:
+		if grain[r] and not blocked[r]:
+			return 1.0
+	return 0.0
 
 
 ## Density a wall at distance d adds (poly6 over the half-plane past it, at rest
