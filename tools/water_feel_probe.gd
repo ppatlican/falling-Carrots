@@ -23,6 +23,16 @@
 ##   sink   40k water as four +10k blocks 30 frames apart, then +10k sand at frame SINK_SAND
 ##          (as the owner does): sand grains that are still (< 0.5 px/s) with water right
 ##          under them are held up by water, a raft (should be 0), and the sand's mean depth
+##   sandpour  the owner's sand poured into a pool: 30k water as three +10k blocks 30 frames
+##          apart, then the sand brush (default radius) held at y 60 over the pool from frame
+##          POUR_FROM to POUR_TO, still at x 320 (move=0) or swept over x 260..380 at 2 px per
+##          frame (move=1, default), so the sand builds a column under the water; pour_y=Y
+##          moves the brush (under the surface, y > ~175, it draws sand into the water), and
+##          move=2 strokes it up and down at x 320 between y 340 and 140: the sink stats and
+##          POCKETS
+##   soak   a dry pile built with the moving brush (the erase pile, frames 1-ERASE_PILE),
+##          then 3 x +10k water 30 frames apart from SOAK_WATER: water poured over dry sand
+##          that settled with voids held open: the sink stats and POCKETS
 ##   bowl   a sand floor and two sand columns at the walls that slump into slopes, then 3 x 9000
 ##          water 30 frames apart from BOWL_WATER (the owner's pool in a sand bowl): water speed
 ##          next to sand (a grain within 6 px) and away from it, and coherent flow, the length
@@ -41,10 +51,16 @@
 ##          then water blocks 30 frames apart from BOWL_WATER (water=N in total, default
 ##          32000) until the peaks (y ~190) are ~70 px under: the bowl's stats and dumps, and at the end MOUNDS, the sand top and water
 ##          surface y per 20 px column
+##   POCKETS (sink and bowl, every sample): water held inside the sand bed. enclosed: water
+##          with sand above, below (or the floor) and on both sides within 24 px (the water
+##          held in the bed); pocket: enclosed water with sand in at most 5 of the 25 2 px
+##          cells around it (open water inside the bed, not pore water); groups: connected
+##          pockets of 6+ 2 px cells, and the biggest
 ##   hover  the surface pool: water particles in the loose fringe above the dense surface
 ##          (the first 2 px row at least half full), and their mean vy (> 0 is falling)
 ## Every sample (every=N frames, default 3): one line per scenario, see _analyse.
-##   shots=F1,F2,...  save the rendered frame at these frames as user://feel_<scenario>_<F>.png
+##   shots=F1,F2,...  save the rendered frame at these frames as user://feel_<scenario><tag>_<F>.png
+##   tag=T  added to the shot file names, so runs in parallel don't overwrite each other
 extends SceneTree
 
 const ComputeContext = preload("res://gpu/compute_context.gd")
@@ -75,6 +91,8 @@ var landed := false
 var last_front := 0.0
 var last_front_t := 0.0
 var shots := PackedInt32Array()
+var shot_tag := ""
+var pour_y := 60.0
 var sand_r := 1.5
 var sand_n := 2
 var sand_frames := 20
@@ -118,6 +136,10 @@ func _initialize() -> void:
 			bowl_sand = false
 		if a.begins_with("move="):
 			sand_moving = int(a.substr(5))
+		if a.begins_with("pour_y="):
+			pour_y = float(a.substr(7))
+		if a.begins_with("tag="):
+			shot_tag = a.substr(4)
 		if a.begins_with("shots="):
 			for v in a.substr(6).split(","):
 				shots.append(int(v))
@@ -181,6 +203,10 @@ func _process(_delta: float) -> bool:
 		brush = _shaft_brush()
 	if scenario == "sink":
 		brush = _sink_brush()
+	if scenario == "sandpour":
+		brush = _sandpour_brush()
+	if scenario == "soak":
+		brush = _soak_brush()
 	if scenario == "bowl":
 		brush = _bowl_brush()
 	sim.frame(brush, 0)
@@ -285,6 +311,47 @@ func _sink_brush() -> Dictionary:
 	if (frame_i - 1) % 30 == 0 and frame_i <= 91 or frame_i == SINK_SAND:
 		brush.op = ParticleSim.BRUSH_BLOCK
 		brush.material = sand if frame_i == SINK_SAND else water
+		brush.count = SimParams.BENCH_BLOCK
+		brush.cols = SimParams.BENCH_COLS
+		brush.pos = Vector2((SimParams.WORLD_SIZE.x - SimParams.BENCH_COLS * SimParams.SPACING) * 0.5, 8.0)
+	return brush
+
+
+const POUR_FROM := 300
+const POUR_TO := 1200
+
+
+func _sandpour_brush() -> Dictionary:
+	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": SimParams.BRUSH_RADIUS,
+			"material": water, "count": 0, "cols": 1}
+	if (frame_i - 1) % 30 == 0 and frame_i <= 61:
+		brush.op = ParticleSim.BRUSH_BLOCK
+		brush.count = SimParams.BENCH_BLOCK
+		brush.cols = SimParams.BENCH_COLS
+		brush.pos = Vector2((SimParams.WORLD_SIZE.x - SimParams.BENCH_COLS * SimParams.SPACING) * 0.5, 8.0)
+	elif frame_i >= POUR_FROM and frame_i <= POUR_TO:
+		var ph := (frame_i * 2) % 240
+		brush.op = ParticleSim.BRUSH_CIRCLE
+		brush.material = sand
+		brush.pos = Vector2(260.0 + (ph if ph < 120 else 240 - ph) if sand_moving == 1 else 320.0, pour_y)
+		if sand_moving == 2:
+			# A vertical stroke: up from the floor through the pool and back, 1 px per frame.
+			var pv := (frame_i - POUR_FROM) % 400
+			brush.pos = Vector2(320.0, 340.0 - float(pv if pv < 200 else 400 - pv))
+		brush.count = SimParams.brush_rate()
+	return brush
+
+
+const SOAK_WATER := 600
+
+
+func _soak_brush() -> Dictionary:
+	if frame_i <= ERASE_PILE:
+		return _erase_brush()
+	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": 0.0,
+			"material": water, "count": 0, "cols": 1}
+	if frame_i >= SOAK_WATER and (frame_i - SOAK_WATER) % 30 == 0 and frame_i <= SOAK_WATER + 60:
+		brush.op = ParticleSim.BRUSH_BLOCK
 		brush.count = SimParams.BENCH_BLOCK
 		brush.cols = SimParams.BENCH_COLS
 		brush.pos = Vector2((SimParams.WORLD_SIZE.x - SimParams.BENCH_COLS * SimParams.SPACING) * 0.5, 8.0)
@@ -554,6 +621,85 @@ func _bowl_pressure_print() -> void:
 		print("BOWLP %2d %s" % [gy, row])
 		print("BOWLF %2d %s" % [gy, rowf])
 
+## Water held inside a sand bed (see POCKETS in the header): enclosed water has sand above
+## it, below it (or the floor) and on both sides within POCKET_REACH 2 px cells. A pocket
+## particle is enclosed water with at most POCKET_SAND of the 25 2 px cells around it (5x5)
+## holding sand: open water inside the bed, not pore water. Water ignores sand in its
+## density, so pore water sits at full density among the grains (~20 water neighbours, as
+## in open water) and only the sand around tells the two apart.
+## Pockets: 4-connected groups of pocket cells of at least POCKET_MIN cells.
+const POCKET_REACH := 12
+const POCKET_SAND := 5
+const POCKET_MIN := 6
+
+
+func _pocket_stats(b: Dictionary, t: float) -> void:
+	var sand_cells := {}
+	var wps := PackedVector2Array()
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) == 0:
+			continue
+		var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		var c := Vector2i(int(p.x / 2.0), int(p.y / 2.0))
+		if (fl & 0xFF) == sand:
+			sand_cells[c] = true
+		elif (fl & 0xFF) == water:
+			wps.append(p)
+	var floor_cell := int(SimParams.WORLD_SIZE.y / 2.0) - 1
+	var enclosed := 0
+	var pocket := 0
+	var hist := PackedInt32Array()
+	hist.resize(6)
+	var pocket_cells := {}
+	for p in wps:
+		var c := Vector2i(int(p.x / 2.0), int(p.y / 2.0))
+		var up := false
+		var down := c.y + POCKET_REACH >= floor_cell
+		var left := false
+		var right := false
+		for r in range(1, POCKET_REACH + 1):
+			for o in [-1, 0, 1]:
+				up = up or sand_cells.has(c + Vector2i(o, -r))
+				down = down or sand_cells.has(c + Vector2i(o, r))
+				left = left or sand_cells.has(c + Vector2i(-r, o))
+				right = right or sand_cells.has(c + Vector2i(r, o))
+		if not (up and down and left and right):
+			continue
+		enclosed += 1
+		var ns := 0
+		for dy in range(-2, 3):
+			for dx in range(-2, 3):
+				if sand_cells.has(c + Vector2i(dx, dy)):
+					ns += 1
+		hist[mini(ns / 5, 5)] += 1
+		if ns <= POCKET_SAND:
+			pocket += 1
+			pocket_cells[c] = true
+	# Connected groups of pocket cells.
+	var seen := {}
+	var groups := 0
+	var biggest := 0
+	for c0 in pocket_cells:
+		if seen.has(c0):
+			continue
+		var stack := [c0]
+		seen[c0] = true
+		var size := 0
+		while not stack.is_empty():
+			var c: Vector2i = stack.pop_back()
+			size += 1
+			for o in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var nc: Vector2i = c + o
+				if pocket_cells.has(nc) and not seen.has(nc):
+					seen[nc] = true
+					stack.append(nc)
+		if size >= POCKET_MIN:
+			groups += 1
+			biggest = maxi(biggest, size)
+	print("POCKETS t=%.2f enclosed=%d pocket(<=%d sand)=%d groups(>=%d cells)=%d biggest=%d | sand cells of 25 around 0-4,5-9,10-14,15-19,20-24,25: %s" % [
+			t, enclosed, POCKET_SAND, pocket, POCKET_MIN, groups, biggest, str(hist)])
+
 
 func _sink_stats(b: Dictionary, t: float) -> void:
 	var wet := {}
@@ -645,7 +791,7 @@ func _shot_rt(f: int) -> void:
 	var data: PackedByteArray = ctx.rd.texture_get_data(ctx.texture("image"), 0)
 	var size := Vector2i(SimParams.WORLD_SIZE)
 	var img := Image.create_from_data(size.x, size.y, false, Image.FORMAT_RGBA8, data)
-	var path := "user://feel_%s_%d.png" % [scenario, f]
+	var path := "user://feel_%s%s_%d.png" % [scenario, shot_tag, f]
 	img.save_png(path)
 	print("SHOT ", ProjectSettings.globalize_path(path))
 
@@ -683,11 +829,13 @@ func _analyse(b: Dictionary, f: int) -> void:
 	if scenario == "shaft":
 		_shaft_stats(b, t)
 		return
-	if scenario == "sink":
+	if scenario == "sink" or scenario == "sandpour" or scenario == "soak":
 		_sink_stats(b, t)
+		_pocket_stats(b, t)
 		return
 	if scenario == "bowl":
 		_bowl_stats(b, t)
+		_pocket_stats(b, t)
 		return
 	var xs := PackedFloat32Array()
 	var n := 0

@@ -284,6 +284,22 @@ float hydro_p_sample(vec2 x) {
 	return max(mix(mix(p00, p10, f.x), mix(p01, p11, f.x), f.y), 0.0);
 }
 
+// Share of the space at x taken by powder, bilinear over the coarse cells' powder
+// density at its packing under water (HYDRO_POWDER_FULL), so a settled bed reads ~1 and
+// open water 0. The draw uses it to tell pore liquid from open liquid (render_points).
+float hydro_powder_fill(vec2 x) {
+	ivec2 size = hydro_size();
+	vec2 g = x / hydro_cell_size() - 0.5;
+	ivec2 b = ivec2(floor(g));
+	vec2 f = g - vec2(b);
+	float v[4];
+	for (int k = 0; k < 4; k++) {
+		ivec2 c = clamp(b + ivec2(k & 1, k >> 1), ivec2(0), size - ivec2(1));
+		v[k] = hydro_phi[hydro_index(c)].y;
+	}
+	return mix(mix(v[0], v[1], f.x), mix(v[2], v[3], f.x), f.y) * HYDRO_POWDER_FULL;
+}
+
 // Position change this step from the pressure: -grad p * dt^2 (central difference over
 // half a coarse cell).
 vec2 hydro_delta(vec2 x) {
