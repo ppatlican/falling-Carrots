@@ -3,9 +3,11 @@
 
 // Brush, after add or erase (one thread): commit the spawn to the free count, reset the
 // circle brush's claim counter, and
-// refresh the live count that later passes and the capacity meter read.
+// refresh the live count that later passes and the capacity meter read. A new body
+// (BRUSH_BODY) gets its record: member range, all members live, frame at the spawn centroid
+// with no rotation. The body pass fills in the rest during the first solver iteration.
 
-// common.glslinc stamp: Params 108 B, v15. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v16. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {
@@ -18,6 +20,14 @@ void main() {
 		free_count -= min(min(counters[2], params.brush_count), free_count);
 	} else if (params.brush_op == BRUSH_BLOCK) {
 		free_count -= min(params.brush_count, free_count);
+	} else if (params.brush_op == BRUSH_BODY) {
+		// As many members as brush_spawn placed (fewer than asked only if the pool is full).
+		uint n = min(params.brush_count, free_count);
+		free_count -= n;
+		uint id = params.brush_material >> BODY_SHIFT;
+		bodies[id].info = uvec4(params.body_first, n, n, 0u);
+		bodies[id].frame = vec4(params.brush_pos, 1.0, 0.0);
+		bodies[id].rest = vec4(0.0);
 	}
 	counters[2] = 0u;
 	counters[0] = free_count;

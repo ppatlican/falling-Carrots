@@ -1,6 +1,6 @@
 # GPU probe, timing and screenshots
 
-How to measure the GPU sim: run the probe, read it, time passes, and capture what the owner sees. Arguments and output fields are listed in the header of `tools/gpu_probe.gd`; this file covers how to use them. For how water and sand move in the owner's scenes (fall, dam, surface, pour, sandair, erase, shaft, sink, bowl, mounds, hover), use `tools/water_feel_probe.gd`; its scenarios and outputs are in its header, and it runs the same way.
+How to measure the GPU sim: run the probe, read it, time passes, and capture what the owner sees. Arguments and output fields are listed in the header of `tools/gpu_probe.gd`; this file covers how to use them. For how water and sand move in the owner's scenes (fall, dam, surface, pour, sandair, erase, shaft, sink, bowl, mounds, hover), use `tools/water_feel_probe.gd`; for rigid and soft bodies (the `tests/test_bodies.gd` scenarios on the GPU, a box on sand, and timing loads with big and many bodies), use `tools/body_probe.gd`. Their scenarios and outputs are in their headers, and they run the same way.
 
 ## Running variants
 - One tmp copy per variant (`$CLAUDE_JOB_DIR/tmp/wc/<name>`), each imported once. Up to two probes can run in parallel as separate windows (see Timing passes); a 2400-frame run takes a few minutes.

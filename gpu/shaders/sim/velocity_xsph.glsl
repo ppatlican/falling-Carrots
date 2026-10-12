@@ -5,7 +5,7 @@
 // (powder_liquid_drag), written to scratch so every particle reads its neighbours'
 // unmodified velocities.
 
-// common.glslinc stamp: Params 108 B, v15. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v16. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "liquid.glslinc"
 #include "powder.glslinc"

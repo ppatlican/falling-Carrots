@@ -157,7 +157,7 @@ func _initialize() -> void:
 	sand = table.id_of("sand")
 	print("feel probe scenario=%s frames=%d g=%.0f dt=%.5f" % [scenario, max_frames, SimParams.GRAVITY, SimParams.DT])
 	ctx = ComputeContext.new()
-	sim = ParticleSim.new(ctx, cap, config.solver_iterations, table, config.substeps)
+	sim = ParticleSim.new(ctx, cap, config.solver_iterations, table, config.substeps, config.body_cap)
 	sim.setup_finished.connect(_on_setup)
 	var err: String = sim.start()
 	if err != "":

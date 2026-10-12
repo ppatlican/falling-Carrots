@@ -1,12 +1,12 @@
 #[compute]
 #version 450
 
-// Render 4/4: draw each live powder grain as a 2x2 point, after the liquids, so sand
-// always covers the water in its pores. Drawn in one dispatch, the winner of each
-// overlapping pixel followed the cell sort, which changes every frame: a settled bed
-// under water flickered between sand and water on ~20% of its pixels.
+// Render 4/4: draw each live powder grain and body particle as a 2x2 point, after the
+// liquids, so sand always covers the water in its pores. Drawn in one dispatch, the
+// winner of each overlapping pixel followed the cell sort, which changes every frame: a
+// settled bed under water flickered between sand and water on ~20% of its pixels.
 
-// common.glslinc stamp: Params 108 B, v15. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v16. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "render.glslinc"
 
@@ -15,7 +15,7 @@ void main() {
 	if (!sorted_particle(t)) {
 		return;
 	}
-	if (s_class(t) == CLASS_POWDER) {
+	if (s_class(t) == CLASS_POWDER || s_class(t) == CLASS_CLUSTER) {
 		draw_point(s_pred[t], grain_color(s_material(t), sorted_ids[t]));
 	}
 }

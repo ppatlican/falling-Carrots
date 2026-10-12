@@ -12,9 +12,11 @@
 // (MAX_SEPARATION), was packed tighter each frame the brush was held: the blob expanded up
 // to the ceiling and hung there, 2655 of 5640 grains still in the air 1 s after a 1 s pour
 // would have landed them (water feel probe, sandair r=10 n=94 spawn=60 move=0).
+// Body (BRUSH_BODY, the body brush): like a block, but thread t takes body_spawn[t]'s position
+// and rest offset, puts the body id into mat_flags and its slot into the body's member range.
 // brush_finalize.glsl then lowers the free count. Mirror: cpu_ref/particle_pool.gd.
 
-// common.glslinc stamp: Params 108 B, v15. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v16. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Closest a new circle-brush particle may be to a live one, in rest spacings.
@@ -53,6 +55,12 @@ void main() {
 		// Square lattice at rest spacing, block_cols per row, growing downward.
 		p = params.brush_pos + vec2(float(t % params.block_cols), float(t / params.block_cols)) * params.spacing;
 		k = t;
+	} else if (params.brush_op == BRUSH_BODY) {
+		if (t >= wanted) {
+			return;
+		}
+		p = body_spawn[t].xy;
+		k = t;
 	} else {
 		uint side = brush_lattice_side(params.brush_radius, params.spacing);
 		if (t >= side * side) {
@@ -74,10 +82,17 @@ void main() {
 		}
 	}
 	uint slot = free_stack[free_count - 1u - k];
-	p = clamp_to_world(p, slot);
+	bool body = params.brush_op == BRUSH_BODY;
+	p = clamp_to_world(p, slot, body);
 
 	pos[slot] = p;
 	pred[slot] = p;
 	vel[slot] = vec2(0.0);
-	mat_flags[slot] = (params.brush_material & MAT_MASK) | ALIVE;
+	if (body) {
+		mat_flags[slot] = (params.brush_material & (MAT_MASK | (0xFFFFu << BODY_SHIFT))) | ALIVE;
+		rest_offset[slot] = body_spawn[t].zw;
+		body_members[params.body_first + t] = slot;
+	} else {
+		mat_flags[slot] = (params.brush_material & MAT_MASK) | ALIVE;
+	}
 }

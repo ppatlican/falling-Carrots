@@ -7,8 +7,8 @@
 ##               per iteration: lambda, delta, apply         (solve_*.glsl)
 ##               liquids: PBF density constraint (liquid.glslinc)
 ##               powders: frictional contacts   (powder.glslinc)
-##               bodies: contacts as powders, then shape matching (ADR 0002;
-##               CPU only until Milestone 3 step 3 adds them to the shaders)
+##               bodies: contacts as powders (powder.glslinc), then shape
+##               matching (body_match.glsl; ADR 0002)
 ##   velocity -> v = (pred - pos) / dt, drag, XSPH, commit   (velocity_*.glsl)
 ## Kernels are the 2D poly6 (density) and spiky (gradient) kernels.
 ## Density is normalised: rho_hat = sum(W) / rest_density, so 1.0 is rest.
@@ -300,7 +300,7 @@ func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lamb
 ## the rotation from it (kept when live < 2 or |A_pq| is near 0); then every live member
 ## moves toward its goal c + R(q - c0) by k = 1 - (1 - stiffness)^(dt * 60 / iterations),
 ## so stiffness is the share of the shape error removed per 1/60 s. Mirrored by the fused
-## body pass in Milestone 3 step 3 (one workgroup per body).
+## body pass, body_match.glsl (one workgroup per body).
 func _match_shapes(pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
 		rest: PackedVector2Array, bodies: Array, members: PackedInt32Array, dt: float, iterations: int) -> void:
 	for id in range(1, bodies.size()):
@@ -338,7 +338,8 @@ func _match_shapes(pred: PackedVector2Array, mat: PackedInt32Array, body: Packed
 			pred[m] += k * (goal - pred[m])
 
 
-## Makes one body of `material` from spawned positions (the body brush, Milestone 3 step 5):
+## Makes one body of `material` from spawned positions (the body brush, Milestone 3 step 5;
+## on the GPU, ParticleSim.make_body):
 ## appends its particles at rest, takes the lowest free body id, sets rest offsets from the
 ## positions (relative to their mean) and gives it a member range (first fit). Adds the body
 ## keys to state when missing:

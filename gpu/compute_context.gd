@@ -277,8 +277,9 @@ func get_timings() -> Array:
 
 ## Asynchronous readback, for debugging only. callback(data: PackedByteArray) runs
 ## later on the render thread. Never use buffer_get_data (it stalls the GPU).
-func readback_async_rt(buffer_name: String, callback: Callable) -> Error:
-	return rd.buffer_get_data_async(_buffers[buffer_name], callback)
+## size 0 reads to the end of the buffer.
+func readback_async_rt(buffer_name: String, callback: Callable, offset := 0, size := 0) -> Error:
+	return rd.buffer_get_data_async(_buffers[buffer_name], callback, offset, size)
 
 
 # --- Cleanup ----------------------------------------------------------------------

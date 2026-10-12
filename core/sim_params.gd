@@ -62,7 +62,7 @@ const LIQUID_KICK := 2.0
 ## Body particles (cluster solids, ADR 0002): the same cap, in units of GRAVITY * DT. A box
 ## spawned into the floor or pushed out of another body may leave at most this much faster.
 ## Shape matching still moves the particles; only the speed it leaves them is capped.
-## Mirror: velocity_update.glsl (Milestone 3 step 3).
+## Mirror: BODY_KICK in velocity_update.glsl.
 const BODY_KICK := 4.0
 
 ## Liquid density projection on a coarse grid (gpu/shaders/sim/hydro.glslinc): cell size

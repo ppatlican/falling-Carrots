@@ -11,6 +11,9 @@ var particle_cap: int = 50000
 var solver_iterations: int = 4
 ## Simulation substeps per frame (spec 2.6): each runs predict to velocity with dt / substeps.
 var substeps: int = 2
+## Highest body id (rigid and soft bodies, docs/adr/0002-cluster-solid-layout.md): ids are
+## 16 bits of a particle's flags, and each id has a 48-byte record on the GPU.
+var body_cap: int = 256
 ## Problems found while loading. Empty means the file was clean.
 var errors: PackedStringArray = []
 
@@ -34,6 +37,7 @@ func apply(data: Dictionary) -> void:
 	particle_cap = _read_int(data, "particle_cap", particle_cap, 1024, 4_000_000)
 	solver_iterations = _read_int(data, "solver_iterations", solver_iterations, 1, 16)
 	substeps = _read_int(data, "substeps", substeps, 1, 8)
+	body_cap = _read_int(data, "body_cap", body_cap, 1, 65535)
 
 
 func _read_int(data: Dictionary, key: String, fallback: int, lo: int, hi: int) -> int:

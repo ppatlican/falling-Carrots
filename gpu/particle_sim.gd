@@ -1,25 +1,28 @@
 ## GPU particle simulation (spec 2.1, 2.2, 2.6 steps 1-5 and 8).
 ##
 ## A fixed pool of `cap` particles with a free-list, a spatial hash rebuilt every
-## frame, PBF liquids and frictional powders, drawn as plain points into an
+## frame, PBF liquids, frictional powders and cluster solids (rigid and soft bodies by
+## shape matching, docs/adr/0002-cluster-solid-layout.md), drawn as plain points into an
 ## art-resolution texture shown through `texture` (a Texture2DRD).
 ##
 ## Passes per frame, each timed separately in the debug overlay. predict to velocity run
 ## once per substep, with dt = SimParams.DT / substeps (times summed over substeps):
-##   brush     add (spawn + finalize) or erase (erase + finalize)
+##   brush     add (spawn + finalize), erase (erase + finalize) or one body (make_body)
 ##   predict   gravity, predicted positions
 ##   hash      clear, count, 3-step prefix sum, scatter (copies state into cell order)
 ##   hydro     liquid density projection grid (splat, density, then all SOR sweeps in one
 ##             128-thread workgroup, hydro_solve)
 ##   solve     grid pressure push (pressure, apply), then
-##             solver_iterations x (lambda, delta, apply)
+##             solver_iterations x (lambda, delta, apply, then the bodies pass)
+##   bodies    shape matching, one 128-thread workgroup per body id (body_match); its own
+##             pass so its time shows separately, once after each iteration's apply
 ##   velocity  update, XSPH, commit
 ##   render    clear image, draw liquid points, then powder points on top
 ##
 ## The live particle count comes back through a 16-byte async readback each frame
 ## (SPEC 2.7). It lags a frame or two. The GPU enforces the cap on its own.
 ##
-## Main-thread methods: start(), frame(), request_clear(), request_check(), shutdown().
+## Main-thread methods: start(), frame(), make_body(), request_clear(), request_check(), shutdown().
 ## Methods ending in _rt run on the render thread.
 extends RefCounted
 
@@ -33,11 +36,12 @@ const KERNELS := [
 	"brush_spawn", "brush_erase", "brush_finalize", "predict",
 	"hash_clear", "hash_count", "scan_local", "scan_blocks", "scan_add", "hash_scatter",
 	"hydro_splat", "hydro_phi", "hydro_solve", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
+	"body_match",
 	"velocity_update", "velocity_xsph", "velocity_commit",
 	"render_clear", "render_points", "render_gap", "render_powder",
 ]
 ## Must match Params in common.glslinc.
-const PUSH_SIZE := 108
+const PUSH_SIZE := 124
 ## Prefix sum: 256 elements per workgroup, at most 256 workgroups (one scan_blocks group).
 const SCAN_BLOCK := 256
 const MAX_SCAN_BLOCKS := 256
@@ -46,6 +50,8 @@ const SCAN_SHARED_BYTES := 64 * 4
 ## memory (phi vec2 + p float each). Mirror: LOCAL_SIZE_X in hydro_solve.glsl,
 ## HYDRO_MAX_CELLS in hydro.glslinc.
 const HYDRO_SOLVE_THREADS := 128
+## body_match: threads in each body's workgroup. Mirror: LOCAL_SIZE_X in body_match.glsl.
+const BODY_THREADS := 128
 const HYDRO_MAX_CELLS := 1024
 const HYDRO_SHARED_BYTES := HYDRO_MAX_CELLS * 12
 
@@ -54,6 +60,12 @@ const BRUSH_NONE := 0
 const BRUSH_CIRCLE := 1
 const BRUSH_BLOCK := 2
 const BRUSH_ERASE := 3
+const BRUSH_BODY := 4
+## Bytes per body record (Body in common.glslinc), and the offset of its live count.
+const BODY_BYTES := 48
+const BODY_LIVE_OFFSET := 8
+## "made" of a body that hasn't spawned yet.
+const NOT_MADE := 1 << 62
 
 ## view_flags bits (VIEW_* in common.glslinc).
 const VIEW_HASH := 1
@@ -68,6 +80,10 @@ var texture := Texture2DRD.new()
 ## Live particles, from the latest counter readback.
 var live_count := 0
 var cap: int
+## Highest body id (config.json body_cap); records are 1..body_cap.
+var body_cap: int
+## Bodies in use (made and not yet found empty).
+var body_count := 0
 
 var _ctx
 var _iterations: int
@@ -81,11 +97,23 @@ var _frame := 0
 var _counter_in_flight := false
 var _clear_pending := false
 var _check: Dictionary = {}
+## Bodies as the CPU hands them out (ADR 0002): index = body id, 0 unused. Each
+## { "first", "count" (0 = free id), "made" (frame it spawned, NOT_MADE until then) }.
+## ParticleStep._first_fit allocates member ranges from these, as in the CPU reference.
+var _bodies: Array = []
+## Bodies waiting to spawn, one per frame: { "id", "material", "spawn" (bytes), "mean", "count" }.
+var _pending_bodies: Array = []
+## Ids found empty, whose GPU records are zeroed next frame.
+var _freed_ids := PackedInt32Array()
+var _body_check_wanted := false
+var _body_check_in_flight := false
 
 
-func _init(ctx, particle_cap: int, solver_iterations: int, material_table, substeps := 1) -> void:
+func _init(ctx, particle_cap: int, solver_iterations: int, material_table, substeps := 1, max_bodies := 256) -> void:
 	_ctx = ctx
 	cap = particle_cap
+	body_cap = max_bodies
+	_reset_bodies()
 	_iterations = solver_iterations
 	_substeps = maxi(1, substeps)
 	_material_bytes = material_table.pack_gpu()
@@ -110,7 +138,7 @@ func start() -> String:
 
 func _setup_rt(spirv: Dictionary) -> void:
 	var err: String = _ctx.check_limits_rt(ComputeContext.groups_for(cap), PUSH_SIZE,
-			maxi(SCAN_SHARED_BYTES, HYDRO_SHARED_BYTES), HYDRO_SOLVE_THREADS)
+			maxi(SCAN_SHARED_BYTES, HYDRO_SHARED_BYTES), maxi(HYDRO_SOLVE_THREADS, BODY_THREADS))
 	if err == "" and _hydro_cells() > HYDRO_MAX_CELLS:
 		err = "density projection grid has %d cells, hydro_solve holds at most %d" % [_hydro_cells(), HYDRO_MAX_CELLS]
 	for k in KERNELS:
@@ -152,6 +180,16 @@ func _buffer_specs() -> Array:
 	]
 
 
+## Cluster solid buffers, bindings 23 to 26 (common.glslinc). [binding, name, bytes]
+func _body_buffer_specs() -> Array:
+	return [
+		[23, "rest_offset", cap * 8],
+		[24, "body_members", cap * 4],
+		[25, "bodies", (body_cap + 1) * BODY_BYTES],
+		[26, "body_spawn", cap * 16],
+	]
+
+
 func _initial_counters() -> PackedByteArray:
 	return PackedInt32Array([cap, 0, 0, 0]).to_byte_array()
 
@@ -178,6 +216,11 @@ func _create_resources_rt() -> String:
 		if not hrid.is_valid():
 			return "could not create buffer '%s' (%d bytes)" % [spec[1], hydro_bytes]
 		bindings.append([spec[0], RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER, hrid])
+	for spec in _body_buffer_specs():
+		var brid: RID = _ctx.create_buffer_rt(spec[1], spec[2], PackedByteArray())
+		if not brid.is_valid():
+			return "could not create buffer '%s' (%d bytes)" % [spec[1], spec[2]]
+		bindings.append([spec[0], RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER, brid])
 	# Every kernel gets the full set; unused bindings are ignored by the engine.
 	for k in KERNELS:
 		if not _ctx.create_uniform_set_rt(k, k, 0, bindings).is_valid():
@@ -194,9 +237,6 @@ func _build_passes_rt() -> void:
 	_ctx.add_pass("brush", [d.call("brush_spawn", 0), d.call("brush_erase", 0), d.call("brush_finalize", 0)])
 	var hydro := ComputeContext.groups_for(_hydro_cells())
 	var hydro_pass := [d.call("hydro_splat", all), d.call("hydro_phi", hydro), d.call("hydro_solve", 1)]
-	var solve := [d.call("solve_pressure", all), d.call("solve_apply", all)]
-	for _i in _iterations:
-		solve.append_array([d.call("solve_lambda", all), d.call("solve_delta", all), d.call("solve_apply", all)])
 	for _s in _substeps:
 		_ctx.add_pass("predict", [d.call("predict", all)])
 		_ctx.add_pass("hash", [
@@ -205,7 +245,13 @@ func _build_passes_rt() -> void:
 			d.call("scan_add", cells), d.call("hash_scatter", all),
 		])
 		_ctx.add_pass("hydro", hydro_pass)
-		_ctx.add_pass("solve", solve)
+		# Shape matching after every iteration's apply. Workgroups (one per body id) are set per frame.
+		var solve := [d.call("solve_pressure", all), d.call("solve_apply", all)]
+		for _i in _iterations:
+			solve.append_array([d.call("solve_lambda", all), d.call("solve_delta", all), d.call("solve_apply", all)])
+			_ctx.add_pass("solve", solve)
+			_ctx.add_pass("bodies", [d.call("body_match", 0)])
+			solve = []
 		_ctx.add_pass("velocity", [d.call("velocity_update", all), d.call("velocity_xsph", all), d.call("velocity_commit", all)])
 	_ctx.add_pass("render", [d.call("render_clear", pixels), d.call("render_points", all), d.call("render_gap", all),
 			d.call("render_powder", all)])
@@ -226,39 +272,156 @@ func _finish_setup(err: String, image: RID) -> void:
 # --- Per frame --------------------------------------------------------------------
 
 ## Schedules one simulation frame. brush: { "op": BRUSH_*, "pos": Vector2,
-## "radius": float, "material": int, "count": int, "cols": int }.
+## "radius": float, "material": int, "count": int, "cols": int }. A body waiting from
+## make_body() spawns instead of the brush this frame (one body per frame).
 func frame(brush: Dictionary, view_flags: int) -> void:
 	_frame += 1
 	var clear := _clear_pending
 	_clear_pending = false
 	if clear:
 		live_count = 0
+	var spawn := PackedByteArray()
+	if not clear and not _pending_bodies.is_empty():
+		var b: Dictionary = _pending_bodies.pop_front()
+		_bodies[b.id].made = _frame
+		spawn = b.spawn
+		brush = {"op": BRUSH_BODY, "pos": b.mean, "material": b.material | (b.id << 16), "count": b.count,
+				"body_first": _bodies[b.id].first}
+	# Erasing is the only way a body loses members: read the live counts back afterwards
+	# to free the ids and member ranges of bodies erased completely.
+	if brush.op == BRUSH_ERASE and body_count > 0:
+		_body_check_wanted = true
+	var check_bytes := 0
+	if _body_check_wanted and not _body_check_in_flight:
+		_body_check_wanted = false
+		_body_check_in_flight = true
+		check_bytes = (_body_max_id() + 1) * BODY_BYTES
+	var freed := _freed_ids
+	_freed_ids = PackedInt32Array()
 	RenderingServer.call_on_render_thread(_frame_rt.bind(_push(brush, view_flags), int(brush.op), int(brush.count),
-			float(brush.get("radius", SimParams.BRUSH_RADIUS)), clear))
+			float(brush.get("radius", SimParams.BRUSH_RADIUS)), clear, spawn, freed, _body_max_id(), check_bytes, _frame))
 
 
-## Empties the pool at the start of the next frame.
+## Empties the pool at the start of the next frame. Bodies are forgotten now, so bodies
+## made after this call spawn after the clear.
 func request_clear() -> void:
 	_clear_pending = true
+	_reset_bodies()
 
 
-func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear: bool) -> void:
+## Makes one body (a rigid or soft body, by the material's stiffness) from spawned
+## positions, as cpu_ref/particle_step.gd make_body does: the lowest free body id, a member
+## range by first fit, rest offsets from the positions relative to their mean. It spawns
+## with the next frame() that has no other body waiting. material should be a cluster
+## material. Returns the body id, or 0 when no id, member range or pool room is free (as
+## the brush stops when the pool is full). rest_shape (same size as positions, optional)
+## gives the rest offsets instead, for a body spawned deformed (the probes' squashed jelly).
+func make_body(positions: PackedVector2Array, material: int, rest_shape := PackedVector2Array()) -> int:
+	var count := positions.size()
+	if rest_shape.is_empty():
+		rest_shape = positions
+	if rest_shape.size() != count:
+		return 0
+	var waiting := 0
+	for b in _pending_bodies:
+		waiting += b.count
+	if count == 0 or count > cap - live_count - waiting:
+		return 0
+	var id := 1
+	while id < _bodies.size() and _bodies[id].count > 0:
+		id += 1
+	if id > body_cap:
+		return 0
+	var first: int = ParticleStep._first_fit(_bodies, count)
+	if first + count > cap:
+		return 0
+	if id == _bodies.size():
+		_bodies.append({})
+	_bodies[id] = {"first": first, "count": count, "made": NOT_MADE}
+	var mean := Vector2.ZERO
+	var rest_mean := Vector2.ZERO
+	for k in count:
+		mean += positions[k]
+		rest_mean += rest_shape[k]
+	mean /= count
+	rest_mean /= count
+	var spawn := PackedFloat32Array()
+	spawn.resize(count * 4)
+	for k in count:
+		var p := positions[k]
+		var q := rest_shape[k] - rest_mean
+		spawn[k * 4] = p.x
+		spawn[k * 4 + 1] = p.y
+		spawn[k * 4 + 2] = q.x
+		spawn[k * 4 + 3] = q.y
+	_pending_bodies.append({"id": id, "material": material, "spawn": spawn.to_byte_array(), "mean": mean, "count": count})
+	body_count += 1
+	return id
+
+
+func _reset_bodies() -> void:
+	_bodies = [{"first": 0, "count": 0, "made": 0}]
+	_pending_bodies.clear()
+	_freed_ids = PackedInt32Array()
+	body_count = 0
+
+
+## Highest body id in use: the body pass runs one workgroup per id up to it.
+func _body_max_id() -> int:
+	for id in range(_bodies.size() - 1, 0, -1):
+		if _bodies[id].count > 0:
+			return id
+	return 0
+
+
+func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear: bool,
+		spawn: PackedByteArray, freed: PackedInt32Array, body_groups: int, check_bytes: int, frame_number: int) -> void:
 	if not _gpu_ready:
 		return
 	if clear:
 		_ctx.update_buffer_rt("free_stack", 0, ParticlePool.initial_stack(cap).to_byte_array())
 		_ctx.update_buffer_rt("counters", 0, _initial_counters())
 		_ctx.rd.buffer_clear(_ctx.buffer("mat_flags"), 0, cap * 4)
+		_ctx.rd.buffer_clear(_ctx.buffer("bodies"), 0, (body_cap + 1) * BODY_BYTES)
+	# A freed id's record goes back to empty before anything can reuse the id.
+	var empty := PackedByteArray()
+	empty.resize(BODY_BYTES)
+	for id in freed:
+		_ctx.update_buffer_rt("bodies", id * BODY_BYTES, empty)
+	if not spawn.is_empty():
+		_ctx.update_buffer_rt("body_spawn", 0, spawn)
 	# Circle: one thread per lattice spot (brush_spawn.glsl).
-	var spawn_threads := brush_lattice_spots(radius) if op == BRUSH_CIRCLE else count if op == BRUSH_BLOCK else 0
+	var spawn_threads := brush_lattice_spots(radius) if op == BRUSH_CIRCLE else count if op == BRUSH_BLOCK or op == BRUSH_BODY else 0
 	_ctx.set_groups_rt("brush", 0, ComputeContext.groups_for(spawn_threads) if spawn_threads > 0 else 0)
 	_ctx.set_groups_rt("brush", 1, ComputeContext.groups_for(cap) if op == BRUSH_ERASE else 0)
 	_ctx.set_groups_rt("brush", 2, 1 if op != BRUSH_NONE else 0)
+	_ctx.set_groups_rt("bodies", 0, body_groups)  # one workgroup per body id
 	_ctx.set_push_all_rt(push)
 	_ctx.record_frame_rt()
 	if not _counter_in_flight:
 		_counter_in_flight = true
 		_ctx.readback_async_rt("counters", _on_counters_rt)
+	if check_bytes > 0:
+		var err: Error = _ctx.readback_async_rt("bodies", _on_body_records_rt.bind(frame_number), 0, check_bytes)
+		if err != OK:
+			_on_body_records_rt(PackedByteArray(), frame_number)
+
+
+func _on_body_records_rt(data: PackedByteArray, frame_number: int) -> void:
+	_free_empty_bodies.call_deferred(data, frame_number)
+
+
+## Frees the ids and member ranges of bodies whose live count read back 0. The data is
+## from the end of frame frame_number, so a body spawned after that is left alone.
+func _free_empty_bodies(data: PackedByteArray, frame_number: int) -> void:
+	_body_check_in_flight = false
+	for id in range(1, _bodies.size()):
+		var b: Dictionary = _bodies[id]
+		var at := id * BODY_BYTES + BODY_LIVE_OFFSET
+		if b.count > 0 and b.made <= frame_number and at + 4 <= data.size() and data.decode_u32(at) == 0:
+			b.count = 0
+			_freed_ids.append(id)
+			body_count -= 1
 
 
 ## Circle brush threads: the rest-spacing lattice over the brush's bounding square
@@ -278,7 +441,7 @@ func _set_live_count(count: int) -> void:
 		live_count = count
 
 
-## Push constants, same layout as Params in common.glslinc (108 bytes).
+## Push constants, same layout as Params in common.glslinc (124 bytes).
 func _push(brush: Dictionary, view_flags: int) -> PackedByteArray:
 	var b := PackedByteArray()
 	b.resize(PUSH_SIZE)
@@ -310,6 +473,10 @@ func _push(brush: Dictionary, view_flags: int) -> PackedByteArray:
 	b.encode_float(96, SimParams.STACK_K)
 	b.encode_float(100, SimParams.MAX_SEPARATION)
 	b.encode_float(104, SimParams.WET_SLIP)
+	b.encode_u32(108, body_count)
+	b.encode_u32(112, _body_max_id())
+	b.encode_u32(116, brush.get("body_first", 0))
+	b.encode_u32(120, _iterations)
 	return b
 
 

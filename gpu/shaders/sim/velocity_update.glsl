@@ -18,8 +18,11 @@
 // churned at ~37 px/s (30k) and ~60 px/s (50k), with jets of 150-350 px/s up the side
 // walls. A cap of 0 would stop the water levelling, since the slow sideways push from a
 // higher surface starts from rest. Depth pressure comes from the grid (hydro.glslinc).
+// Body particles (ADR 0002) never sleep and get the same kind of cap, BODY_KICK: a box
+// spawned into the floor or pushed out of another body may leave at most that much faster.
+// Without it, a box spawned 4 px into the floor launched at 284 px/s (CPU reference).
 
-// common.glslinc stamp: Params 108 B, v15. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v16. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Fastest speed (px/s) that still counts as resting: 0.1 px per 1/60 s step, below the
@@ -29,6 +32,8 @@ const float SLEEP_SPEED = 6.0;
 // Liquids: the separating speed the solver's correction may add in one step, in units
 // of gravity * dt. Mirror: SimParams.LIQUID_KICK.
 const float LIQUID_KICK = 2.0;
+// Body particles: the same, per particle. Mirror: SimParams.BODY_KICK.
+const float BODY_KICK = 4.0;
 
 // A grain can only rest in a pocket: with a grain (or a wall) touching it below on each
 // side, or on the floor. A grain on top of a single grain, as on a vertical face, isn't
@@ -83,6 +88,8 @@ void main() {
 			v = vec2(0.0);
 		}
 		sep = params.max_separation;
+	} else if (s_body(t) != 0u) {
+		kick = BODY_KICK * params.gravity * params.dt;
 	} else {
 		kick = LIQUID_KICK * params.gravity * params.dt;
 	}

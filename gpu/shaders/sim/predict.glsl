@@ -4,7 +4,7 @@
 // Predict (spec 2.6 step 2): apply gravity and guess where each particle goes.
 // The move is clamped to max_step so fast particles can't skip past neighbours.
 
-// common.glslinc stamp: Params 108 B, v15. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v16. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {
@@ -19,5 +19,5 @@ void main() {
 		move *= params.max_step / len;
 	}
 	vel[i] = v;
-	pred[i] = clamp_to_world(pos[i] + move, i);
+	pred[i] = clamp_to_world(pos[i] + move, i, body_of(i) != 0u);
 }
