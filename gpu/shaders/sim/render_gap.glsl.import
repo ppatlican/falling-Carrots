@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ce364p0vjwfs6"
+path="res://.godot/imported/render_gap.glsl-ff68a527686e2908fa58426a440d2c1e.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/render_gap.glsl"
+dest_files=["res://.godot/imported/render_gap.glsl-ff68a527686e2908fa58426a440d2c1e.res"]
+
+[params]
+

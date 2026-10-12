@@ -4,7 +4,7 @@ Audience: Opus 5.5, who writes all the code. The owner tests on real hardware (P
 
 ## 1. Product
 
-A 2D side-view falling-sand sandbox with cooking. Materials: powders, liquids, gases, drawn static solids, rigid-ish solids (carrots), and soft bodies (dough). Wind and heat are simulated. The player experiments, and recipe discovery is the "game". There are no goals in v1.
+A 2D side-view particle sandbox in the spirit of OE-Cake, with cooking. Everything that moves is a particle in one solver, so liquids, powders, rigid bodies and soft bodies push on each other, float and sink. Materials: powders, liquids, gases, drawn static solids, rigid bodies (carrots, shapes the player draws), and soft bodies (jelly, dough). The player can tune each material's parameters (viscosity, stickiness, density and so on) while the sim runs. Wind and heat are simulated. The player experiments, and recipe discovery is the "game". There are no goals in v1. The direction and what it changed are recorded in `docs/adr/0001-oe-cake-direction.md`.
 
 **Hard constraints**
 - Godot 4.7.1, Forward Mobile (Vulkan) renderer, with compute through `RenderingDevice`. No Compatibility renderer and no web export.
@@ -12,13 +12,14 @@ A 2D side-view falling-sand sandbox with cooking. Materials: powders, liquids, g
 - Mid-range phones at 60 fps with about 50k particles. PC may go higher, so the particle cap is a config value.
 - Stability beats physical accuracy everywhere.
 - Adding an element must be easy, even for weaker models.
+- Every parameter the player can adjust has a safe range, and nothing inside it may launch, explode or freeze particles.
 
 ## 2. Architecture
 
 One unified GPU particle solver (Position-Based Dynamics) plus two grids.
 
 ### 2.1 Particles
-- Struct-of-arrays in storage buffers: position, previous position, velocity, material ID, temperature, lifetime, cluster ID, flags.
+- Struct-of-arrays in storage buffers: position, previous position, velocity, material ID, temperature, lifetime, body id, flags. The body id shares the material word (bits 16–31, ADR 0002).
 - Fixed pool with a hard cap and a free-list. When the pool is full, brushing stops adding particles and a UI meter shows capacity. Nothing is ever silently deleted. Gas and fire particles expire by lifetime, which frees slots.
 - One spatial hash grid, rebuilt every frame (count, prefix-sum, scatter), is shared by all neighbor queries.
 - Slots are stable particle IDs. The scatter step also copies each live particle's state into cell-sorted arrays, and the solver and velocity passes work only on those, so neighbors are contiguous in memory. A commit pass writes results back to the slots. (Decided in Milestone 2: neighbor reads through slot indices were about 2× slower on a settled pool.)
@@ -28,15 +29,17 @@ Each material belongs to exactly one class. New classes are the only thing that 
 
 | Class | Method |
 |---|---|
-| Liquid | PBF-style density constraint, plus mild viscosity (XSPH) and a surface-tension hint. The viscosity parameter covers water, oil, and batter. Walls count toward a liquid particle's density (an analytic poly6 integral over the half-plane past the wall), so liquid doesn't crowd into walls. PBF only holds liquid locally, so the pressure that grows with depth comes from a liquid density projection on a coarse grid (16 px cells, `hydro.glslinc`, after Kugelstadt et al. 2019): once per frame, liquid particles splat their density onto the grid, a projected red-black SOR solve (`HYDRO_SWEEPS`, warm-started) finds a pressure p ≥ 0 that removes `HYDRO_K` of each cell's compression (and closes bubbles inside full water), and liquid particles are pushed by −∇p·dt² before the PBF iterations. Gravity acts as usual, so liquid that lifts off falls back. With that pressure water behaves like nearly frictionless real water and sloshes for a long time, so water has a little drag (0.15 per second in `materials.json`, applied as v × exp(−drag·dt)): a slosh fades within several seconds while a fall or pour barely slows. The solver's correction may stop water but add at most `LIQUID_KICK` × gravity × dt of speed in its own direction per step, so overshoot can't launch water. |
-| Powder | Frictional particle-particle contact. Flour has strong drag, low mass, and a wind-coupling coefficient. Sand is heavier and has little drag. Gameplay-first tweaks (M2): powder-powder contacts are mass-scaled by height so piles hold their volume under load (`STACK_K`); a grain's push-out never adds velocity away from a contact (`MAX_SEPARATION` 0, so impacts can't rebound grains); the powder share of a powder–liquid push-out is small so water yields (`POWDER_LIQUID_SHARE`); grains surrounded by liquid lose most of their friction so sand settles under water (`WET_SLIP`); side walls apply Coulomb friction (at most friction × how far the grain is pressed in); a grain the solver stopped that moved slower than `SLEEP_SPEED` in a step stays put (sleeping), which is what brings a pile to rest. |
-| Cluster solid | Shape matching: a group of particles is pulled toward a rigid-transformed rest shape with a stiffness parameter. Carrots are stiff and dough is soft (lower stiffness, plus plastic deformation optional later). Particles within a cluster are bonded, so cutting later means severing bonds, with no redesign. |
+| Liquid | PBF-style density constraint, plus mild viscosity (XSPH) and a surface-tension hint. The viscosity parameter covers water, oil, and batter (thick liquids may need a stronger model than XSPH; measure first). Powder is left out of a liquid's density, so water fills the pores of a sand bed; the powder contact keeps it off the grains. Walls count toward a liquid particle's density (an analytic poly6 integral over the half-plane past the wall), so liquid doesn't crowd into walls. PBF only holds liquid locally, so the pressure that grows with depth comes from a liquid density projection on a coarse grid (16 px cells, `hydro.glslinc`, after Kugelstadt et al. 2019): once per frame, liquid particles splat their density onto the grid, a projected red-black SOR solve (`HYDRO_SWEEPS`, warm-started) finds a pressure p ≥ 0 that removes `HYDRO_K` of each cell's compression (and closes bubbles inside full water), and liquid particles are pushed by −∇p·dt² before the PBF iterations. The floor and sand bed hold the water's weight (dp/dn = ρg·n); side walls let nothing through (dp/dn = 0). Gravity acts as usual, so liquid that lifts off falls back. With that pressure water behaves like nearly frictionless real water and sloshes for a long time, so water has a little drag (0.15 per second in `materials.json`, applied as v × exp(−drag·dt)): a slosh fades within several seconds while a fall or pour barely slows. The solver's correction may stop water but add at most `LIQUID_KICK` × gravity × dt of speed in its own direction per step, so overshoot can't launch water. |
+| Powder | Frictional particle-particle contact. Flour has strong drag, low mass, and a wind-coupling coefficient. Sand is heavier and has little drag. Gameplay-first tweaks (M2): powder-powder contacts are mass-scaled by height so piles hold their volume under load (`STACK_K`); a grain's push-out never adds velocity away from a contact (`MAX_SEPARATION` 0, so impacts can't rebound grains); the powder share of a powder–liquid push-out is small so water yields (`POWDER_LIQUID_SHARE`); grains surrounded by liquid lose most of their friction so sand settles under water (`WET_SLIP`); side walls apply Coulomb friction (at most friction × how far the grain is pressed in); a grain the solver held up and cradled from both sides that moved slower than `SLEEP_SPEED` in a step stays put (sleeping), which is what brings a pile to rest. |
+| Cluster solid | Rigid and soft bodies. Shape matching (Müller et al. 2005): a group of particles is pulled toward a rigid-transformed rest shape with a stiffness parameter. Stiffness 1 is a rigid body (carrots); lower stiffness is a soft body (jelly); plasticity makes a soft body keep its dents (dough). A shape the player draws becomes one body. Each body needs a per-body reduction pass (centre, covariance, rotation) on the GPU and a body cap; the layout is ADR 0002. Body particles meet grains and other bodies by the powder contact rule, with the lower side heavier by the height between body centroids (`STACK_K`, push-out and friction); particles of the same body skip contacts. Like liquids, they have a kick cap on the speed a correction may add (`BODY_KICK`). Cluster particles count as displacement in the density projection grid, so water doesn't fill a body and boats float. Powder sleeping never applies to them. Particles within a cluster are bonded, so cutting later means severing bonds, with no redesign. |
 | Gas | Light, short-lived particles. Buoyancy comes from temperature, they are pushed by wind, and they have a lifetime. This class covers fire, smoke, and steam. |
 | Static | Not particles. See 2.3. |
 
 All classes collide with each other through the shared hash. That is the whole answer to "can solids interact reliably with liquids and powders": there is no coupling layer, because everything is in one solver.
 
-Buoyancy comes from per-material density in the density-constraint and contact response, so carrots float in water and sink in oil with no special case.
+Buoyancy comes from per-material density in the density-constraint and contact response, so carrots float in water and sink in oil with no special case. **Not yet true for liquids:** powder contacts use material density as mass, but the liquid constraint uses one global `rest_density` and the density projection grid uses water's weight, so two liquids of different density don't layer. Fix it (mass-weighted PBF, FleX 2014 section 7.1, and per-material weight in the grid) before a second liquid ships.
+
+**Stickiness (all classes):** two material columns. `cohesion` pulls touching particles of the same material together (thick sticky liquids, damp clumping sand, jelly that holds together); `adhesion` pulls a particle toward other materials and walls (honey on a wall, batter on a carrot). Both are capped forces, so a sticky clump breaks under enough weight. With sleeping, anything that makes grains cling becomes permanent, so powder cohesion must pass the `erase` and `shaft` scenarios of the water feel probe (no mid-air clumps).
 
 ### 2.3 Static solids grid
 - A texture or storage buffer at art resolution (about 640×360). Each cell holds a material ID and a temperature.
@@ -71,10 +74,10 @@ Steps 2–5 run `substeps` times per frame (`config.json`, default 2) with dt = 
 - Make every device call on the render thread through `RenderingServer.call_on_render_thread()`. Record compute lists each frame and never `submit()`/`sync()` (those are local-device only).
 - Each pass is its own compute list followed by `capture_timestamp()`, because timestamps can't be captured inside a list that already has dispatches. The engine inserts barriers between lists. Dependent dispatches inside one pass use `compute_list_add_barrier()`.
 - Shaders are `.glsl` files (`#[compute]`, `#version 450`) loaded via `RDShaderFile.get_spirv()`. Check both `base_error` and `compile_error_compute` and fail loudly with an on-screen error.
-- Use 64-thread 1D workgroups. Check `LIMIT_MAX_COMPUTE_WORKGROUP_SIZE_X`, `_INVOCATIONS` and `_COUNT_X` at startup against the dispatch needed for `particle_cap`. There is no limit constant for maximum storage buffer size.
+- Use 64-thread 1D workgroups. One exception: `hydro_solve` runs all SOR sweeps of the 920-cell density projection grid in one 128-thread workgroup (128 is the Vulkan minimum for a workgroup), because 64 tiny dispatches cost 400–700 µs a frame in overhead; it sets `LOCAL_SIZE_X` before including `common.glslinc`. Check `LIMIT_MAX_COMPUTE_WORKGROUP_SIZE_X`, `_INVOCATIONS` and `_COUNT_X` at startup against the dispatch needed for `particle_cap`. There is no limit constant for maximum storage buffer size.
 - GPU readback is always `buffer_get_data_async()`. `buffer_get_data()` stalls the GPU. Readback is debug-only, with one exception: a 16-byte pool counter is read back every frame for the capacity meter (it lags 1–2 frames; the GPU enforces the cap on its own).
 - GPU timestamps (`get_captured_timestamp_gpu_time`) are **nanoseconds** (checked in the Vulkan driver source). The overlay shows microseconds.
-- Shared GLSL goes in `.glslinc` files pulled in with `#include "name.glslinc"` (relative path; verified to compile in 4.7.1). Godot does **not** re-import a `.glsl` when only an included file changes, and touching the file doesn't help (it compares content hashes). Reimport from the editor, or delete `.godot/imported/*.glsl-*`. `test_shaders.gd` fails on a stale import. Because of that, every sim `.glsl` carries a stamp comment with the `Params` size and a version (currently `Params 108 B, v11`) on the line above `#include "common.glslinc"`; a comment on the include line itself is a syntax error. Whenever `common.glslinc` changes, bump that version in every `.glsl`, so a merge or pull changes each shader's content and Godot reimports all of them. Without it, merging an include change gives "push constant ... not present" errors. After editing any shader locally, delete `.godot/imported/<name>*` and run `--headless --import`.
+- Shared GLSL goes in `.glslinc` files pulled in with `#include "name.glslinc"` (relative path; verified to compile in 4.7.1). Godot does **not** re-import a `.glsl` when only an included file changes, and touching the file doesn't help (it compares content hashes). Reimport from the editor, or delete `.godot/imported/*.glsl-*`. `test_shaders.gd` fails on a stale import. Because of that, every sim `.glsl` carries a stamp comment with the `Params` size and a version (currently `Params 108 B, v15`) on the line above `#include "common.glslinc"`; a comment on the include line itself is a syntax error. Whenever `common.glslinc` changes, bump that version in every `.glsl`, so a merge or pull changes each shader's content and Godot reimports all of them. Without it, merging an include change gives "push constant ... not present" errors. After editing any shader locally, delete `.godot/imported/<name>*` and run `--headless --import`.
 - All sim kernels share one binding layout (`gpu/shaders/sim/common.glslinc`, bindings 0–19; the density projection grid adds 20–22 in `hydro.glslinc`) and get the same full uniform set; the engine ignores bindings a shader doesn't use (checked in `uniform_set_create`). Push constants must match the pipeline's size exactly, so every kernel reads the shared `Params` block (108 bytes, under the 128-byte portable limit).
 - Neighbour loops (`FOR_EACH_NEIGHBOUR(t)`) search the 3×3 cells around the cell particle `t` was hashed into this frame, never around its current solved position. Particles are stored by their hash cell, so this keeps every pair symmetric across solver iterations, as the CPU reference's once-per-frame neighbour lists are.
 - Every solver change lands in both the shaders and `cpu_ref/particle_step.gd`. The headless tests only run the CPU reference.
@@ -86,6 +89,10 @@ Steps 2–5 run `substeps` times per frame (`config.json`, default 2) with dt = 
 **One data file**, `data/materials.json` (`{"materials": [row, ...]}`), with a hard cap of 64 materials. The `id` (0–63) is the GPU table index. One row per material:
 
 `id, name, class, color (HTML string; texture_id later), density, friction, viscosity, drag, wind_coupling, stiffness (clusters), conductivity, heat_capacity, ignition_temp, boil_temp, melt_temp (number or null), lifetime (gas), tags`
+
+Planned columns (Milestones 3 and 3b): `cohesion`, `adhesion` (stickiness), `plasticity` (clusters). The GPU row is 64 bytes today, with its three float vec4s full; new float columns add a vec4 (80 bytes) and a shader stamp bump (2.7).
+
+**Adjusting parameters in game:** parameters are per material, not per particle. The parameter panel edits the selected material's row while the sim runs; the table is re-packed and uploaded (`buffer_update` on the material buffer), so every particle of that material changes at once. Sliders stop at the validator's range for each column, and both ends of every range are checked on the GPU probe. To make a variant, the player copies a material into a free slot. Edits last the session (no save/load in v1), with a reset per material. Solver constants that aren't columns (`STACK_K`, `WET_SLIP`, `LIQUID_KICK`, `HYDRO_*`) stay global and hidden; if a slider's extreme breaks one of their assumptions, narrow the range or turn the constant into a column, never add a material-specific branch to a shader.
 
 **Reactions** go in a separate rule list. Each rule has:
 - a trigger: contact between two materials, or a temperature threshold
@@ -100,7 +107,7 @@ Steps 2–5 run `substeps` times per frame (`config.json`, default 2) with dt = 
 - `ADDING_ELEMENTS.md`: a copy-paste row template, a checklist, and worked examples (a new liquid, a new powder, a new burnable solid).
 - Shaders kept short, commented, and modular, with no clever tricks. One behavior class per file where possible.
 
-**v1 roster:** sand, flour, water, oil, batter, carrot box, dough, steel, a flammable solid (wood), fire, smoke, steam, and a heat source.
+**v1 roster:** sand, flour, water, oil, batter, carrot box, jelly, dough, steel, a flammable solid (wood), fire, smoke, steam, and a heat source.
 
 **Initial reactions:** flour + water → dough; fire + wood → burning, then ash and smoke; heat on water → steam; heat on dough → cooked, then burnt (state and color change); oil + heat → hotter conduction (frying). Heat transfers by conduction.
 
@@ -117,7 +124,7 @@ Layered compositing at art resolution, with a low-res art buffer upscaled using 
 
 ## 5. Input and tools (v1)
 
-Palette, brush (size slider; left-click to draw and **right-click to erase**), fan/blow, heat and cool, drag/grab (solids and dough), pause, clear. No spawners, no cutting, no save/load, and no undo.
+Palette, brush (size slider; left-click to draw and **right-click to erase**), body brush (draw a shape that becomes one rigid or soft body, by the material's stiffness), parameter panel (sliders for the selected material, copy to a free slot, reset), fan/blow, heat and cool, drag/grab (bodies and dough), pause, clear. No spawners, no cutting, no save/load, and no undo.
 
 Input is routed through an abstraction layer (actions such as `draw`, `erase`, and `grab`), so touch support (eraser toggle, two-finger tap) can be added later without touching the sim. No touch UI work is needed in v1.
 
@@ -131,7 +138,8 @@ Input is routed through an abstraction layer (actions such as `draw`, `erase`, a
 
 1. **Project and tooling:** Godot project with the Forward Mobile renderer, the `RenderingDevice` compute plumbing (verified, see 2.7), the debug overlay, and the CPU reference scaffold.
 2. **GPU liquid + powder + brush:** the particle pool, spatial hash, PBF liquid, and powder friction. Sand and water interact. Measure the cap on a phone. This milestone proves the performance budget.
-3. **Cluster solids:** shape-matched carrot boxes colliding and floating or sinking in water, sand, and flour. This proves cross-material coupling, which is the main risk.
+3. **Cluster solids (rigid and soft bodies):** shape-matched carrot boxes and jelly colliding and floating or sinking in water, sand, and flour, the body brush, and cluster particles in the density projection grid. This proves cross-material coupling, which is the main risk.
+3b. **Material parameters:** the parameter panel with runtime upload, stickiness (`cohesion`, `adhesion`), `plasticity`, per-material liquid density (oil on water), and GPU probe checks at both ends of every slider.
 4. **Static solids grid:** steel brush, SDF collision, and the eraser.
 5. **Metaball and flour rendering,** with pixel-art textures.
 6. **Wind and heat grid:** the fan tool, convection, and gas particles (smoke and steam).
@@ -150,6 +158,9 @@ Input is routed through an abstraction layer (actions such as `draw`, `erase`, a
 | Compute shader differences across mobile GPUs | Use conservative GLSL features, test on at least two devices, and keep shaders small. |
 | Wind grid instability | A small time step, a clamped velocity, and a fixed Jacobi iteration count. |
 | Weaker models breaking shaders when adding elements | Keep additions in the data table and use the validator. New behavior classes are Opus-only work. |
+| A slider at its extreme launches, freezes or explodes particles | Validator ranges are the slider ranges; probe both ends of each; narrow a range before adding a special case. |
+| Sticky powders and sleeping make permanent mid-air clumps | Cap the cohesion force; run the `erase` and `shaft` probe scenarios on any cohesion change. |
+| Many or large bodies cost too much on a phone | Body cap in `config.json`; one reduction pass for all bodies; measure with Milestone 3. |
 
 ## 9. Deferred (not v1)
-Cutting and fracture, save/load and undo, touch UI, portrait layout, spawners, goals and recipes as a game loop, jelly and other soft bodies, web export, and phase changes beyond the starter reactions.
+Cutting and fracture, save/load and undo (including saved parameter edits), touch UI, portrait layout, spawners, goals and recipes as a game loop, shaking or tilting the container (OE-Cake's signature tool: turning gravity is cheap, moving walls needs moving boundaries in every grid), web export, and phase changes beyond the starter reactions.

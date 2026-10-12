@@ -1,10 +1,10 @@
 #[compute]
 #version 450
 
-// Render 1/3: clear the art-resolution image (one thread per pixel). With the
+// Render 1/4: clear the art-resolution image (one thread per pixel). With the
 // hash-grid view on, each cell is shaded by how many particles it holds.
 
-// common.glslinc stamp: Params 108 B, v11. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 108 B, v15. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

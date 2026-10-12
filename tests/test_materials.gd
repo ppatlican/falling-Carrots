@@ -27,6 +27,7 @@ func test_validator_catches_bad_rows() -> void:
 		"'color' must be": [_with(good, {"color": "sandy"})],
 		"'boil_temp' must be": [_without(good, "boil_temp")],
 		"the cap is": _many_rows(MaterialTable.MAX_MATERIALS + 1),
+		"above 0 for a cluster": [_with(good, {"class": "cluster", "stiffness": 0.0})],
 	}
 	for expected in cases:
 		var problems: PackedStringArray = MaterialTable.new().load_rows(cases[expected])
@@ -34,6 +35,12 @@ func test_validator_catches_bad_rows() -> void:
 		for p in problems:
 			found = found or p.contains(expected)
 		expect(found, "expected a problem containing \"%s\", got %s" % [expected, problems])
+
+
+func test_cluster_stiffness_above_zero_is_valid() -> void:
+	var problems: PackedStringArray = MaterialTable.new().load_rows(
+			[_with(_sand_row(), {"class": "cluster", "stiffness": 0.01})])
+	expect(problems.is_empty(), "cluster at stiffness 0.01: %s" % "; ".join(problems))
 
 
 func test_gpu_packing_layout() -> void:

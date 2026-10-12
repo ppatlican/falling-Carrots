@@ -9,7 +9,8 @@
 ##   brush     add (spawn + finalize) or erase (erase + finalize)
 ##   predict   gravity, predicted positions
 ##   hash      clear, count, 3-step prefix sum, scatter (copies state into cell order)
-##   hydro     liquid density projection grid (splat, density, HYDRO_SWEEPS x red/black SOR)
+##   hydro     liquid density projection grid (splat, density, then all SOR sweeps in one
+##             128-thread workgroup, hydro_solve)
 ##   solve     grid pressure push (pressure, apply), then
 ##             solver_iterations x (lambda, delta, apply)
 ##   velocity  update, XSPH, commit
@@ -31,9 +32,9 @@ const SHADER_DIR := "res://gpu/shaders/sim/"
 const KERNELS := [
 	"brush_spawn", "brush_erase", "brush_finalize", "predict",
 	"hash_clear", "hash_count", "scan_local", "scan_blocks", "scan_add", "hash_scatter",
-	"hydro_splat", "hydro_phi", "hydro_red", "hydro_black", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
+	"hydro_splat", "hydro_phi", "hydro_solve", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
 	"velocity_update", "velocity_xsph", "velocity_commit",
-	"render_clear", "render_points", "render_powder",
+	"render_clear", "render_points", "render_gap", "render_powder",
 ]
 ## Must match Params in common.glslinc.
 const PUSH_SIZE := 108
@@ -41,6 +42,12 @@ const PUSH_SIZE := 108
 const SCAN_BLOCK := 256
 const MAX_SCAN_BLOCKS := 256
 const SCAN_SHARED_BYTES := 64 * 4
+## hydro_solve: threads in its one workgroup, and the most coarse cells it holds in shared
+## memory (phi vec2 + p float each). Mirror: LOCAL_SIZE_X in hydro_solve.glsl,
+## HYDRO_MAX_CELLS in hydro.glslinc.
+const HYDRO_SOLVE_THREADS := 128
+const HYDRO_MAX_CELLS := 1024
+const HYDRO_SHARED_BYTES := HYDRO_MAX_CELLS * 12
 
 ## Brush operations (BRUSH_* in common.glslinc).
 const BRUSH_NONE := 0
@@ -102,7 +109,10 @@ func start() -> String:
 
 
 func _setup_rt(spirv: Dictionary) -> void:
-	var err: String = _ctx.check_limits_rt(ComputeContext.groups_for(cap), PUSH_SIZE, SCAN_SHARED_BYTES)
+	var err: String = _ctx.check_limits_rt(ComputeContext.groups_for(cap), PUSH_SIZE,
+			maxi(SCAN_SHARED_BYTES, HYDRO_SHARED_BYTES), HYDRO_SOLVE_THREADS)
+	if err == "" and _hydro_cells() > HYDRO_MAX_CELLS:
+		err = "density projection grid has %d cells, hydro_solve holds at most %d" % [_hydro_cells(), HYDRO_MAX_CELLS]
 	for k in KERNELS:
 		if err == "":
 			err = _ctx.create_pipeline_rt(k, spirv[k])
@@ -183,9 +193,7 @@ func _build_passes_rt() -> void:
 	# Brush dispatch sizes are set per frame (0 = skipped).
 	_ctx.add_pass("brush", [d.call("brush_spawn", 0), d.call("brush_erase", 0), d.call("brush_finalize", 0)])
 	var hydro := ComputeContext.groups_for(_hydro_cells())
-	var hydro_pass := [d.call("hydro_splat", all), d.call("hydro_phi", hydro)]
-	for _i in SimParams.HYDRO_SWEEPS:
-		hydro_pass.append_array([d.call("hydro_red", hydro), d.call("hydro_black", hydro)])
+	var hydro_pass := [d.call("hydro_splat", all), d.call("hydro_phi", hydro), d.call("hydro_solve", 1)]
 	var solve := [d.call("solve_pressure", all), d.call("solve_apply", all)]
 	for _i in _iterations:
 		solve.append_array([d.call("solve_lambda", all), d.call("solve_delta", all), d.call("solve_apply", all)])
@@ -199,7 +207,8 @@ func _build_passes_rt() -> void:
 		_ctx.add_pass("hydro", hydro_pass)
 		_ctx.add_pass("solve", solve)
 		_ctx.add_pass("velocity", [d.call("velocity_update", all), d.call("velocity_xsph", all), d.call("velocity_commit", all)])
-	_ctx.add_pass("render", [d.call("render_clear", pixels), d.call("render_points", all), d.call("render_powder", all)])
+	_ctx.add_pass("render", [d.call("render_clear", pixels), d.call("render_points", all), d.call("render_gap", all),
+			d.call("render_powder", all)])
 
 
 ## Coarse cells of the density projection grid (hydro_size() in hydro.glslinc).

@@ -28,11 +28,22 @@ const CONTACT_RELAX := 0.5
 ## Stack stiffening (mass scaling by height, as in Macklin et al. 2014 "Unified
 ## Particle Physics"): in a contact the lower particle acts exp(STACK_K * dy) times
 ## heavier, so piles hold their shape under load instead of crushing. Per px of dy.
-## Powder-powder contacts only (liquids get their depth pressure from the hydro grid).
+## Powder-powder contacts, and contacts with a body, where dy is the height between body
+## centroids (ADR 0002). Liquids get their depth pressure from the hydro grid.
 const STACK_K := 0.3
 ## Share of a powder-liquid contact's push-out that the powder takes; the liquid takes
 ## the rest. Low, so water yields and can't push sand grains apart (see powder.glslinc).
 const POWDER_LIQUID_SHARE := 0.1
+## Contact distance of a powder-liquid pair, in spacings: water passes between grains, so a
+## sand bed can drain and pack (see powder.glslinc).
+const POWDER_LIQUID_REACH := 0.6
+## Share of a liquid's density one powder grain counts for, its solid volume: sand under
+## water packs to ~1.1 and is ~60% grain, 40% pore, so 0.6 x HYDRO_POWDER_FULL (see
+## liquid.glslinc).
+const LIQUID_POWDER_SHARE := 0.54
+## Quadratic drag of a grain toward the liquid around it, per px/s of relative speed per
+## second: grains sink through water at ~sqrt(GRAVITY / it) (see powder.glslinc).
+const POWDER_LIQUID_DRAG := 0.06
 ## Fastest a powder grain may move away from a contact because of the push-out alone
 ## (px/s). 0 makes sand inelastic: overlap is still resolved, but a push-out never adds
 ## velocity away from a contact. At 15 the impacts of falling grains rebounded them
@@ -48,6 +59,11 @@ const SLEEP_SPEED := 6.0
 ## Liquids (velocity_update.glsl): the speed the solver's correction may add in its own
 ## direction in one step, in units of GRAVITY * DT. Stops the solver launching water.
 const LIQUID_KICK := 2.0
+## Body particles (cluster solids, ADR 0002): the same cap, in units of GRAVITY * DT. A box
+## spawned into the floor or pushed out of another body may leave at most this much faster.
+## Shape matching still moves the particles; only the speed it leaves them is capped.
+## Mirror: velocity_update.glsl (Milestone 3 step 3).
+const BODY_KICK := 4.0
 
 ## Liquid density projection on a coarse grid (gpu/shaders/sim/hydro.glslinc): cell size
 ## in hash cells, the density (over rest) below which a cell is air, the SOR
@@ -55,7 +71,8 @@ const LIQUID_KICK := 2.0
 ## which the cell above counts as full (thin cells under full water are pulled full), and
 ## the red-black sweeps per frame (warm-started from the last frame). Fewer sweeps don't
 ## converge in deep water: 16 left 50k water moving at 6.5 px/s with a 12 px tilt
-## instead of at rest (GPU probe). The sweeps are most of the pass's cost.
+## instead of at rest (GPU probe). All sweeps run in one workgroup (hydro_solve.glsl).
+## Mirror: HYDRO_SWEEPS in hydro.glslinc.
 const HYDRO_CELL := 4
 const HYDRO_AIR := 0.3
 const HYDRO_SOR := 1.8
@@ -68,6 +85,12 @@ const HYDRO_POWDER_VOL := 0.7
 ## wall that holds the water's weight (dp/dn = rho g . n), with the water's pressure
 ## continued hydrostatically into its pores.
 const HYDRO_SOLID := 0.5
+## Share of a cell one unit of powder density fills when the grid checks a cell for room
+## left (an air bubble to pull closed): sand under water packs to only ~1.1 and water can't
+## get into its pores, so such a cell is full. With HYDRO_POWDER_VOL every cell at a sand
+## surface looked ~3% short and sucked water in: a pool over sand mounds circulated over
+## the peaks (water_feel_probe mounds).
+const HYDRO_POWDER_FULL := 0.9
 ## Free surface (ghost fluid): liquid density over rest at the surface, and the smallest
 ## share of a cell the surface may sit from a liquid cell's centre.
 const HYDRO_SURFACE := 0.5

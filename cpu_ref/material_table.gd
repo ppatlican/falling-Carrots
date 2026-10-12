@@ -105,6 +105,10 @@ func _check_row(row: Dictionary, label: String) -> PackedStringArray:
 			p.append("%s: '%s' must be a number" % [label, f[0]])
 		elif float(v) < f[1] or float(v) > f[2]:
 			p.append("%s: '%s'=%s out of range [%s, %s]" % [label, f[0], v, f[1], f[2]])
+	# Same-body particles don't push on each other, so a body at stiffness 0 collapses
+	# onto one point (ADR 0002).
+	if row.get("class") == "cluster" and _is_number(row.get("stiffness")) and float(row.stiffness) <= 0.0:
+		p.append("%s: 'stiffness' must be above 0 for a cluster material" % label)
 	for f in TEMP_FIELDS:
 		if not row.has(f) or (row[f] != null and not _is_number(row[f])):
 			p.append("%s: '%s' must be a number or null" % [label, f])

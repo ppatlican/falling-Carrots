@@ -1,6 +1,7 @@
 // Behaviour class: POWDER. Frictional particle contacts.
 // Mirror: cpu_ref/particle_step.gd _contact_delta. All indices are sorted indices.
-// Any pair closer than `spacing` where at least one side is a powder is pushed apart,
+// Any pair closer than `spacing` (POWDER_LIQUID_REACH spacings for a grain and a liquid)
+// where at least one side is a powder is pushed apart,
 // mass-weighted by material density (heavy sand sinks through water). Powders also get
 // static/kinetic friction on their relative sideways motion this step. The sum is
 // scaled by contact_relax. It is NOT averaged over the contact count: averaging let
@@ -9,7 +10,7 @@
 // the upper grain gives way, so a pile is held up from the bottom instead of being
 // crushed. Powder-liquid pairs don't use that: they use POWDER_LIQUID_SHARE, so water yields.
 // A liquid particle's push from the grains it touches is averaged, not summed: the density
-// projection grid holds water up at a sand bed (hydro_sweep), so the push only has to keep
+// projection grid holds water up at a sand bed (hydro_solve.glsl), so the push only has to keep
 // water off the grains. Summed, it threw water touching several grains out of the bed along
 // the slope's normal, and a pool in a sand bowl kept an eddy over the slopes at 2 px/s,
 // up to 19 (water_feel_probe bowl). Averaged before the grid held the bed, 12-15k of 27k
@@ -20,6 +21,15 @@
 // Low, so water yields: water pushing into sand pushes the grains apart, they lose their
 // contacts and flow. Mirror: SimParams.POWDER_LIQUID_SHARE.
 const float POWDER_LIQUID_SHARE = 0.1;
+// Contact distance between a grain and a liquid particle, in spacings. At 1 (as between
+// grains) a water particle couldn't pass between two grains, so sand that sank through
+// water jammed loose (0.6-0.9 of rest) around the water it carried down. Shorter, the
+// water drains out as the grains settle, and liquid.glslinc's grain share sets how much
+// stays (water_feel_probe sink, 10k sand into 40k water, grain share 0.42, no drag:
+// water in the bed 9.6k at 1.0, 6.5k at 0.8, 3.3k at 0.6). It also lets water lie closer
+// on a bed (the dark strip in STATUS). Grains also fall through water more freely, which
+// POWDER_LIQUID_DRAG makes up for. Mirror: SimParams.POWDER_LIQUID_REACH.
+const float POWDER_LIQUID_REACH = 0.6;
 
 // Share of a contact's push-out that particle t takes, for rv = p_t - p_j (y down).
 float stack_weight(float m_t, float m_j, float rv_y) {
@@ -48,12 +58,13 @@ vec2 contact_delta(uint t) {
 			n_near += 1.0;
 			n_wet += mj.info.x == CLASS_LIQUID ? 1.0 : 0.0;
 		}
-		if (dist >= params.spacing) continue;
+		bool mixed = t_powder != (mj.info.x == CLASS_POWDER);
+		float reach = mixed ? POWDER_LIQUID_REACH * params.spacing : params.spacing;
+		if (dist >= reach) continue;
 		n_touch += 1.0;
 
 		vec2 normal = pair_dir(rv, dist, t, j);
-		float pen = params.spacing - dist;
-		bool mixed = t_powder != (mj.info.x == CLASS_POWDER);
+		float pen = reach - dist;
 		float w = mixed
 				? (t_powder ? POWDER_LIQUID_SHARE : 1.0 - POWDER_LIQUID_SHARE)
 				: mj.phys.x / (mt.phys.x + mj.phys.x);
@@ -84,4 +95,38 @@ vec2 contact_delta(uint t) {
 		sum /= max(n_touch, 1.0);  // liquid: averaged over the grains it touches (see top)
 	}
 	return (sum + fric * (1.0 - params.wet_slip * wet)) * params.contact_relax;
+}
+
+// Drag of a grain toward the liquid around it, per px/s of their relative speed and per
+// second (quadratic drag, as on a sinking grain at speed). A grain sinking through water
+// at v slows at POWDER_LIQUID_DRAG * v^2, so it falls at ~sqrt(g / POWDER_LIQUID_DRAG)
+// (~80 px/s), while a resting bed that drains at a few px/s barely feels it. Without it,
+// POWDER_LIQUID_REACH let sand fall through a pool nearly as through air, in stripes
+// (main.tscn, 10k sand into 30k water: on the floor ~100 frames after the drop). A linear
+// drag of 6 or 12 per second stopped that too, but slowed the drainage: 5.3k water left in
+// the sunk bed instead of 3.3k (water_feel_probe sink). Mirror: SimParams.POWDER_LIQUID_DRAG.
+const float POWDER_LIQUID_DRAG = 0.06;
+
+// Velocity change of grain t from POWDER_LIQUID_DRAG: toward its liquid neighbours'
+// kernel-weighted velocity, scaled by how much liquid is around it (1 in water at rest
+// density, less at a bed or a surface).
+vec2 powder_liquid_drag(uint t) {
+	vec2 pt = s_pred[t];
+	vec2 vt = s_vel[t];
+	vec2 sum = vec2(0.0);
+	float w_sum = 0.0;
+	FOR_EACH_NEIGHBOUR(t) {
+		uint j = k;
+		if (j == t || s_class(j) != CLASS_LIQUID) continue;
+		vec2 rv = pt - s_pred[j];
+		float w = poly6(dot(rv, rv));
+		sum += (s_vel[j] - vt) * w;
+		w_sum += w;
+	} END_NEIGHBOURS
+	if (w_sum <= 0.0) {
+		return vec2(0.0);
+	}
+	vec2 rel = sum / w_sum;  // liquid's mean velocity relative to the grain
+	float rate = POWDER_LIQUID_DRAG * length(rel);
+	return rel * ((1.0 - exp(-rate * params.dt)) * min(w_sum / params.rest_density, 1.0));
 }
