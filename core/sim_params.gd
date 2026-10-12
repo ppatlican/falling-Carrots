@@ -28,7 +28,8 @@ const CONTACT_RELAX := 0.5
 ## Stack stiffening (mass scaling by height, as in Macklin et al. 2014 "Unified
 ## Particle Physics"): in a contact the lower particle acts exp(STACK_K * dy) times
 ## heavier, so piles hold their shape under load instead of crushing. Per px of dy.
-## Powder-powder contacts only (liquids get their depth pressure from the hydro grid).
+## Powder-powder contacts, and contacts with a body, where dy is the height between body
+## centroids (ADR 0002). Liquids get their depth pressure from the hydro grid.
 const STACK_K := 0.3
 ## Share of a powder-liquid contact's push-out that the powder takes; the liquid takes
 ## the rest. Low, so water yields and can't push sand grains apart (see powder.glslinc).
@@ -58,6 +59,11 @@ const SLEEP_SPEED := 6.0
 ## Liquids (velocity_update.glsl): the speed the solver's correction may add in its own
 ## direction in one step, in units of GRAVITY * DT. Stops the solver launching water.
 const LIQUID_KICK := 2.0
+## Body particles (cluster solids, ADR 0002): the same cap, in units of GRAVITY * DT. A box
+## spawned into the floor or pushed out of another body may leave at most this much faster.
+## Shape matching still moves the particles; only the speed it leaves them is capped.
+## Mirror: velocity_update.glsl (Milestone 3 step 3).
+const BODY_KICK := 4.0
 
 ## Liquid density projection on a coarse grid (gpu/shaders/sim/hydro.glslinc): cell size
 ## in hash cells, the density (over rest) below which a cell is air, the SOR
