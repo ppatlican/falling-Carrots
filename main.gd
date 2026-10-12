@@ -41,11 +41,13 @@ func _ready() -> void:
 	if not problems.is_empty():
 		_error_screen.show_error("data/materials.json has problems:\n" + "\n".join(problems))
 		return
+	_add_test_bodies(_table)
 	_material = _table.materials.keys().min()
 	_toolbar.build(_table.materials, _material, "+%dk" % (SimParams.BENCH_BLOCK / 1000))
 	_toolbar.material_selected.connect(func(id): _material = id)
 	_toolbar.fill_requested.connect(func(id): _pending_fill = id)
 	_toolbar.clear_requested.connect(_clear)
+	_toolbar.body_requested.connect(_drop_test_body)
 	_toolbar.set_capacity(0, _config.particle_cap)
 
 	if not ComputeContext.is_available():
@@ -82,6 +84,44 @@ func _on_check_finished(ok: bool, message: String) -> void:
 func _on_view_toggled(view: String, enabled: bool) -> void:
 	if view == "hash_grid":
 		_view_flags = ParticleSim.VIEW_HASH if enabled else 0
+
+
+## Debug until the body brush (M3 step 5): test-only rigid ("carrot", stiffness 1) and
+## jelly (stiffness 0.3) rows, as tests/test_bodies.gd _sim(). materials.json gets
+## cluster rows in step 5.
+func _add_test_bodies(table) -> void:
+	var rows := []
+	for id in table.materials:
+		rows.append(table.materials[id].duplicate(true))
+	var sand: Dictionary = table.materials[table.id_of("sand")]
+	var next: int = table.materials.keys().max() + 1
+	for extra in [
+			{"name": "carrot", "class": "cluster", "color": "#e8792b", "density": 1.2, "stiffness": 1.0, "tags": []},
+			{"name": "jelly", "class": "cluster", "color": "#d94f8a", "density": 1.1, "stiffness": 0.3, "tags": []}]:
+		var r: Dictionary = sand.duplicate(true)
+		r.merge(extra, true)
+		r.id = next
+		next += 1
+		rows.append(r)
+	var problems: PackedStringArray = table.load_rows(rows)
+	if not problems.is_empty():
+		push_warning("test body rows: " + "; ".join(problems))
+
+
+## Debug: drops a 16 x 10 box of a cluster material from the top, at a random x.
+func _drop_test_body(material: int) -> void:
+	if not _running:
+		return
+	var cols := 16
+	var rows := 10
+	var sp := SimParams.SPACING
+	var x0 := randf_range(40.0, SimParams.WORLD_SIZE.x - 40.0 - cols * sp)
+	var pts := PackedVector2Array()
+	for r in rows:
+		for c in cols:
+			pts.append(Vector2(x0 + c * sp, 12.0 + r * sp))
+	if _sim.make_body(pts, material) == 0:
+		push_warning("drop test body: no free body id, member range or pool room")
 
 
 func _clear() -> void:
