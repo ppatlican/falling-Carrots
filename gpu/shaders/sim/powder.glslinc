@@ -1,7 +1,7 @@
 // Behaviour class: POWDER. Frictional particle contacts.
 // Mirror: cpu_ref/particle_step.gd _contact_delta. All indices are sorted indices.
 // Any pair closer than `spacing` (POWDER_LIQUID_REACH spacings for a grain and a liquid)
-// where at least one side is a powder is pushed apart,
+// where at least one side is a powder or a body particle (ADR 0003) is pushed apart,
 // mass-weighted by material density (heavy sand sinks through water). Powders also get
 // static/kinetic friction on their relative sideways motion this step. The sum is
 // scaled by contact_relax. It is NOT averaged over the contact count: averaging let
@@ -9,7 +9,7 @@
 // Between two powder grains the push-out is also mass-scaled by height (stack_weight):
 // the upper grain gives way, so a pile is held up from the bottom instead of being
 // crushed. Powder-liquid pairs don't use that: they use POWDER_LIQUID_SHARE, so water yields.
-// A liquid particle's push from the grains it touches is averaged, not summed: the density
+// A liquid particle's push from what it touches is averaged, not summed: the density
 // projection grid holds water up at a sand bed (hydro_solve.glsl), so the push only has to keep
 // water off the grains. Summed, it threw water touching several grains out of the bed along
 // the slope's normal, and a pool in a sand bowl kept an eddy over the slopes at 2 px/s,

@@ -32,7 +32,8 @@ vec2 body_wet_face(vec2 d) {
 // pressing on its wet face g (body_wet_face summed over its liquid neighbours), over the
 // body's mass per particle (density x spacing^2, water being 1). Summed over a body this is
 // the pressure over its wet surface: a submerged body is pushed up by the weight of the water
-// it displaces, a dry one by nothing, a floating one only below its waterline. Within a spacing of the floor, a particle of a body that was wet last
+// it displaces, a dry one by nothing, a floating one only below its waterline. Pressure under
+// p_ref pushes nothing. Within 1.5 spacings of the floor, a particle of a body that was wet last
 // substep also counts the floor below it as a face of liquid (water seeps under it), so a light
 // body on the floor of a pool rises.
 // It also gives the body its reference pressure for the next substep (atomicMin of the float's

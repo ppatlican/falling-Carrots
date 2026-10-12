@@ -265,6 +265,7 @@ func _find_neighbours(pred: PackedVector2Array, h: float) -> Array:
 ## Share of a liquid's density a neighbour of class c counts for when it doesn't move with
 ## the constraint: a grain its solid share (LIQUID_POWDER_SHARE), a body particle 1 (it sits
 ## on the rest-spacing lattice, so it fills a water particle's room; ADR 0003). 0 for the rest.
+## Mirror: displacing_share in liquid.glslinc.
 func _displacing_share(c: int) -> float:
 	if c == POWDER:
 		return SimParams.LIQUID_POWDER_SHARE
@@ -787,7 +788,7 @@ func _body_p_sample(x: Vector2, phi: PackedVector4Array, p: PackedFloat32Array) 
 ## Position change this step of body particle i from the liquid's pressure on its wet surface
 ## (ADR 0003 item 4): p at the body's outline on the liquid side, over the body's reference
 ## pressure, pressing on its wet face (body_wet_face), over the body's mass per particle
-## (density x spacing^2, water being 1). Within a spacing of the floor, a particle of a body
+## (density x spacing^2, water being 1). Within 1.5 spacings of the floor, a particle of a body
 ## that was wet last substep also counts the floor below it as a face of liquid (water seeps
 ## under it), so a light body on the floor of a pool rises.
 ## Also gives the body's reference pressure for the next substep (p_min, which the body pass
@@ -797,7 +798,7 @@ func _body_p_sample(x: Vector2, phi: PackedVector4Array, p: PackedFloat32Array) 
 ## the pressure difference across it, so deep water doesn't squeeze it past the correction
 ## cap. With a face in air it floats, and its pressure is absolute: referred to its lowest wet
 ## pressure instead, a cork bobbing up until only its bottom row was wet lost all its lift at
-## the top of each bob, and the bob grew (ADR 0003).
+## the top of each bob, and the bob grew (ADR 0003). Mirror: body_pressure_delta in solve_pressure.glsl.
 func _body_pressure_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
 		edge: PackedVector2Array, b: Dictionary, nb: PackedInt32Array, phi: PackedVector4Array,
 		p: PackedFloat32Array, dt: float) -> Vector2:

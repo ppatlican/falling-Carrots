@@ -19,8 +19,9 @@
 // the floor falls back. (A pressure built from the weight of the liquid above made the
 // water weightless as a body: it bounced to the ceiling.)
 //
-// Air cells (phi < HYDRO_AIR) are outside the liquid and the walls let nothing through.
-// Cells mostly full of powder (hydro_solid) are sand bed: a wall that holds the water's
+// Air cells (hydro_level < HYDRO_AIR: liquid, plus the weight of a body floating in it) are
+// outside the liquid and the walls let nothing through. Cells mostly full of powder or body
+// particles (hydro_solid, ADR 0003) are bed: a wall that holds the water's
 // weight (dp/dn = rho g . n), with the pressure continued hydrostatically into the pores
 // (the bed as a porous solid, Tampubolon et al. 2017). A bed's pore water is too thin to
 // count as liquid, so the bed used to be air: p fell to 0 at the sand surface, the grid
