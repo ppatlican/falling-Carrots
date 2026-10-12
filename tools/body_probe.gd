@@ -31,10 +31,13 @@
 ##            carrot (density 1.2) dropped from 20 px above the water, 600 frames: it sinks to the
 ##            floor (or onto one layer of water on it) and keeps its shape, with no water inside its
 ##            outline at any sample (ADR 0003)
+##   waterjelly a 16x10 jelly (density 1.1, stiffness 0.3; the size main.tscn drops) dropped as
+##            watersink, 600 frames: it sinks and keeps its shape within 2 px (its sag on the floor
+##            is ~1 px), with no water inside
 ##   waterfloat the same pool, an 8x6 cork (density 0.5) set on the water at frame 120, 900
 ##            frames: over the last 60, its mean draft (share of its height under the water's
 ##            top particles) 0.25 to 0.7, mean speed under 3 px/s, tilt off level under 0.35 rad
-##            (CPU: draft ~0.3, it rides ~2 px high), no water inside
+##            (CPU: draft 0.5-0.7, tilted up to ~0.3 rad), no water inside
 ##   waterdrop  the cork dropped from 60 px above the water: it plunges, comes back up and floats,
 ##            as waterfloat
 ##   waterbig   a 40x20 cork set on the water: its cells are bed for the grid (ADR 0003), as
@@ -255,8 +258,8 @@ func _start(name: String) -> void:
 			sc.fall = 100.0 if name == "sand" else 2.0
 			sc.xs = [80.0, 160.0, 240.0, 320.0, 400.0, 480.0, 560.0] if name == "sandrow" else [X]
 			sc.late_speed = 0.0
-		"watersink", "waterfloat", "waterdrop", "waterbig", "waterbox":
-			sc.frames = {"watersink": 600, "waterbig": 1500}.get(name, 900)
+		"watersink", "waterjelly", "waterfloat", "waterdrop", "waterbig", "waterbox":
+			sc.frames = {"watersink": 600, "waterjelly": 600, "waterbig": 1500}.get(name, 900)
 			sc.every = 10
 			sc.from = 600
 			sc.slots = BED_COLS * POOL_ROWS
@@ -319,6 +322,8 @@ func _scenario_brush(brush: Dictionary) -> void:
 			match sc.name:
 				"watersink":
 					_body(_box(Vector2(X, top - 20.0), 8, 6), carrot)
+				"waterjelly":
+					_body(_box(Vector2(X, top - 20.0), 16, 10), jelly)
 				"waterfloat":
 					_body(_box(Vector2(X, top - 1.0), 8, 6), cork)
 				"waterdrop":
@@ -455,7 +460,7 @@ func _sample(f: int, b: Dictionary) -> void:
 				var rests: bool = fit.err < 0.1 and sc.late_speed < REST_SPEED \
 						and (sc.name == "sand" or bottom - sc.bed_tops[0] < SimParams.SPACING)
 				_result(line, rests and inside == 0)
-		"watersink", "waterfloat", "waterdrop", "waterbig", "waterbox":
+		"watersink", "waterjelly", "waterfloat", "waterdrop", "waterbig", "waterbox":
 			if f == sc.hold:
 				sc.water_top = _top_of(b, water, X, 40.0)
 				waiting = false
@@ -504,6 +509,10 @@ func _sample(f: int, b: Dictionary) -> void:
 					_result("carrot dropped into an 80 px pool: lowest particle %.2f px above the floor, water inside its outline %d at the end (most %d at a sample), shape error %.4f px, rotation %.4f rad, speed %.3f px/s"
 							% [FLOOR - bottom, inside, sc.most_inside, fit.err, fit.theta, _mean_vel(bodies[1]).length()],
 							FLOOR - bottom < 2.0 * SimParams.SPACING and sc.most_inside == 0 and fit.err < 0.1)
+				elif sc.name == "waterjelly":
+					_result("16x10 jelly (density 1.1) dropped into an 80 px pool: lowest particle %.2f px above the floor, water inside its outline %d at the end (most %d at a sample), shape error %.3f px, speed %.3f px/s"
+							% [FLOOR - bottom, inside, sc.most_inside, fit.err, _mean_vel(bodies[1]).length()],
+							FLOOR - bottom < 2.0 * SimParams.SPACING and sc.most_inside == 0 and fit.err < 2.0)
 				else:
 					_result("%s: cork, last 60 frames: mean draft %.2f of its height, mean speed %.2f px/s, max tilt %.3f rad; water inside %d at the end (most %d at a sample), shape error %.4f px"
 							% [sc.name, draft, speed, tilt, inside, sc.most_inside, fit.err],

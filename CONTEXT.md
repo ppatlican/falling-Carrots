@@ -86,6 +86,14 @@ _Avoid_: Cluster (for one body), object
 **Rest shape**:
 How a body's particles sit when nothing deforms it, stored as each particle's rest offset. Shape matching pulls the body back toward it, moved and turned to fit where the particles are now.
 
+**Outline**:
+The edge of a body's rest shape, half a spacing outside its edge particles. A grain or water particle inside a body's outline is pushed out toward its nearest edge (the push-out).
+_Avoid_: Hull, boundary (for the shape)
+
+**Wet surface**:
+The part of a body's outline that liquid touches. The liquid's pressure presses on it, which floats light bodies and lets heavy ones sink slower; a body with no wet surface feels no pressure.
+_Avoid_: Submerged part
+
 **Body cap**:
 The most bodies at once (`body_cap` in `config.json`). When every body id is in use, the body brush makes nothing.
 

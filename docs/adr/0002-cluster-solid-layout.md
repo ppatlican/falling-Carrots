@@ -60,11 +60,10 @@ Memory at the default 50k cap: 400 KB rest offsets, 200 KB member list, 12 KB re
 - **Nothing else changed for liquids and powders:** 50k sand at rest and sand into water (`gpu_probe`) settle as on main the same day. The body rules cost the contact loop 20–70 µs a frame (3–10% of the solve) in sand into water, nothing in sand at rest.
 
 ## Known limits until later steps
-- Water passes into and fills bodies until step 4 (body particles in the density projection grid and in water's PBF density).
 - A body erased in two stays one body until cutting exists: its halves stay linked across the gap.
 - A 5-box stack offset 2 px per box still drops its top box (CPU, landing from 1 px gaps).
 - **A big body is slow:** the fused pass costs ~0.09 µs per member of the largest body per frame (436–462 µs for one 5000-particle body, 200 × 100 px), on a 3080 Ti. Until the body brush (step 5) caps a body's size, or the pass is split so several workgroups share a body (a reduction pass plus a goal pass per iteration, rejected below on dispatch count before this was measured), a large body costs more than the whole liquid solve.
-- **Grains get into a body on a fast impact**, on the CPU reference and the GPU alike: a body's lattice spacing is the contact distance, and a grain pushed in at the centre of a lattice square is pushed equally by four body particles, so it stays. An 8 × 6 box dropped 72 px onto a sand bed (~200 px/s) ends with 7 grains inside on the CPU; dropped 100 px on the GPU, 16; from 37 px, 1 grain on the CPU. Placed on the bed, none get in (`body_probe sandlow`, `sandrow`).
+- ~~Water fills bodies; grains get into a body on a fast impact~~ (an 8 × 6 box dropped 100 px onto sand ended with 16 grains inside on the GPU): fixed by ADR 0003 (bodies in the density projection grid and in water's PBF density, body–liquid contacts, and the push-out from inside a body); 0 grains and no water inside in the same scenarios.
 - **A small body on sand tilts with the grains under it:** the seven boxes placed on the packed bed came to rest at −0.21 to 0.17 rad, four of them within 0.03. An 8 × 6 box is 7 grains wide, so one grain's bump (2 px) under one end tilts it 0.14 rad. Bigger bodies span more grains and sit flatter.
 - A soft body sags under its own weight: at rest each particle off the floor sits about g·dt² / (1 − (1 − s)^(dt·60)) below its goal per substep, and the floor-held bottom row balances them all. A 10×8 jelly at stiffness 0.3 sits 1.08 px off its rest shape; taller or softer bodies sag more. That is jelly-like, but it bounds the low end of the stiffness slider (Milestone 3b).
 
@@ -78,6 +77,6 @@ Memory at the default 50k cap: 400 KB rest offsets, 200 KB member list, 12 KB re
 
 ## Not decided here
 - How the body brush turns a drawn shape into members (rest-spacing lattice fill, one body per stroke) and what happens when a stroke is larger than the free pool.
-- Body–liquid coupling (step 4): body particles in the density projection grid and in water's PBF density.
+- ~~Body–liquid coupling (step 4)~~: decided in ADR 0003.
 - Whether body particles count as support (cradling) for sleeping grains. Today only grains and walls do, so sand on a box may keep creeping.
 - Cutting (SPEC 2.2): splitting a member range into two bodies with new ids fits this layout but isn't designed.

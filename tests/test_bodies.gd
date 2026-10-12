@@ -252,8 +252,8 @@ func test_sinking_box_keeps_water_out() -> void:
 	expect(fit.err < 0.1, "the box keeps its shape within 0.1 px: %.4f" % fit.err)
 
 
-## A cork floats about half under. It rides ~2 px high (draft ~0.35): the grid's free surface
-## sits above the top water particles (ADR 0003 known limits). An 8x6 box at density 0.5 is
+## A cork floats about half under, level with the top water particles (BODY_SURFACE_DROP: the
+## grid's free surface sits ~2.5 px above them, ADR 0003 item 4). An 8x6 box at density 0.5 is
 ## only just stable upright (a box floats upright when width / height > sqrt(6 rho (1 - rho)),
 ## 1.22 here, it is 1.33), so it rocks slowly; "upright" means not capsized.
 func test_light_box_floats_at_its_density() -> void:

@@ -33,9 +33,11 @@
 const float BODY_ROT_EPS = 1e-4;
 
 // How far (px) the density projection grid's free surface (p = 0) sits above the surface of the
-// top water particles. A body that reaches the free surface (p_min 0: a boundary member in air,
-// or a wet member at the grid's surface) is pushed relative to gravity x this, so it floats level
-// with the water it shows rather than ~2 px high (ADR 0003 item 4). Mirror: SimParams.BODY_SURFACE_DROP.
+// top water particles. A body's reference pressure is at least gravity x this, so a floating body
+// (p_min 0) floats level with the water it shows rather than ~2 px high (ADR 0003 item 4). A max,
+// not a switch at p_min 0: switched, a 16 x 10 cork whose top went awash lost the drop (p_ref
+// 1000 -> ~0), popped up, got it back and sank again, heaving +-4 px for 15 s (body_probe
+// waterbox). Mirror: SimParams.BODY_SURFACE_DROP.
 const float BODY_SURFACE_DROP = 2.5;
 
 shared float sh_n[LOCAL_SIZE_X];
@@ -120,8 +122,7 @@ void main() {
 		// the next (ADR 0003 item 4). Only the first pass of a substep finds p_min set.
 		uint p_min = bodies[id].p_min;
 		if (p_min != BODY_P_UNSET) {
-			float p_ref = uintBitsToFloat(p_min);
-			bodies[id].p_ref = p_ref == 0.0 ? params.gravity * BODY_SURFACE_DROP : p_ref;
+			bodies[id].p_ref = max(uintBitsToFloat(p_min), params.gravity * BODY_SURFACE_DROP);
 			bodies[id].p_min = BODY_P_UNSET;
 			uint flags = bodies[id].info.w;
 			bodies[id].info.w = (flags & BODY_STALE) | ((flags & BODY_WET_NOW) != 0u ? BODY_WET : 0u);
