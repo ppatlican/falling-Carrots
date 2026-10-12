@@ -324,7 +324,7 @@ func _match_shapes(pred: PackedVector2Array, mat: PackedInt32Array, body: Packed
 		# The reference pressure solve_pressure found this substep, and whether the body was wet,
 		# carry to the next substep (ADR 0003 item 4); only the first pass of a substep finds them.
 		if b.get("p_min") != null:
-			b.p_ref = b.p_min
+			b.p_ref = SimParams.GRAVITY * SimParams.BODY_SURFACE_DROP if b.p_min == 0.0 else b.p_min
 			b.p_min = null
 			b.wet = b.get("wet_now", false)
 			b.wet_now = false

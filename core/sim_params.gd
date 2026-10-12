@@ -48,6 +48,11 @@ const POWDER_LIQUID_DRAG := 0.06
 ## liquid is around it (ADR 0003): damps a floating body's heave and rocking.
 ## Mirror: BODY_LIQUID_DRAG in powder.glslinc.
 const BODY_LIQUID_DRAG := 20.0
+## How far (px) the density projection grid's free surface (p = 0) sits above the surface of
+## the top water particles: a body that reaches the free surface (its p_min is 0) is pushed
+## relative to GRAVITY x this, so it floats level with the water it shows (ADR 0003 item 4).
+## Mirror: BODY_SURFACE_DROP in body_match.glsl.
+const BODY_SURFACE_DROP := 2.5
 ## Fastest a powder grain may move away from a contact because of the push-out alone
 ## (px/s). 0 makes sand inelastic: overlap is still resolved, but a push-out never adds
 ## velocity away from a contact. At 15 the impacts of falling grains rebounded them

@@ -38,7 +38,9 @@
 ##   waterdrop  the cork dropped from 60 px above the water: it plunges, comes back up and floats,
 ##            as waterfloat
 ##   waterbig   a 40x20 cork set on the water: its cells are bed for the grid (ADR 0003), as
-##            waterfloat
+##            waterfloat over 1500 frames: its plunge sets off the pool's symmetric slosh (both
+##            ends rise and fall together, ~2.8 s), which it heaves with until that dies out,
+##            ~10 s (still 2.6-4 px/s at 900 frames)
 ##   waterbox   a 16x10 cork (the size main.tscn's Drop buttons make) set on the water, as
 ##            waterfloat
 ##   reuse    two 8x6 boxes; the first erased whole at frame 60, a new box made at frame 90:
@@ -254,7 +256,7 @@ func _start(name: String) -> void:
 			sc.xs = [80.0, 160.0, 240.0, 320.0, 400.0, 480.0, 560.0] if name == "sandrow" else [X]
 			sc.late_speed = 0.0
 		"watersink", "waterfloat", "waterdrop", "waterbig", "waterbox":
-			sc.frames = 600 if name == "watersink" else 900
+			sc.frames = {"watersink": 600, "waterbig": 1500}.get(name, 900)
 			sc.every = 10
 			sc.from = 600
 			sc.slots = BED_COLS * POOL_ROWS
@@ -463,8 +465,8 @@ func _sample(f: int, b: Dictionary) -> void:
 			var inside := _inside(b, bodies[1], fit, water)
 			sc.most_inside = maxi(sc.most_inside, inside)
 			if f % 60 == 0:
-				print("  f=%d c=(%.1f, %.1f) rot %.3f v=%s draft %.2f inside %d" % [f, fit.c.x, fit.c.y, fit.theta,
-						_mean_vel(bodies[1]), _draft(b, bodies[1]), inside])
+				print("  f=%d c=(%.1f, %.1f) rot %.3f v=%s draft %.2f inside %d; water top at x 40 / 600 %.1f / %.1f" % [f, fit.c.x, fit.c.y, fit.theta,
+						_mean_vel(bodies[1]), _draft(b, bodies[1]), inside, _top_of(b, water, 40.0, 17.0), _top_of(b, water, 600.0, 17.0)])
 			if f % 300 == 0 and OS.get_cmdline_user_args().has("grid"):
 				_print_grid_columns(b, [fit.c.x, fit.c.x + 120.0])
 				var top := INF
