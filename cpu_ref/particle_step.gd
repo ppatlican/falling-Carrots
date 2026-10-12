@@ -7,6 +7,8 @@
 ##               per iteration: lambda, delta, apply         (solve_*.glsl)
 ##               liquids: PBF density constraint (liquid.glslinc)
 ##               powders: frictional contacts   (powder.glslinc)
+##               bodies: contacts as powders, then shape matching (ADR 0002;
+##               CPU only until Milestone 3 step 3 adds them to the shaders)
 ##   velocity -> v = (pred - pos) / dt, drag, XSPH, commit   (velocity_*.glsl)
 ## Kernels are the 2D poly6 (density) and spiky (gradient) kernels.
 ## Density is normalised: rho_hat = sum(W) / rest_density, so 1.0 is rest.
@@ -18,10 +20,13 @@ const LIQUID := 0
 const POWDER := 1
 ## Below this distance two particles count as coincident (see pair_dir).
 const MIN_DIST := 1e-4
+## Shape matching keeps a body's last rotation when |A_pq| (the length of the vector its
+## angle comes from) is below this, per live member, in px^2.
+const BODY_ROT_EPS := 1e-4
 
 ## World box particles are kept inside.
 var world_size: Vector2
-## Per material id: { "class": int, "density", "friction", "viscosity", "drag" }.
+## Per material id: { "class": int, "density", "friction", "viscosity", "drag", "stiffness" }.
 var materials: Dictionary
 var rest_density: float
 
@@ -38,6 +43,7 @@ func _init(world: Vector2, material_table) -> void:
 			"friction": float(row.friction),
 			"viscosity": float(row.viscosity),
 			"drag": float(row.drag),
+			"stiffness": float(row.stiffness),
 		}
 	rest_density = rest_density_for(SimParams.H, SimParams.SPACING)
 
@@ -95,12 +101,19 @@ static func scorr(r2: float, h: float, dt: float) -> float:
 ## Advances particles one frame. state: "pos", "vel" (PackedVector2Array) and
 ## "material" (PackedInt32Array), all the same length, and optionally "hydro_p"
 ## (PackedFloat32Array, the density projection grid's pressure from the last frame;
-## added at 0 if missing). Modified in place.
+## added at 0 if missing) and the body keys (see make_body). Modified in place.
 func step(state: Dictionary, dt: float, iterations: int) -> void:
 	var pos: PackedVector2Array = state.pos
 	var vel: PackedVector2Array = state.vel
 	var mat: PackedInt32Array = state.material
 	var n := pos.size()
+	# Body id per particle (0 = none) and rest offset. Particles added without them are in no body.
+	var body: PackedInt32Array = state.get("body", PackedInt32Array())
+	body.resize(n)
+	var rest: PackedVector2Array = state.get("rest", PackedVector2Array())
+	rest.resize(n)
+	var bodies: Array = state.get("bodies", [])
+	var members: PackedInt32Array = state.get("members", PackedInt32Array())
 	var h := SimParams.H
 	var hydro_p: PackedFloat32Array = state.get("hydro_p", PackedFloat32Array())
 	var hsize := hydro_size(world_size)
@@ -112,7 +125,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	for i in n:
 		vel[i].y += SimParams.GRAVITY * dt
 		var move := (vel[i] * dt).limit_length(SimParams.MAX_STEP)
-		pred[i] = _clamp_to_world(pos[i] + move, i)
+		pred[i] = _clamp_to_world(pos[i] + move, i, body[i] != 0)
 
 	# Neighbour lists from the predicted positions (the GPU rebuilds its hash here too).
 	var neighbours := _find_neighbours(pred, h)
@@ -126,9 +139,9 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		delta[i] = _hydro_delta(pred[i], phi, hydro_p, dt).limit_length(0.5 * SimParams.SPACING) \
 				if _class(mat[i]) == LIQUID else Vector2.ZERO
 	for i in n:
-		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i])
+		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i], body[i] != 0)
 
-	# Solver iterations: lambda, delta, apply.
+	# Solver iterations: lambda, delta, apply, then shape matching.
 	var lambda := PackedFloat32Array()
 	lambda.resize(n)
 	for _it in iterations:
@@ -138,10 +151,11 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 			var d := Vector2.ZERO
 			if _class(mat[i]) == LIQUID:
 				d = _liquid_delta(i, pred, mat, lambda, neighbours[i], h, dt)
-			d += _contact_delta(i, pos, pred, mat, neighbours[i])
+			d += _contact_delta(i, pos, pred, mat, body, bodies, neighbours[i])
 			delta[i] = d.limit_length(0.5 * SimParams.SPACING)
 		for i in n:
-			pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i])
+			pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i], body[i] != 0)
+		_match_shapes(pred, mat, body, rest, bodies, members, dt, iterations)
 
 	# Velocity update, drag, then XSPH viscosity from the raw velocities.
 	var new_vel := PackedVector2Array()
@@ -156,6 +170,9 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 				pred[i] = pos[i]
 				v = Vector2.ZERO
 			v = limit_separation(v, v_pre, SimParams.MAX_SEPARATION, 0.0)
+		elif body[i] != 0:
+			# Bodies never sleep; their push-outs get a kick cap like liquids (BODY_KICK).
+			v = limit_separation(v, v_pre, 0.0, SimParams.BODY_KICK * SimParams.GRAVITY * dt)
 		else:
 			v = limit_separation(v, v_pre, 0.0, SimParams.LIQUID_KICK * SimParams.GRAVITY * dt)
 		vel[i] = v * exp(-materials[mat[i]].drag * dt)
@@ -173,6 +190,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 ## The solver's correction may stop a particle but leave it at most
 ## max(sep, its speed along the correction before the solver) + kick in that direction.
 ## Powders: sep MAX_SEPARATION, kick 0. Liquids: sep 0, kick LIQUID_KICK * GRAVITY * dt.
+## Body particles: sep 0, kick BODY_KICK * GRAVITY * dt.
 ## v_pre is the velocity the particle was predicted with. Same as velocity_update.glsl.
 static func limit_separation(v: Vector2, v_pre: Vector2, sep: float, kick: float) -> Vector2:
 	var dv := v - v_pre
@@ -189,19 +207,21 @@ func _class(m: int) -> int:
 
 
 ## Each particle gets its own wall inset (0.5 to 0.75 spacing) so wall clamping
-## can't stack particles on exactly the same point. Same as common.glslinc.
-func _clamp_to_world(p: Vector2, slot: int) -> Vector2:
-	var r := SimParams.SPACING * (0.5 + 0.25 * float(slot % 7) / 6.0)
+## can't stack particles on exactly the same point. Body particles all use 0.5 spacing:
+## shape matching keeps them apart, and a varied inset would tilt a body resting on a
+## wall. Same as common.glslinc.
+func _clamp_to_world(p: Vector2, slot: int, in_body: bool) -> Vector2:
+	var r := SimParams.SPACING * (0.5 if in_body else 0.5 + 0.25 * float(slot % 7) / 6.0)
 	return p.clamp(Vector2(r, r), world_size - Vector2(r, r))
 
 
-## Wall clamp. Powders pressed into a wall get friction. Floor: the sideways move is
-## cut by their friction coefficient. Side walls: Coulomb, the vertical move cancelled
-## is at most friction x how far the grain was pressed into the wall (solve_apply.glsl).
-## Without the side-wall part, contacts push wall grains up the wall.
-func _apply_delta(i: int, old: Vector2, p: Vector2, m: int) -> Vector2:
-	var c := _clamp_to_world(p, i)
-	if _class(m) == POWDER:
+## Wall clamp. Powders and body particles pressed into a wall get friction. Floor: the
+## sideways move is cut by their friction coefficient. Side walls: Coulomb, the vertical
+## move cancelled is at most friction x how far the grain was pressed into the wall
+## (solve_apply.glsl). Without the side-wall part, contacts push wall grains up the wall.
+func _apply_delta(i: int, old: Vector2, p: Vector2, m: int, in_body: bool) -> Vector2:
+	var c := _clamp_to_world(p, i, in_body)
+	if _class(m) == POWDER or in_body:
 		var mu: float = materials[m].friction
 		if p.y > c.y:
 			c.x = lerpf(c.x, old.x, mu)
@@ -270,6 +290,172 @@ func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lamb
 		var rv := pred[i] - pred[j]
 		d += (lambda[i] + lambda[j] + scorr(rv.length_squared(), h, dt)) * spiky_grad(rv, h, i, j)
 	return d / rest_density
+
+
+# --- Cluster solids (ADR 0002) ------------------------------------------------------
+
+## Shape matching (Mueller et al. 2005, rotation only), after each iteration's apply step.
+## Per body: its live members (a member counts only while it carries the body's id), their
+## centroid c, the rest centroid c0 of their rest offsets, A_pq = sum (p - c)(q - c0)^T and
+## the rotation from it (kept when live < 2 or |A_pq| is near 0); then every live member
+## moves toward its goal c + R(q - c0) by k = 1 - (1 - stiffness)^(dt * 60 / iterations),
+## so stiffness is the share of the shape error removed per 1/60 s. Mirrored by the fused
+## body pass in Milestone 3 step 3 (one workgroup per body).
+func _match_shapes(pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
+		rest: PackedVector2Array, bodies: Array, members: PackedInt32Array, dt: float, iterations: int) -> void:
+	for id in range(1, bodies.size()):
+		var b: Dictionary = bodies[id]
+		var live := PackedInt32Array()
+		var c := Vector2.ZERO
+		var c0 := Vector2.ZERO
+		for k in range(b.first, b.first + b.count):
+			var m := members[k]
+			if body[m] == id:
+				live.append(m)
+				c += pred[m]
+				c0 += rest[m]
+		b.live = live.size()
+		if live.is_empty():
+			continue
+		c /= live.size()
+		c0 /= live.size()
+		# In 2D the rotation of A_pq's polar decomposition is atan2(A10 - A01, A00 + A11).
+		var a := Vector2.ZERO
+		for m in live:
+			var p := pred[m] - c
+			var q := rest[m] - c0
+			a += Vector2(p.dot(q), q.cross(p))
+		if live.size() >= 2 and a.length() > BODY_ROT_EPS * live.size():
+			b.rot = a.normalized()
+		b.centroid = c
+		b.rest_centroid = c0
+		var s: float = materials[mat[live[0]]].stiffness
+		var k := 1.0 - pow(1.0 - s, dt * 60.0 / iterations)
+		var rot: Vector2 = b.rot
+		for m in live:
+			var q := rest[m] - c0
+			var goal := c + Vector2(rot.x * q.x - rot.y * q.y, rot.y * q.x + rot.x * q.y)
+			pred[m] += k * (goal - pred[m])
+
+
+## Makes one body of `material` from spawned positions (the body brush, Milestone 3 step 5):
+## appends its particles at rest, takes the lowest free body id, sets rest offsets from the
+## positions (relative to their mean) and gives it a member range (first fit). Adds the body
+## keys to state when missing:
+##   "body": PackedInt32Array, body id per particle, 0 = none; ids 1..N
+##   "rest": PackedVector2Array, rest offset per particle (px)
+##   "bodies": Array, index 0 unused; per body { first, count, live, centroid,
+##             rot (Vector2(cos, sin)), rest_centroid }, as the GPU's body records
+##   "members": PackedInt32Array, particle indices; body b owns [first, first + count)
+## Returns the body id.
+static func make_body(state: Dictionary, positions: PackedVector2Array, material: int) -> int:
+	_ensure_body_keys(state)
+	var pos: PackedVector2Array = state.pos
+	var vel: PackedVector2Array = state.vel
+	var mat: PackedInt32Array = state.material
+	var body: PackedInt32Array = state.body
+	var rest: PackedVector2Array = state.rest
+	var bodies: Array = state.bodies
+	var members: PackedInt32Array = state.members
+	var id := 1
+	while id < bodies.size() and bodies[id].count > 0:
+		id += 1
+	var count := positions.size()
+	var first := _first_fit(bodies, count)
+	if id == bodies.size():
+		bodies.append({})
+	if members.size() < first + count:
+		members.resize(first + count)
+	var mean := Vector2.ZERO
+	for p in positions:
+		mean += p
+	mean /= count
+	for k in count:
+		members[first + k] = pos.size()
+		pos.append(positions[k])
+		vel.append(Vector2.ZERO)
+		mat.append(material)
+		body.append(id)
+		rest.append(positions[k] - mean)
+	bodies[id] = {"first": first, "count": count, "live": count, "centroid": mean,
+			"rot": Vector2(1.0, 0.0), "rest_centroid": Vector2.ZERO}
+	state.pos = pos
+	state.vel = vel
+	state.material = mat
+	state.body = body
+	state.rest = rest
+	state.members = members
+	return id
+
+
+## Removes particles (the eraser) and remaps the member lists and ranges, so what is left of
+## a body keeps matching its own shape. A body left with no members frees its id and range.
+static func erase_particles(state: Dictionary, indices: PackedInt32Array) -> void:
+	_ensure_body_keys(state)
+	var n: int = state.pos.size()
+	var gone := {}
+	for i in indices:
+		gone[i] = true
+	var remap := PackedInt32Array()
+	remap.resize(n)
+	var keep := 0
+	for i in n:
+		remap[i] = -1 if gone.has(i) else keep
+		keep += 0 if gone.has(i) else 1
+	for key in ["pos", "vel", "material", "body", "rest"]:
+		var old = state[key]
+		var out = old.duplicate()
+		out.resize(keep)
+		for i in n:
+			if remap[i] >= 0:
+				out[remap[i]] = old[i]
+		state[key] = out
+	var members := PackedInt32Array()
+	var bodies: Array = state.bodies
+	for id in range(1, bodies.size()):
+		var b: Dictionary = bodies[id]
+		var first := members.size()
+		for k in range(b.first, b.first + b.count):
+			var m: int = state.members[k]
+			if remap[m] >= 0:
+				members.append(remap[m])
+		b.first = first if members.size() > first else 0
+		b.count = members.size() - first
+		b.live = b.count
+	state.members = members
+
+
+static func _ensure_body_keys(state: Dictionary) -> void:
+	var n: int = state.pos.size()
+	if not state.has("body"):
+		var body := PackedInt32Array()
+		body.resize(n)
+		state.body = body
+	if not state.has("rest"):
+		var rest := PackedVector2Array()
+		rest.resize(n)
+		state.rest = rest
+	if not state.has("bodies"):
+		state.bodies = [{"first": 0, "count": 0, "live": 0, "centroid": Vector2.ZERO,
+				"rot": Vector2(1.0, 0.0), "rest_centroid": Vector2.ZERO}]
+	if not state.has("members"):
+		state.members = PackedInt32Array()
+
+
+## Start of the first gap in the member list that holds `count` members, past the end if
+## none does. The CPU allocates ranges this way in the GPU sim too (ADR 0002).
+static func _first_fit(bodies: Array, count: int) -> int:
+	var used := []
+	for id in range(1, bodies.size()):
+		if bodies[id].count > 0:
+			used.append(Vector2i(bodies[id].first, bodies[id].count))
+	used.sort()
+	var at := 0
+	for r in used:
+		if r.x - at >= count:
+			return at
+		at = maxi(at, r.x + r.y)
+	return at
 
 
 # --- Liquid density projection grid (hydro.glslinc) --------------------------------
@@ -466,17 +652,22 @@ static func wall_density(p: Vector2, h: float, rest: float, world: Vector2) -> V
 
 ## Share of a contact's push-out that particle i takes, for rv = p_i - p_j (y down).
 ## The lower particle acts heavier (STACK_K), so piles hold up under load.
-## Powder-powder pairs only (see powder.glslinc).
+## Powder-powder pairs (see powder.glslinc), and pairs with a body, where rv_y is the
+## height between body centroids (a grain counts at its own height).
 static func stack_weight(m_i: float, m_j: float, rv_y: float) -> float:
 	return m_j / (m_i * exp(clampf(SimParams.STACK_K * rv_y, -8.0, 8.0)) + m_j)
 
 
 ## Contacts with any particle closer than SPACING (POWDER_LIQUID_REACH x SPACING for a
-## powder-liquid pair), where at least one side is a powder. Mass-weighted push-out; powders also get static/kinetic friction on the
-## relative sideways motion. Scaled by CONTACT_RELAX; summed for powders, averaged over the
-## grains it touches for a liquid (see powder.glslinc).
+## powder-liquid pair), where at least one side is a powder or the two are in different
+## bodies: body particles follow the powder rule. Same-body pairs are left to shape matching;
+## body-liquid pairs wait for Milestone 3 step 4. Mass-weighted push-out, the lower side
+## heavier by STACK_K (see stack_weight); also static/kinetic friction on the relative
+## sideways motion.
+## Scaled by CONTACT_RELAX; summed for powders and bodies, averaged over the grains it touches
+## for a liquid (see powder.glslinc).
 func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, mat: PackedInt32Array,
-		nb: PackedInt32Array) -> Vector2:
+		body: PackedInt32Array, bodies: Array, nb: PackedInt32Array) -> Vector2:
 	var mi: Dictionary = materials[mat[i]]
 	var sum := Vector2.ZERO
 	var fric := Vector2.ZERO
@@ -486,15 +677,17 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	var n_touch := 0.0
 	for j in nb:
 		var mj: Dictionary = materials[mat[j]]
-		if mi["class"] != POWDER and mj["class"] != POWDER:
-			continue  # liquid-liquid is handled by the density constraint
+		if mi["class"] != POWDER and mj["class"] != POWDER and (body[i] == 0 or body[j] == 0):
+			continue  # liquid-liquid is handled by the density constraint; body-liquid not yet
+		if body[i] != 0 and body[i] == body[j]:
+			continue  # same body: shape matching holds it together
 		var rv := pred[i] - pred[j]
 		var dist := rv.length()
 		if dist < SimParams.H:
 			n_near += 1
 			if mj["class"] == LIQUID:
 				n_wet += 1
-		var mixed: bool = (mi["class"] == POWDER) != (mj["class"] == POWDER)
+		var mixed: bool = mi["class"] == LIQUID or mj["class"] == LIQUID
 		var reach := SimParams.SPACING * (SimParams.POWDER_LIQUID_REACH if mixed else 1.0)
 		if dist >= reach:
 			continue
@@ -507,8 +700,18 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			w = SimParams.POWDER_LIQUID_SHARE if mi["class"] == POWDER else 1.0 - SimParams.POWDER_LIQUID_SHARE
 		else:
 			w = mj.density / (mi.density + mj.density)
-		var stack: bool = mi["class"] == POWDER and mj["class"] == POWDER
-		sum += (stack_weight(mi.density, mj.density, rv.y) if stack else w) * pen * normal
+		var w_push := w
+		if mi["class"] == POWDER and mj["class"] == POWDER:
+			w_push = stack_weight(mi.density, mj.density, rv.y)
+		elif not mixed:
+			# A body (or a grain against one) is heavier by the height of its body's centroid
+			# under the other side's, so a stack of bodies holds; friction gets the same share,
+			# since a stack with mass-weighted friction swayed for good (ADR 0002).
+			var yi: float = bodies[body[i]].centroid.y if body[i] != 0 else pred[i].y
+			var yj: float = bodies[body[j]].centroid.y if body[j] != 0 else pred[j].y
+			w_push = stack_weight(mi.density, mj.density, yi - yj)
+			w = w_push
+		sum += w_push * pen * normal
 		var mu: float = minf(mi.friction, mj.friction)
 		if mu > 0.0:
 			var rel := (pred[i] - pos[i]) - (pred[j] - pos[j])
@@ -525,7 +728,7 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	fric /= maxf(fric_w, 1.0)
 	# Wet grains slip (WET_SLIP): friction drops with the share of liquid neighbours.
 	var wet := float(n_wet) / n_near if n_near > 0 else 0.0
-	if mi["class"] != POWDER:
+	if mi["class"] == LIQUID:
 		sum /= maxf(n_touch, 1.0)  # liquid: averaged over the grains it touches (powder.glslinc)
 	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet)) * SimParams.CONTACT_RELAX
 
