@@ -58,7 +58,7 @@ What the grid does today, which constrains step 4:
 - **A big floater heaves with the pool.** An 80 × 40 px cork set on an 80 px deep wall-to-wall pool plunges and sets off the pool's symmetric slosh (both ends rise and fall together, ~2.8 s); it heaves with it, ±5 px decaying to ±0.5 px over ~12 s, and still moves at 2.6–6 px/s at 13 s. Three times the body drag (60) didn't change it: the drag pulls a body toward the water's velocity, so it can't damp a motion the water has.
 - The floor under a wet body is wet (item 4) whether or not water can reach it.
 - Bodies drag water nowhere: the drag acts on the body only, so a moving body doesn't pull the water around it along.
-- Body–body overlaps on fast impacts aren't pushed out (item 11).
+- Body–body overlaps on fast impacts aren't pushed out (item 11). A lead: SunaEngine's swept member contacts, averaged over the hitting members only (`docs/papers.md`, Soft & rigid bodies).
 
 ## Decided by the tests
 CPU reference (`tests/test_bodies.gd`, 15 tests; the 8 dry ones give their exact numbers from before):

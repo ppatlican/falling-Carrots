@@ -9,6 +9,7 @@ Read only the section for the problem at hand. Fetch one paper section at a time
   Base algorithm. s_corr (k≈0.1, n=4, Δq 0.1–0.3h), XSPH c≈0.01, vorticity confinement. Notes s_corr depends on time step.
 - **XPBD** (Macklin, Müller, Chentanez 2016): https://matthias-research.github.io/pages/publications/XPBD.pdf
   Compliance makes stiffness independent of substep/iteration count. Use for s_corr, contacts, grid pressure stiffness.
+- **SunaEngine coloured solve** (`src/sim.wgsl`: `cell_colour`, `solveB_c0..3`, `applyDp_c0..3`; AGPL, see Readable code): 4 PBF iterations, each split into four sweeps by cell parity (x&1, y&1), so each colour moves before the next reads positions: Gauss-Seidel between colours, Jacobi within one. Untried here (STATUS: Jacobi only, up to 32 iterations). Their rules: take the colour from the cell at the start of the substep, not from the predicted position (a particle crossing a cell edge is otherwise corrected twice or not at all); keep solve and apply as separate passes (about half of all neighbour pairs share a cell, so a merged pass races). Costs 4× the dispatches per iteration. A probe experiment for stacking, not a replacement for the density projection grid.
 
 ## Boundaries & rest (floor creep, resting jitter, walls)
 - **Unified Particle Physics for Real-Time Applications (FleX)** (Macklin et al. 2014): https://mmacklin.com/uppfrta_preprint.pdf
@@ -37,6 +38,7 @@ Read only the section for the problem at hand. Fetch one paper section at a time
   Gradient sprites into a viewport, then threshold shader. Closest to the M5 plan; MIT.
 - **Screen Space Fluid Rendering with Curvature Flow** (van der Laan et al. 2009): https://wstahw.win.tue.nl/edu/2IV06/andrei/particle_rendering/provided/p91-van_der_laan.pdf
   Splat → smooth → threshold/shade.
+- **SunaEngine renderer** (`src/render.js`; AGPL, see Readable code): a working 2D, face-on version of the paper above, used by an OE-Cake remake. Splat poly6 kernels into a field texture (coverage, speed, and the material id in alpha) → bilateral Gaussian or curvature-flow smooth → coverage mask blurred at 1/8 resolution for thickness → composite: normals from the smoothed height, Fresnel, per-channel Beer-Lambert, per-material optics from a 32-slot table. Also a "flat" view (metaball threshold, no shading: OE-Cake's own look), gas drawn with a lower threshold so thin smoke still shows, and a glow halo for hot particles. The renderer binds sim buffers read-only. **Read before designing M5.**
 
 ## Soft & rigid bodies, ropes (OE-CAKE-style features; ADR 0001)
 - **Meshless Deformations Based on Shape Matching** (Müller et al. 2005): https://graphics.stanford.edu/courses/cs468-05-fall/Papers/p471-muller.pdf
@@ -50,6 +52,10 @@ Read only the section for the problem at hand. Fetch one paper section at a time
   Short readable JS for stable soft bodies and cloth with XPBD distance/volume constraints; good templates for rope/cloth shaders and tearing.
 - **nialltl/unity_burst_shape_matching**: https://github.com/nialltl/unity_burst_shape_matching
   Compact 2D parallel shape-matching deformable bodies; readable reference for the per-cluster reduction (centroid, covariance, polar decomposition) on parallel hardware.
+- **SunaEngine rigid bodies and bonds** (`src/sim.wgsl`: `rigidStep`, `rigidSolve`, `rigidMember`, `rigid_seal_delta`, `bondForm1/2`; AGPL, see Readable code). One 256-thread workgroup per body with a fixed tree reduction, like `body_match`. Differences worth knowing:
+  - Rigid bodies don't shape-match. Members skip pushes from their own body, never apply their own correction, and the summed correction becomes the body's translation and torque; members are then placed at c + R(θ)·o. A member that melts, burns or is erased leaves the body; fewer than 4 members dissolve it into free particles.
+  - Fast contacts (lead for ADR 0003's body–body overlaps on fast impacts): each member's move this substep is tested as a segment against the grid cells it sweeps, not its neighbour list, which can miss a one-particle rail at top speed. Hits are reduced in separate lanes and averaged over the hitting members only, then added to the body move, because averaging one rim contact over a 450-member wheel makes it vanish.
+  - Elastic and breakable solids use distance bonds per particle pair (stiffness, break strain, re-form on contact, stiffness ramped by temperature), not soft shape matching. Rigid and bonded are exclusive per material.
 
 ## Stickiness & thick liquids (cohesion, adhesion, viscosity range)
 - **Particle-based Viscoelastic Fluid Simulation** (Clavet, Beaudoin, Poulin 2005): http://www.ligum.umontreal.ca/Clavet-2005-PVFS/pvfs.pdf
@@ -64,3 +70,8 @@ Read only the section for the problem at hand. Fetch one paper section at a time
   Readable GPU particle fluid; compare hash/kernel/pressure choices.
 - **Noita GDC 2019** (Petri Purho): https://youtu.be/prXuyMCgbTc
   How a shipped falling-sand game handles materials and only simulates active regions.
+- **SunaEngine** (engine of SunaBox, an OE-Cake remake; Darien Bathalter): https://github.com/DARIENBATHALTER/sunaengine
+  **AGPL-3.0: read for ideas, don't copy code.** 2D PBF in WebGPU WGSL, no libraries; Q16.16 integer math so replays match on every GPU (not worth it for us). Small scenes (4–6k particles). Sections above: coloured solve, renderer, rigid bodies and bonds. Also:
+  - A 48-word material row per material: movement, heat, melt/freeze/boil/condense, burning, corrosion, friction, bonds, solid mode. Every feature's parameter switches it off at 0, so new features leave existing materials byte-identical. Useful for ADR 0001's per-material parameters.
+  - All particles have the same mass; buoyancy comes from a per-material gravity that may be negative (gases rise). A cheap stand-in for STATUS "Liquids ignore their material density", but no layering by real density.
+  - Erased particles keep their slot (a dead flag; dropped from neighbour lists) instead of being compacted.
