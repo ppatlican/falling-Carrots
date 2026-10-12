@@ -600,7 +600,7 @@ func _bowl_pressure(b: Dictionary, t: float) -> void:
 	bowl_p_n += 1
 	for c in gw * gh:
 		bowl_p_sum[c] += b.hydro_p.decode_float(c * 4)
-		bowl_phi_sum[c] += Vector2(b.hydro_phi.decode_float(c * 8), b.hydro_phi.decode_float(c * 8 + 4))
+		bowl_phi_sum[c] += Vector2(b.hydro_phi.decode_float(c * 16), b.hydro_phi.decode_float(c * 16 + 4))
 
 
 func _bowl_pressure_print() -> void:

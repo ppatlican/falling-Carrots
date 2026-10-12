@@ -1,5 +1,6 @@
 ## CPU reference: cluster solids by shape matching (ADR 0002). Rigid and jelly boxes on
-## the floor, stacked, half erased, spawned into the floor and dropped on a corner.
+## the floor, stacked, half erased, spawned into the floor and dropped on a corner; in water
+## (sinking, floating, water kept out) and dropped onto sand (grains kept out), ADR 0003.
 ## Runs at the config.json defaults (2 substeps, 4 iterations). Thresholds come from what
 ## the owner could see: 0.1 px is a tenth of a pixel, and a body moving under 0.5 px/s
 ## shifts by less than a pixel in 2 s.
@@ -19,6 +20,9 @@ const REST_SPEED := 0.5
 
 var _carrot: int
 var _jelly: int
+var _cork: int
+var _water: int
+var _sand: int
 
 
 func test_rigid_box_on_floor_keeps_shape() -> void:
@@ -199,11 +203,128 @@ func test_box_dropped_on_corner_tips_and_settles() -> void:
 	expect(speed < REST_SPEED, "the box at rest, speed < %.1f px/s: %.3f" % [REST_SPEED, speed])
 
 
+# --- Bodies in water and on sand (ADR 0003) ---------------------------------------------
+
+## The way out of an 8x6 box's rest shape: boundary members are half a spacing inside the
+## outline, along their outward normal; an inner member points at the nearest edge.
+func test_rest_outline_of_a_box() -> void:
+	var sp := SimParams.SPACING
+	var rest := _box(Vector2.ZERO, 8, 6)
+	var mean := Vector2.ZERO
+	for q in rest:
+		mean += q
+	mean /= rest.size()
+	for k in rest.size():
+		rest[k] -= mean
+	var e: PackedVector2Array = ParticleStep.rest_outline(rest)
+	expect_eq(e.size(), rest.size(), "one outline vector per member")
+	# Member (col, row) of the 8x6 lattice is e[row * 8 + col], row 0 at the top.
+	_expect_vec(e[0 * 8 + 3], Vector2(0, -0.5 * sp), "top edge member points up half a spacing")
+	_expect_vec(e[2 * 8 + 0], Vector2(-0.5 * sp, 0), "left edge member points left")
+	_expect_vec(e[5 * 8 + 4], Vector2(0, 0.5 * sp), "bottom edge member points down")
+	var corner: Vector2 = e[0 * 8 + 7]
+	expect(corner.x > 0.0 and corner.y < 0.0 and absf(corner.x + corner.y) < 1e-4,
+			"top-right corner points out diagonally: %s" % corner)
+	_expect_vec(e[1 * 8 + 3], Vector2(0, -1.5 * sp), "member one row in points up to the top outline")
+	_expect_vec(e[2 * 8 + 1], Vector2(-1.5 * sp, 0), "member one column in points left")
+
+
+func test_sinking_box_keeps_water_out() -> void:
+	var world := Vector2(48, 60)
+	var sim = _sim(world)
+	var state := _pool(world, 24, 18)
+	var surface := world.y - 18 * SimParams.SPACING
+	# A carrot (denser than water) dropped from 8 px above the water.
+	var id: int = ParticleStep.make_body(state, _box(Vector2(24, surface - 8.0), 8, 6), _carrot)
+	var most_inside := 0
+	for f in 300:
+		_frame(sim, state)
+		if f % 10 == 9:
+			most_inside = maxi(most_inside, _inside(state, id, _water).size())
+	var fit := _fit(state, id)
+	var above := _floor_y(world) - _lowest(state, id)
+	_report("carrot box into water, 300 frames: lowest particle %.2f px above the floor, %d water inside at the end (most %d), rotation %.4f rad, speed %.3f px/s, shape error %.4f px"
+			% [above, _inside(state, id, _water).size(), most_inside, fit.theta, _body_vel(state, id).length(), fit.err])
+	# On the floor, or on one layer of water particles: nothing squeezes a one-particle film out
+	# from under a body (ADR 0003 known limits).
+	expect(above < 2.0 * SimParams.SPACING, "the carrot sinks to the floor (or one water layer above it): %.2f px above it" % above)
+	expect(most_inside == 0, "no water inside the box at any sample: up to %d" % most_inside)
+	expect(fit.err < 0.1, "the box keeps its shape within 0.1 px: %.4f" % fit.err)
+
+
+## A cork floats about half under. It rides ~2 px high (draft ~0.35): the grid's free surface
+## sits above the top water particles (ADR 0003 known limits). An 8x6 box at density 0.5 is
+## only just stable upright (a box floats upright when width / height > sqrt(6 rho (1 - rho)),
+## 1.22 here, it is 1.33), so it rocks slowly; "upright" means not capsized.
+func test_light_box_floats_at_its_density() -> void:
+	var world := Vector2(48, 60)
+	var sim = _sim(world)
+	var state := _pool(world, 24, 18)
+	var surface := world.y - 18 * SimParams.SPACING
+	# A cork (density 0.5) set down on the water.
+	var id: int = ParticleStep.make_body(state, _box(Vector2(24, surface - 1.0), 8, 6), _cork)
+	var late := _settle_in_water(sim, state, id, 360)
+	_report("cork box on water, 360 frames, last 60: mean draft %.2f of its height (density 0.5), mean speed %.2f px/s, max |rotation| %.3f rad, %d water inside"
+			% [late.draft, late.speed, late.turn, _inside(state, id, _water).size()])
+	expect(late.draft > 0.25 and late.draft < 0.7, "the cork floats about half under: draft %.2f of its height" % late.draft)
+	expect(late.speed < 3.0, "the cork is nearly still, mean speed < 3 px/s: %.2f" % late.speed)
+	expect(late.turn < 0.35, "the cork floats upright, |rotation| < 0.35 rad: %.3f" % late.turn)
+	expect_eq(_inside(state, id, _water).size(), 0, "no water inside the cork")
+
+
+func test_light_box_rises_from_the_bottom() -> void:
+	var world := Vector2(48, 60)
+	var sim = _sim(world)
+	# The pool leaves an 8-column gap on the floor for a cork, with the water around it.
+	var state := _pool(world, 24, 18, 8)
+	var id: int = ParticleStep.make_body(state, _box(Vector2(24, _floor_y(world)), 8, 6), _cork)
+	var late := _settle_in_water(sim, state, id, 420)
+	_report("cork box let go on the floor of a pool, 420 frames, last 60: mean draft %.2f of its height, mean speed %.2f px/s, max tilt %.3f rad, %d water inside"
+			% [late.draft, late.speed, late.turn, _inside(state, id, _water).size()])
+	expect(late.draft > 0.25 and late.draft < 0.7, "the cork rises and floats about half under: draft %.2f" % late.draft)
+	# It comes up fast and rocks in this narrow pool's slosh for seconds (still +-0.4 rad at
+	# 7 s); the check is that it floats on a face, not on its side (1.57 rad).
+	expect(late.turn < 0.6, "the cork floats face up or down, tilt < 0.6 rad: %.3f" % late.turn)
+
+
+## ADR 0002 known limit: an 8x6 box dropped 72 px onto sand ended with 7 grains inside.
+func test_box_dropped_on_sand_keeps_grains_out() -> void:
+	var world := Vector2(80, 140)
+	var sim = _sim(world)
+	var state := _bed(world, 40, 10)
+	for f in 60:
+		_frame(sim, state)
+	# Dropped from 100 px above the bed's top (lands at ~280 px/s, as body_probe sand).
+	var top := _top_of(state, _sand)
+	var id: int = ParticleStep.make_body(state, _box(Vector2(40, top - 100.0), 8, 6), _carrot)
+	var most := 0
+	for f in 180:
+		_frame(sim, state)
+		most = maxi(most, _inside(state, id, _sand).size())
+	var fit := _fit(state, id)
+	var inside := _inside(state, id, _sand).size()
+	_report("8x6 carrot dropped 100 px onto a sand bed, 180 frames: %d grains inside at the end (most %d in a frame), rotation %.3f rad, shape error %.4f px, speed %.3f px/s"
+			% [inside, most, fit.theta, fit.err, _body_vel(state, id).length()])
+	expect_eq(inside, 0, "no grain inside the box after landing")
+	expect(fit.err < 0.1, "the box keeps its shape: %.4f" % fit.err)
+
+
+func test_erasing_part_of_a_body_marks_its_outline_stale() -> void:
+	_sim()
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var a: int = ParticleStep.make_body(state, _box(Vector2(20, 50), 8, 6), _carrot)
+	var b: int = ParticleStep.make_body(state, _box(Vector2(60, 50), 8, 6), _carrot)
+	expect(not state.bodies[a].stale and not state.bodies[b].stale, "new bodies have a fresh outline")
+	ParticleStep.erase_particles(state, PackedInt32Array([0, 1, 2]))
+	expect(state.bodies[a].stale, "the body that lost members is marked stale")
+	expect(not state.bodies[b].stale, "the other body keeps its outline")
+
+
 # --- Helpers -----------------------------------------------------------------------
 
 ## A ParticleStep over the shipped table plus test-only rigid ("carrot", stiffness 1) and
 ## jelly (stiffness 0.3) rows: materials.json gets no cluster rows until the GPU has bodies.
-func _sim():
+func _sim(world := WORLD):
 	var shipped = MaterialTable.new()
 	shipped.load_file()
 	var rows := []
@@ -214,12 +335,17 @@ func _sim():
 			"density": 1.2, "stiffness": 1.0, "tags": []}))
 	rows.append(_with(sand, {"id": 3, "name": "jelly", "class": "cluster", "color": "#d94f8a",
 			"density": 1.1, "stiffness": 0.3, "tags": []}))
+	rows.append(_with(sand, {"id": 4, "name": "cork", "class": "cluster", "color": "#c8a46e",
+			"density": 0.5, "stiffness": 1.0, "tags": []}))
 	var table = MaterialTable.new()
 	var problems: PackedStringArray = table.load_rows(rows)
 	expect(problems.is_empty(), "test material rows: %s" % "; ".join(problems))
 	_carrot = table.id_of("carrot")
 	_jelly = table.id_of("jelly")
-	return ParticleStep.new(WORLD, table)
+	_cork = table.id_of("cork")
+	_water = table.id_of("water")
+	_sand = table.id_of("sand")
+	return ParticleStep.new(world, table)
 
 
 func _with(row: Dictionary, changes: Dictionary) -> Dictionary:
@@ -299,6 +425,125 @@ func _closest_cross_pair(state: Dictionary) -> float:
 			if state.body[i] != state.body[j]:
 				best = minf(best, state.pos[i].distance_to(state.pos[j]))
 	return best
+
+
+## Runs `frames` frames; over the last 60, the body's mean draft, mean speed and largest
+## tilt off level (|rotation| from the nearest half turn).
+func _settle_in_water(sim, state: Dictionary, id: int, frames: int) -> Dictionary:
+	var draft := 0.0
+	var speed := 0.0
+	var turn := 0.0
+	for f in frames:
+		_frame(sim, state)
+		if f >= frames - 60:
+			draft += _draft(state, id) / 60.0
+			speed += _body_vel(state, id).length() / 60.0
+			# Tilt off level: a box turned half over floats as well face down.
+			var theta: float = _fit(state, id).theta
+			turn = maxf(turn, absf(theta - roundf(theta / PI) * PI))
+	return {"draft": draft, "speed": speed, "turn": turn}
+
+
+## Water at rest spacing from the floor up, cols x rows, centred. With `gap` > 0 the middle
+## `gap` columns of the bottom 6 rows stay empty (room for a box on the floor).
+func _pool(world: Vector2, cols: int, rows: int, gap := 0) -> Dictionary:
+	return _lattice(world, cols, rows, _water, gap)
+
+
+## A sand bed from the floor up.
+func _bed(world: Vector2, cols: int, rows: int) -> Dictionary:
+	return _lattice(world, cols, rows, _sand, 0)
+
+
+func _lattice(world: Vector2, cols: int, rows: int, material: int, gap: int) -> Dictionary:
+	var sp := SimParams.SPACING
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var x0 := 0.5 * (world.x - (cols - 1) * sp)
+	var mid := 0.5 * (cols - 1)
+	for r in rows:
+		for c in cols:
+			if gap > 0 and r < 6 and absf(c - mid) < 0.5 * gap:
+				continue
+			state.pos.append(Vector2(x0 + c * sp, _floor_y(world) - r * sp))
+			state.vel.append(Vector2.ZERO)
+			state.material.append(material)
+	return state
+
+
+## Lowest y a body particle's centre reaches in this world (the 0.5-spacing wall inset).
+func _floor_y(world: Vector2) -> float:
+	return world.y - 0.5 * SimParams.SPACING
+
+
+## Highest particle centre of a material (smallest y).
+func _top_of(state: Dictionary, material: int) -> float:
+	var top := INF
+	for i in state.pos.size():
+		if state.material[i] == material:
+			top = minf(top, state.pos[i].y)
+	return top
+
+
+func _lowest(state: Dictionary, id: int) -> float:
+	var y := -INF
+	for m in _live(state, id):
+		y = maxf(y, state.pos[m].y)
+	return y
+
+
+## Particles of `material` whose centre is inside the body's outline (the bounding box of its
+## rest lattice, out to half a spacing past the boundary members, less a quarter spacing of
+## slack), placed by the body's best fit.
+func _inside(state: Dictionary, id: int, material: int) -> PackedInt32Array:
+	var fit := _fit(state, id)
+	var live := _live(state, id)
+	var c0 := Vector2.ZERO
+	for m in live:
+		c0 += state.rest[m]
+	c0 /= live.size()
+	var lo := Vector2(INF, INF)
+	var hi := -lo
+	for m in live:
+		lo = lo.min(state.rest[m] - c0)
+		hi = hi.max(state.rest[m] - c0)
+	var pad := Vector2.ONE * 0.25 * SimParams.SPACING
+	lo -= pad
+	hi += pad
+	var out := PackedInt32Array()
+	for i in state.pos.size():
+		if state.material[i] != material:
+			continue
+		var q: Vector2 = (state.pos[i] - fit.c).rotated(-fit.theta)
+		if q.x > lo.x and q.x < hi.x and q.y > lo.y and q.y < hi.y:
+			out.append(i)
+	return out
+
+
+## Share of a floating body's height under the water: from its outline's bottom up to the
+## water's surface (half a spacing over the top water particle, in columns clear of it).
+func _draft(state: Dictionary, id: int) -> float:
+	var sp := SimParams.SPACING
+	var top := INF
+	var bottom := -INF
+	var left := INF
+	var right := -INF
+	for m in _live(state, id):
+		var p: Vector2 = state.pos[m]
+		top = minf(top, p.y)
+		bottom = maxf(bottom, p.y)
+		left = minf(left, p.x)
+		right = maxf(right, p.x)
+	var surface := INF
+	for i in state.pos.size():
+		var p: Vector2 = state.pos[i]
+		if state.material[i] == _water and (p.x < left - 3.0 * sp or p.x > right + 3.0 * sp):
+			surface = minf(surface, p.y)
+	surface -= 0.5 * sp
+	return (bottom + 0.5 * sp - surface) / (bottom - top + sp)
+
+
+func _expect_vec(got: Vector2, want: Vector2, what: String) -> void:
+	expect(got.distance_to(want) < 1e-3, "%s: %s, expected %s" % [what, got, want])
 
 
 func _report(line: String) -> void:

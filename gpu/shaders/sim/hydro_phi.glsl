@@ -1,11 +1,11 @@
 #[compute]
 #version 450
 
-// Hydro 2/4: liquid and powder density over rest of each coarse cell (hydro_density in
+// Hydro 2/4: liquid, powder and body density over rest of each coarse cell (hydro_density in
 // hydro.glslinc) from the splatted sums, which it zeroes for the next frame.
 // One thread per coarse cell.
 
-// common.glslinc stamp: Params 124 B, v16. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v17. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
 
@@ -16,6 +16,7 @@ void main() {
 		return;
 	}
 	hydro_phi[c] = hydro_density(ivec2(int(c) % size.x, int(c) / size.x));
-	hydro_acc[2u * c] = 0;
-	hydro_acc[2u * c + 1u] = 0;
+	for (uint k = 0u; k < 4u; k++) {
+		hydro_acc[4u * c + k] = 0;
+	}
 }

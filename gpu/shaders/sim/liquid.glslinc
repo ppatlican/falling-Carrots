@@ -2,8 +2,8 @@
 // Mirror: cpu_ref/particle_step.gd _lambda / _liquid_delta / _xsph.
 // All indices are sorted indices (see common.glslinc).
 // Density is normalised (1.0 = rest). Liquid neighbours count toward it and move with
-// the constraint; powder grains count at their solid share (LIQUID_POWDER_SHARE) and
-// don't move. The constraint only pushes apart (C >= 0), which keeps free surfaces stable.
+// the constraint; powder grains count at their solid share (LIQUID_POWDER_SHARE) and body
+// particles in full (displacing_share), and neither moves with it. The constraint only pushes apart (C >= 0), which keeps free surfaces stable.
 // Walls count toward density (wall_density).
 //
 // Grains count only by their solid share. Counted in full (they pack to ~1.4x the
@@ -79,6 +79,14 @@ float wall_density(vec2 p, out vec2 grad) {
 // at 0.54, 4.2k (water_feel_probe sink). Mirror: SimParams.LIQUID_POWDER_SHARE.
 const float LIQUID_POWDER_SHARE = 0.54;
 
+// Share of a liquid's density a neighbour of class c counts for when it doesn't move with the
+// constraint: a grain its solid share, a body particle 1 (it sits on the rest-spacing lattice,
+// so it fills a water particle's room; ADR 0003), anything else 0.
+// Mirror: ParticleStep._displacing_share.
+float displacing_share(uint c) {
+	return c == CLASS_POWDER ? LIQUID_POWDER_SHARE : (c == CLASS_CLUSTER ? 1.0 : 0.0);
+}
+
 float liquid_lambda(uint t) {
 	vec2 pt = s_pred[t];
 	vec2 wall_grad;
@@ -92,13 +100,13 @@ float liquid_lambda(uint t) {
 		float r2 = dot(rv, rv);
 		if (r2 >= params.h * params.h) continue;
 		uint cj = s_class(j);
-		if (cj == CLASS_POWDER) {
-			// Grains displace the liquid but don't move with its constraint.
-			density += LIQUID_POWDER_SHARE * poly6(r2);
-			grad_t += LIQUID_POWDER_SHARE * spiky_grad(rv, t, j) / params.rest_density;
+		if (cj != CLASS_LIQUID) {
+			// Grains and body particles displace the liquid but don't move with its constraint.
+			float share = displacing_share(cj);
+			density += share * poly6(r2);
+			grad_t += share * spiky_grad(rv, t, j) / params.rest_density;
 			continue;
 		}
-		if (cj != CLASS_LIQUID) continue;
 		density += poly6(r2);
 		vec2 g = spiky_grad(rv, t, j) / params.rest_density;
 		grad_t += g;
@@ -121,11 +129,10 @@ vec2 liquid_delta(uint t) {
 		float r2 = dot(rv, rv);
 		if (r2 >= params.h * params.h) continue;
 		uint cj = s_class(j);
-		if (cj == CLASS_POWDER) {
-			d += lt * LIQUID_POWDER_SHARE * spiky_grad(rv, t, j);
+		if (cj != CLASS_LIQUID) {
+			d += lt * displacing_share(cj) * spiky_grad(rv, t, j);
 			continue;
 		}
-		if (cj != CLASS_LIQUID) continue;
 		d += (lt + lambda[j] + scorr(r2)) * spiky_grad(rv, t, j);
 	} END_NEIGHBOURS
 	return d / params.rest_density;

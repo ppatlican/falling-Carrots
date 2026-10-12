@@ -18,6 +18,7 @@ const SimParams = preload("res://core/sim_params.gd")
 
 const LIQUID := 0
 const POWDER := 1
+const CLUSTER := 2
 ## Below this distance two particles count as coincident (see pair_dir).
 const MIN_DIST := 1e-4
 ## Shape matching keeps a body's last rotation when |A_pq| (the length of the vector its
@@ -112,6 +113,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	body.resize(n)
 	var rest: PackedVector2Array = state.get("rest", PackedVector2Array())
 	rest.resize(n)
+	var edge: PackedVector2Array = state.get("edge", PackedVector2Array())
+	edge.resize(n)
 	var bodies: Array = state.get("bodies", [])
 	var members: PackedInt32Array = state.get("members", PackedInt32Array())
 	var h := SimParams.H
@@ -130,14 +133,20 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	# Neighbour lists from the predicted positions (the GPU rebuilds its hash here too).
 	var neighbours := _find_neighbours(pred, h)
 
-	# Density projection grid, then its push on liquids (hydro_*.glsl, solve_pressure.glsl).
-	var phi := _hydro_density(pred, mat)
+	# Density projection grid, then its push on liquids and on bodies' wet surfaces
+	# (hydro_*.glsl, solve_pressure.glsl).
+	var phi := _hydro_density(pred, mat, body)
 	_hydro_solve(phi, hydro_p, dt)
 	var delta := PackedVector2Array()
 	delta.resize(n)
 	for i in n:
-		delta[i] = _hydro_delta(pred[i], phi, hydro_p, dt).limit_length(0.5 * SimParams.SPACING) \
-				if _class(mat[i]) == LIQUID else Vector2.ZERO
+		if _class(mat[i]) == LIQUID:
+			delta[i] = _hydro_delta(pred[i], phi, hydro_p, dt)
+		elif body[i] != 0:
+			delta[i] = _body_pressure_delta(i, pred, mat, body, edge, bodies[body[i]], neighbours[i], phi, hydro_p, dt)
+		else:
+			delta[i] = Vector2.ZERO
+		delta[i] = delta[i].limit_length(0.5 * SimParams.SPACING)
 	for i in n:
 		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i], body[i] != 0)
 
@@ -151,7 +160,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 			var d := Vector2.ZERO
 			if _class(mat[i]) == LIQUID:
 				d = _liquid_delta(i, pred, mat, lambda, neighbours[i], h, dt)
-			d += _contact_delta(i, pos, pred, mat, body, bodies, neighbours[i])
+			d += _contact_delta(i, pos, pred, mat, body, edge, bodies, neighbours[i])
 			delta[i] = d.limit_length(0.5 * SimParams.SPACING)
 		for i in n:
 			pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i], body[i] != 0)
@@ -178,7 +187,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		vel[i] = v * exp(-materials[mat[i]].drag * dt)
 	for i in n:
 		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h, dt) \
-				+ _powder_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt)
+				+ _powder_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt) \
+				+ (_body_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt) if body[i] != 0 else Vector2.ZERO)
 	for i in n:
 		vel[i] = new_vel[i]
 		pos[i] = pred[i]
@@ -252,8 +262,17 @@ func _find_neighbours(pred: PackedVector2Array, h: float) -> Array:
 	return out
 
 
-## PBF lambda. Liquid neighbours count toward density, grains at their solid share
-## (LIQUID_POWDER_SHARE, liquid.glslinc), but only liquid neighbours move, so only they
+## Share of a liquid's density a neighbour of class c counts for when it doesn't move with
+## the constraint: a grain its solid share (LIQUID_POWDER_SHARE), a body particle 1 (it sits
+## on the rest-spacing lattice, so it fills a water particle's room; ADR 0003). 0 for the rest.
+func _displacing_share(c: int) -> float:
+	if c == POWDER:
+		return SimParams.LIQUID_POWDER_SHARE
+	return 1.0 if c == CLUSTER else 0.0
+
+
+## PBF lambda. Liquid neighbours count toward density, grains and body particles at their
+## share (_displacing_share, liquid.glslinc), but only liquid neighbours move, so only they
 ## add to the gradient sum.
 func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: PackedInt32Array, h: float) -> float:
 	var wall := wall_density(pred[i], h, rest_density, world_size)
@@ -261,12 +280,11 @@ func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: Packed
 	var grad_i := Vector2(wall.y, wall.z) / rest_density
 	var grad_sum := 0.0
 	for j in nb:
-		if _class(mat[j]) == POWDER:
-			var rp := pred[i] - pred[j]
-			density += SimParams.LIQUID_POWDER_SHARE * poly6(rp.length_squared(), h)
-			grad_i += SimParams.LIQUID_POWDER_SHARE * spiky_grad(rp, h, i, j) / rest_density
-			continue
 		if _class(mat[j]) != LIQUID:
+			var share := _displacing_share(_class(mat[j]))
+			var rp := pred[i] - pred[j]
+			density += share * poly6(rp.length_squared(), h)
+			grad_i += share * spiky_grad(rp, h, i, j) / rest_density
 			continue
 		var rv := pred[i] - pred[j]
 		density += poly6(rv.length_squared(), h)
@@ -282,10 +300,8 @@ func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lamb
 	var wall := wall_density(pred[i], h, rest_density, world_size)
 	var d := lambda[i] * Vector2(wall.y, wall.z)
 	for j in nb:
-		if _class(mat[j]) == POWDER:
-			d += lambda[i] * SimParams.LIQUID_POWDER_SHARE * spiky_grad(pred[i] - pred[j], h, i, j)
-			continue
 		if _class(mat[j]) != LIQUID:
+			d += lambda[i] * _displacing_share(_class(mat[j])) * spiky_grad(pred[i] - pred[j], h, i, j)
 			continue
 		var rv := pred[i] - pred[j]
 		d += (lambda[i] + lambda[j] + scorr(rv.length_squared(), h, dt)) * spiky_grad(rv, h, i, j)
@@ -305,6 +321,13 @@ func _match_shapes(pred: PackedVector2Array, mat: PackedInt32Array, body: Packed
 		rest: PackedVector2Array, bodies: Array, members: PackedInt32Array, dt: float, iterations: int) -> void:
 	for id in range(1, bodies.size()):
 		var b: Dictionary = bodies[id]
+		# The reference pressure solve_pressure found this substep, and whether the body was wet,
+		# carry to the next substep (ADR 0003 item 4); only the first pass of a substep finds them.
+		if b.get("p_min") != null:
+			b.p_ref = b.p_min
+			b.p_min = null
+			b.wet = b.get("wet_now", false)
+			b.wet_now = false
 		var live := PackedInt32Array()
 		var c := Vector2.ZERO
 		var c0 := Vector2.ZERO
@@ -345,8 +368,11 @@ func _match_shapes(pred: PackedVector2Array, mat: PackedInt32Array, body: Packed
 ## keys to state when missing:
 ##   "body": PackedInt32Array, body id per particle, 0 = none; ids 1..N
 ##   "rest": PackedVector2Array, rest offset per particle (px)
+##   "edge": PackedVector2Array, per particle the way out of its body's rest shape
+##           (rest_outline; ADR 0003)
 ##   "bodies": Array, index 0 unused; per body { first, count, live, centroid,
-##             rot (Vector2(cos, sin)), rest_centroid }, as the GPU's body records
+##             rot (Vector2(cos, sin)), rest_centroid, stale (outline out of date after an
+##             erase), p_ref, p_min (reference pressure, ADR 0003) }, as the GPU's body records
 ##   "members": PackedInt32Array, particle indices; body b owns [first, first + count)
 ## Returns the body id.
 static func make_body(state: Dictionary, positions: PackedVector2Array, material: int) -> int:
@@ -356,6 +382,7 @@ static func make_body(state: Dictionary, positions: PackedVector2Array, material
 	var mat: PackedInt32Array = state.material
 	var body: PackedInt32Array = state.body
 	var rest: PackedVector2Array = state.rest
+	var edge: PackedVector2Array = state.edge
 	var bodies: Array = state.bodies
 	var members: PackedInt32Array = state.members
 	var id := 1
@@ -371,26 +398,106 @@ static func make_body(state: Dictionary, positions: PackedVector2Array, material
 	for p in positions:
 		mean += p
 	mean /= count
+	var shape := PackedVector2Array()
+	for p in positions:
+		shape.append(p - mean)
+	var out := rest_outline(shape)
 	for k in count:
 		members[first + k] = pos.size()
 		pos.append(positions[k])
 		vel.append(Vector2.ZERO)
 		mat.append(material)
 		body.append(id)
-		rest.append(positions[k] - mean)
-	bodies[id] = {"first": first, "count": count, "live": count, "centroid": mean,
-			"rot": Vector2(1.0, 0.0), "rest_centroid": Vector2.ZERO}
+		rest.append(shape[k])
+		edge.append(out[k])
+	bodies[id] = _new_body(first, count, mean)
 	state.pos = pos
 	state.vel = vel
 	state.material = mat
 	state.body = body
 	state.rest = rest
+	state.edge = edge
 	state.members = members
 	return id
 
 
+static func _new_body(first: int, count: int, centroid: Vector2) -> Dictionary:
+	return {"first": first, "count": count, "live": count, "centroid": centroid,
+			"rot": Vector2(1.0, 0.0), "rest_centroid": Vector2.ZERO, "stale": false,
+			"p_ref": 0.0, "p_min": null, "wet": false, "wet_now": false}
+
+
+## The way out of a rest shape (ADR 0003 item 7): per member, the vector from its rest offset
+## to the nearest point of the shape's outline, which runs half a spacing outside the
+## boundary members. Boundary members have fewer than 8 members within 1.5 spacings; each
+## one's outward normal is the sum of the directions from its neighbours to it. Every member
+## takes the nearest outline point among those its neighbours took, walking in from the
+## boundary (linear in the body's size). Same result as the GPU sim gets: ParticleSim.make_body
+## calls this.
+static func rest_outline(rest: PackedVector2Array) -> PackedVector2Array:
+	var sp := SimParams.SPACING
+	var reach := 1.5 * sp
+	var n := rest.size()
+	var cells := {}
+	for k in n:
+		var key := Vector2i((rest[k] / reach).floor())
+		if not cells.has(key):
+			cells[key] = PackedInt32Array()
+		cells[key].append(k)
+	var nbs := []
+	var mean := Vector2.ZERO
+	for k in n:
+		mean += rest[k]
+		var list := PackedInt32Array()
+		var c := Vector2i((rest[k] / reach).floor())
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				for m in cells.get(c + Vector2i(dx, dy), PackedInt32Array()):
+					if m != k and rest[k].distance_squared_to(rest[m]) < reach * reach:
+						list.append(m)
+		nbs.append(list)
+	mean /= maxi(n, 1)
+	# Outline point of each boundary member; -1 marks an inner member.
+	var point := PackedVector2Array()
+	point.resize(n)
+	var best := PackedInt32Array()
+	best.resize(n)
+	best.fill(-1)
+	var queue := PackedInt32Array()
+	for k in n:
+		var list: PackedInt32Array = nbs[k]
+		if list.size() >= 8:
+			continue
+		var normal := Vector2.ZERO
+		for m in list:
+			normal += (rest[k] - rest[m]).normalized()
+		if normal.length() < 1e-4:
+			normal = rest[k] - mean
+		normal = normal.normalized() if normal.length() > 1e-6 else Vector2(0.0, -1.0)
+		point[k] = rest[k] + 0.5 * sp * normal
+		best[k] = k
+		queue.append(k)
+	# Walk inward: a member takes a neighbour's outline point when it is nearer than its own.
+	var head := 0
+	while head < queue.size():
+		var k := queue[head]
+		head += 1
+		var o := point[best[k]]
+		for m in nbs[k]:
+			if best[m] < 0 or rest[m].distance_squared_to(o) < rest[m].distance_squared_to(point[best[m]]) - 1e-6:
+				best[m] = best[k]
+				queue.append(m)
+	var out := PackedVector2Array()
+	out.resize(n)
+	for k in n:
+		out[k] = point[best[k]] - rest[k] if best[k] >= 0 else Vector2.ZERO
+	return out
+
+
 ## Removes particles (the eraser) and remaps the member lists and ranges, so what is left of
 ## a body keeps matching its own shape. A body left with no members frees its id and range.
+## A body that loses members has a stale outline (ADR 0003 item 10): the push-out skips it, as
+## brush_erase.glsl marks it on the GPU.
 static func erase_particles(state: Dictionary, indices: PackedInt32Array) -> void:
 	_ensure_body_keys(state)
 	var n: int = state.pos.size()
@@ -403,7 +510,7 @@ static func erase_particles(state: Dictionary, indices: PackedInt32Array) -> voi
 	for i in n:
 		remap[i] = -1 if gone.has(i) else keep
 		keep += 0 if gone.has(i) else 1
-	for key in ["pos", "vel", "material", "body", "rest"]:
+	for key in ["pos", "vel", "material", "body", "rest", "edge"]:
 		var old = state[key]
 		var out = old.duplicate()
 		out.resize(keep)
@@ -421,6 +528,8 @@ static func erase_particles(state: Dictionary, indices: PackedInt32Array) -> voi
 			if remap[m] >= 0:
 				members.append(remap[m])
 		b.first = first if members.size() > first else 0
+		if members.size() - first < b.count:
+			b.stale = true
 		b.count = members.size() - first
 		b.live = b.count
 	state.members = members
@@ -436,9 +545,12 @@ static func _ensure_body_keys(state: Dictionary) -> void:
 		var rest := PackedVector2Array()
 		rest.resize(n)
 		state.rest = rest
+	if not state.has("edge"):
+		var edge := PackedVector2Array()
+		edge.resize(n)
+		state.edge = edge
 	if not state.has("bodies"):
-		state.bodies = [{"first": 0, "count": 0, "live": 0, "centroid": Vector2.ZERO,
-				"rot": Vector2(1.0, 0.0), "rest_centroid": Vector2.ZERO}]
+		state.bodies = [_new_body(0, 0, Vector2.ZERO)]
 	if not state.has("members"):
 		state.members = PackedInt32Array()
 
@@ -479,18 +591,25 @@ static func hydro_tent_inside(c: float, a: float, w: float) -> float:
 	return 1.0 - 0.5 * (lo * lo + hi * hi)
 
 
-## Liquid (x) and powder (y) density over rest per coarse cell: each particle's tent
-## weight on the four nearest cell centres (hydro_splat), over the weight at rest spacing
-## of the part of the tent inside the world (hydro_density).
-func _hydro_density(pred: PackedVector2Array, mat: PackedInt32Array) -> PackedVector2Array:
+## Per coarse cell, over rest density: liquid (x), powder (y), body volume (z) and body weight
+## in water (w: each body particle counts min(density, 1), ADR 0003). Each particle's tent
+## weight on the four nearest cell centres (hydro_splat), over the weight at rest spacing of
+## the part of the tent inside the world (hydro_density).
+func _hydro_density(pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array) -> PackedVector4Array:
 	var size := hydro_size(world_size)
 	var a := hydro_cell_size()
-	var sum := PackedVector2Array()
+	var sum := PackedVector4Array()
 	sum.resize(size.x * size.y)
 	for i in pred.size():
-		if _class(mat[i]) != LIQUID and _class(mat[i]) != POWDER:
+		var channel: Vector4
+		if body[i] != 0:
+			channel = Vector4(0.0, 0.0, 1.0, minf(materials[mat[i]].density, 1.0))
+		elif _class(mat[i]) == LIQUID:
+			channel = Vector4(1.0, 0.0, 0.0, 0.0)
+		elif _class(mat[i]) == POWDER:
+			channel = Vector4(0.0, 1.0, 0.0, 0.0)
+		else:
 			continue
-		var channel := Vector2(1.0, 0.0) if _class(mat[i]) == LIQUID else Vector2(0.0, 1.0)
 		var g := pred[i] / a - Vector2(0.5, 0.5)
 		var b := Vector2i(g.floor())
 		var f := g - Vector2(b)
@@ -508,7 +627,7 @@ func _hydro_density(pred: PackedVector2Array, mat: PackedInt32Array) -> PackedVe
 
 
 ## HYDRO_SWEEPS projected red-black SOR sweeps on p, in place (hydro_sweep).
-func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> void:
+func _hydro_solve(phi: PackedVector4Array, p: PackedFloat32Array, dt: float) -> void:
 	var size := hydro_size(world_size)
 	var a := hydro_cell_size()
 	var offs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
@@ -520,7 +639,7 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 				if (ci.x + ci.y) % 2 != parity:
 					continue
 				var solid := hydro_solid(phi[c])
-				var air := not solid and phi[c].x < SimParams.HYDRO_AIR
+				var air := not solid and hydro_level(phi[c]) < SimParams.HYDRO_AIR
 				var sum := 0.0
 				var n := 0.0
 				var wall_sum := 0.0
@@ -534,7 +653,7 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 						continue
 					var ni := nc.y * size.x + nc.x
 					var solid_n := hydro_solid(phi[ni])
-					var air_n := not solid_n and phi[ni].x < SimParams.HYDRO_AIR
+					var air_n := not solid_n and hydro_level(phi[ni]) < SimParams.HYDRO_AIR
 					if solid:
 						if not air_n:  # sand bed: the water's pressure continued hydrostatically
 							sum += p[ni] - head * off.y
@@ -544,10 +663,10 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 							wall_sum += head * off.y
 					elif air:
 						if not air_n:  # ghost: liquid p extrapolated through 0 at the surface
-							sum += p[ni] * (1.0 - 1.0 / _hydro_theta(phi[ni].x, phi[c].x))
+							sum += p[ni] * (1.0 - 1.0 / _hydro_theta(hydro_level(phi[ni]), hydro_level(phi[c])))
 							n += 1.0
 					elif air_n:
-						n += 1.0 / _hydro_theta(phi[c].x, phi[ni].x)
+						n += 1.0 / _hydro_theta(hydro_level(phi[c]), hydro_level(phi[ni]))
 					else:
 						n += 1.0
 						sum += p[ni]
@@ -560,20 +679,34 @@ func _hydro_solve(phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> 
 				if n == 0.0:  # walled in by sand on every side
 					p[c] = maxf(p[c], 0.0)
 					continue
-				# Under a full cell (water and powder), a cell with room left is pulled full (a trapped bubble).
+				# Under a full cell (water, powder and bodies), a cell with room left is pulled full (a trapped bubble).
+				# Body volume counts as full room (ADR 0003), so a body is not a bubble to fill.
 				# Never in the floor row: half outside the world, it reads a little short of full.
-				var covered := ci.y > 0 and ci.y < size.y - 1 and phi[c - size.x].x + phi[c - size.x].y * SimParams.HYDRO_POWDER_VOL >= SimParams.HYDRO_FULL
-				var err := maxf(phi[c].x - 1.0, 0.0)
+				var covered := ci.y > 0 and ci.y < size.y - 1 and phi[c - size.x].x + phi[c - size.x].y * SimParams.HYDRO_POWDER_VOL + phi[c - size.x].z >= SimParams.HYDRO_FULL
+				# Compression counts body volume too, so water squeezed under or into a body is pushed out.
+				var err := maxf(phi[c].x + phi[c].z - 1.0, 0.0)
 				if covered:
-					err += minf(phi[c].x + phi[c].y * SimParams.HYDRO_POWDER_FULL - 1.0, 0.0)
+					err += minf(phi[c].x + phi[c].y * SimParams.HYDRO_POWDER_FULL + phi[c].z - 1.0, 0.0)
 				var k := 1.0 - pow(1.0 - SimParams.HYDRO_K, dt * 60.0)  # share per step (hydro_k())
 				var rhs := -a * a * k * err / (dt * dt)
 				p[c] = maxf(lerpf(maxf(p[c], 0.0), (sum + wall_sum - rhs) / n, SimParams.HYDRO_SOR), 0.0)
 
 
-## True when a cell is sand bed: a solid wall for the grid (hydro_solid).
-static func hydro_solid(phi_c: Vector2) -> bool:
-	return phi_c.y * SimParams.HYDRO_POWDER_VOL >= SimParams.HYDRO_SOLID
+## True when a cell is bed: a solid wall for the grid (hydro_solid). Sand at its packing, and
+## body particles, which fill a cell as water at rest does (ADR 0003).
+static func hydro_solid(phi_c: Vector4) -> bool:
+	return phi_c.y * SimParams.HYDRO_POWDER_VOL + phi_c.z >= SimParams.HYDRO_SOLID
+
+
+## A cell's liquid level for the air test and the free surface (hydro_level): its liquid, plus
+## its body particles at their weight in water. A floating body displaces its own weight of
+## water, so a cell it floats in reads as level as the water beside it. Counted by volume
+## instead (or left out), a floating body raised (or lowered) the grid's surface where it sat,
+## and the pressure on its sides pushed it away from (or after) wherever it went (ADR 0003).
+## The weight counts in full only where the cell has at least HYDRO_AIR of liquid, so a dry
+## body's cells stay air instead of reading as a column of water.
+static func hydro_level(phi_c: Vector4) -> float:
+	return phi_c.x + phi_c.w * minf(phi_c.x / SimParams.HYDRO_AIR, 1.0)
 
 
 ## Share of the way from a liquid cell to its air neighbour where phi crosses the
@@ -602,14 +735,14 @@ func _cradled(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: Packe
 
 
 ## Pressure at coarse cell c, mirrored past the grid edge (hydro_p_at).
-func _hydro_p_at(c: Vector2i, phi: PackedVector2Array, p: PackedFloat32Array) -> float:
+func _hydro_p_at(c: Vector2i, phi: PackedVector4Array, p: PackedFloat32Array) -> float:
 	var size := hydro_size(world_size)
 	var cc := c.clamp(Vector2i.ZERO, size - Vector2i.ONE)
 	var i := cc.y * size.x + cc.x
 	return p[i]
 
 
-func _hydro_p_sample(x: Vector2, phi: PackedVector2Array, p: PackedFloat32Array) -> float:
+func _hydro_p_sample(x: Vector2, phi: PackedVector4Array, p: PackedFloat32Array) -> float:
 	var g := x / hydro_cell_size() - Vector2(0.5, 0.5)
 	var b := Vector2i(g.floor())
 	var f := g - Vector2(b)
@@ -619,12 +752,82 @@ func _hydro_p_sample(x: Vector2, phi: PackedVector2Array, p: PackedFloat32Array)
 
 
 ## Position change this step from the grid pressure: -grad p * dt^2 (hydro_delta).
-func _hydro_delta(x: Vector2, phi: PackedVector2Array, p: PackedFloat32Array, dt: float) -> Vector2:
+func _hydro_delta(x: Vector2, phi: PackedVector4Array, p: PackedFloat32Array, dt: float) -> Vector2:
 	var e := 0.5 * hydro_cell_size()
 	var grad := Vector2(
 			_hydro_p_sample(x + Vector2(e, 0.0), phi, p) - _hydro_p_sample(x - Vector2(e, 0.0), phi, p),
 			_hydro_p_sample(x + Vector2(0.0, e), phi, p) - _hydro_p_sample(x - Vector2(0.0, e), phi, p)) / (2.0 * e)
 	return -grad * dt * dt
+
+
+## A body particle's wet face (body_wet_face in solve_pressure.glsl): the sum of unit vectors
+## toward its liquid neighbours, each weighted 1 out to 1.5 spacings and fading to 0 at H, over
+## 1 + sqrt(2), what a flat face of liquid on the rest lattice gives (one neighbour straight
+## on, two diagonal). So it reads 1 for a flat wet face and sqrt(2) along the diagonal at a
+## corner wet on two sides, wherever the water sits within 1.5 spacings. Summed spiky kernel
+## gradients over their value for that lattice read 0.55-0.64 instead: water by a body sits
+## ~2-2.5 px off and not on a lattice, and the spiky gradient falls steeply over that range, so
+## an 80 x 40 cork floated at 0.71 of its height instead of ~0.5 (GPU body_probe waterbig).
+static func body_wet_face(d: Vector2, h: float, spacing: float) -> Vector2:
+	var r := d.length()
+	if r < MIN_DIST or r >= h:
+		return Vector2.ZERO
+	var w := clampf((h - r) / (h - 1.5 * spacing), 0.0, 1.0)
+	return d / r * w / (1.0 + sqrt(2.0))
+
+
+## Grid pressure at x for a body's surface (body_p_sample): the bilinear sample, continued
+## hydrostatically below the last row of cell centres, where the sample alone stops growing.
+func _body_p_sample(x: Vector2, phi: PackedVector4Array, p: PackedFloat32Array) -> float:
+	var y_last := (hydro_size(world_size).y - 0.5) * hydro_cell_size()
+	var s := _hydro_p_sample(Vector2(x.x, minf(x.y, y_last)), phi, p)
+	return s + SimParams.GRAVITY * maxf(x.y - y_last, 0.0) if s > 0.0 else 0.0
+
+
+## Position change this step of body particle i from the liquid's pressure on its wet surface
+## (ADR 0003 item 4): p at the body's outline on the liquid side, over the body's reference
+## pressure, pressing on its wet face (body_wet_face), over the body's mass per particle
+## (density x spacing^2, water being 1). Within a spacing of the floor, a particle of a body
+## that was wet last substep also counts the floor below it as a face of liquid (water seeps
+## under it), so a light body on the floor of a pool rises.
+## Also gives the body's reference pressure for the next substep (p_min, which the body pass
+## moves to p_ref): the lowest p over its wet particles (INF if none), or 0 if a boundary
+## member touches air (nothing but its own body within 1.5 spacings, away from the walls).
+## Closed in by liquid, grains, other bodies, the floor and walls, a body is pushed only by
+## the pressure difference across it, so deep water doesn't squeeze it past the correction
+## cap. With a face in air it floats, and its pressure is absolute: referred to its lowest wet
+## pressure instead, a cork bobbing up until only its bottom row was wet lost all its lift at
+## the top of each bob, and the bob grew (ADR 0003).
+func _body_pressure_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
+		edge: PackedVector2Array, b: Dictionary, nb: PackedInt32Array, phi: PackedVector4Array,
+		p: PackedFloat32Array, dt: float) -> Vector2:
+	var sp := SimParams.SPACING
+	var g := Vector2.ZERO
+	var touching := false
+	for j in nb:
+		if body[j] == body[i]:
+			continue
+		if pred[i].distance_squared_to(pred[j]) < 2.25 * sp * sp:
+			touching = true
+		if _class(mat[j]) == LIQUID:
+			g += body_wet_face(pred[j] - pred[i], SimParams.H, sp)
+	var x := pred[i]
+	var wet := g.length() > 1e-6
+	var pw := 0.0
+	if wet:
+		pw = _body_p_sample(x + 0.5 * sp * g.normalized(), phi, p)
+		b.wet_now = true
+	var ref := pw if wet else INF
+	var at_wall := x.x < 1.5 * sp or x.y < 1.5 * sp or x.x > world_size.x - 1.5 * sp or x.y > world_size.y - 1.5 * sp
+	if not touching and not at_wall and edge[i].length() < 0.75 * sp:
+		ref = 0.0  # a boundary member in air
+	b.p_min = minf(b.p_min if b.get("p_min") != null else INF, ref)
+	if x.y >= world_size.y - 1.5 * sp and b.get("wet", false):
+		g.y = maxf(g.y, 1.0)
+		pw = maxf(pw, _body_p_sample(Vector2(x.x, world_size.y), phi, p))
+	if g.length() <= 1e-6:
+		return Vector2.ZERO
+	return -maxf(pw - b.get("p_ref", 0.0), 0.0) * g * dt * dt / (materials[mat[i]].density * sp)
 
 
 ## Density a wall at distance d adds (poly6 over the half-plane past it, at rest
@@ -660,15 +863,16 @@ static func stack_weight(m_i: float, m_j: float, rv_y: float) -> float:
 
 
 ## Contacts with any particle closer than SPACING (POWDER_LIQUID_REACH x SPACING for a
-## powder-liquid pair), where at least one side is a powder or the two are in different
-## bodies: body particles follow the powder rule. Same-body pairs are left to shape matching;
-## body-liquid pairs wait for Milestone 3 step 4. Mass-weighted push-out, the lower side
-## heavier by STACK_K (see stack_weight); also static/kinetic friction on the relative
-## sideways motion.
-## Scaled by CONTACT_RELAX; summed for powders and bodies, averaged over the grains it touches
-## for a liquid (see powder.glslinc).
+## powder-liquid pair), where at least one side is a powder or a body particle of another
+## body: body particles follow the powder rule. Same-body pairs are left to shape matching.
+## Mass-weighted push-out, the lower side heavier by STACK_K (see stack_weight), except
+## powder-liquid (the liquid yields) and body-liquid (by density only, ADR 0003); also
+## static/kinetic friction on the relative sideways motion.
+## Scaled by CONTACT_RELAX; summed for powders and bodies, averaged over the particles it
+## touches for a liquid (see powder.glslinc). A particle in no body that sits inside a body's
+## outline is also pushed out to it (_push_out).
 func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, mat: PackedInt32Array,
-		body: PackedInt32Array, bodies: Array, nb: PackedInt32Array) -> Vector2:
+		body: PackedInt32Array, edge: PackedVector2Array, bodies: Array, nb: PackedInt32Array) -> Vector2:
 	var mi: Dictionary = materials[mat[i]]
 	var sum := Vector2.ZERO
 	var fric := Vector2.ZERO
@@ -676,10 +880,12 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	var n_wet := 0
 	var fric_w := 0.0
 	var n_touch := 0.0
+	var nearest := -1  # nearest body particle within a spacing, for a particle in no body
+	var nearest_d := SimParams.SPACING
 	for j in nb:
 		var mj: Dictionary = materials[mat[j]]
-		if mi["class"] != POWDER and mj["class"] != POWDER and (body[i] == 0 or body[j] == 0):
-			continue  # liquid-liquid is handled by the density constraint; body-liquid not yet
+		if mi["class"] != POWDER and mj["class"] != POWDER and body[i] == 0 and body[j] == 0:
+			continue  # liquid-liquid: the density constraint
 		if body[i] != 0 and body[i] == body[j]:
 			continue  # same body: shape matching holds it together
 		var rv := pred[i] - pred[j]
@@ -688,15 +894,20 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			n_near += 1
 			if mj["class"] == LIQUID:
 				n_wet += 1
-		var mixed: bool = mi["class"] == LIQUID or mj["class"] == LIQUID
-		var reach := SimParams.SPACING * (SimParams.POWDER_LIQUID_REACH if mixed else 1.0)
+		if body[i] == 0 and body[j] != 0 and dist < nearest_d:
+			nearest = j
+			nearest_d = dist
+		var t_liquid: bool = mi["class"] == LIQUID
+		var j_liquid: bool = mj["class"] == LIQUID
+		var powder_liquid: bool = (t_liquid and mj["class"] == POWDER) or (j_liquid and mi["class"] == POWDER)
+		var reach := SimParams.SPACING * (SimParams.POWDER_LIQUID_REACH if powder_liquid else 1.0)
 		if dist >= reach:
 			continue
 		n_touch += 1.0
 		var normal := pair_dir(rv, dist, i, j)
 		var pen := reach - dist
 		var w: float
-		if mixed:
+		if powder_liquid:
 			# Powder-liquid: the liquid yields (see POWDER_LIQUID_SHARE).
 			w = SimParams.POWDER_LIQUID_SHARE if mi["class"] == POWDER else 1.0 - SimParams.POWDER_LIQUID_SHARE
 		else:
@@ -704,7 +915,7 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 		var w_push := w
 		if mi["class"] == POWDER and mj["class"] == POWDER:
 			w_push = stack_weight(mi.density, mj.density, rv.y)
-		elif not mixed:
+		elif not t_liquid and not j_liquid:
 			# A body (or a grain against one) is heavier by the height of its body's centroid
 			# under the other side's, so a stack of bodies holds; friction gets the same share,
 			# since a stack with mass-weighted friction swayed for good (ADR 0002).
@@ -727,11 +938,31 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	# so the correction per iteration stays below CONTACT_RELAX. An unnormalised sum
 	# overshoots with many contacts and makes a settled pile wobble.
 	fric /= maxf(fric_w, 1.0)
-	# Wet grains slip (WET_SLIP): friction drops with the share of liquid neighbours.
-	var wet := float(n_wet) / n_near if n_near > 0 else 0.0
+	# Wet grains slip (WET_SLIP): friction drops with the share of liquid neighbours. Bodies
+	# don't get wet (ADR 0003).
+	var wet := float(n_wet) / n_near if n_near > 0 and mi["class"] == POWDER else 0.0
 	if mi["class"] == LIQUID:
-		sum /= maxf(n_touch, 1.0)  # liquid: averaged over the grains it touches (powder.glslinc)
-	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet)) * SimParams.CONTACT_RELAX
+		sum /= maxf(n_touch, 1.0)  # liquid: averaged over what it touches (powder.glslinc)
+	var out := Vector2.ZERO
+	if nearest >= 0:
+		out = _push_out(pred[i], pred[nearest], edge[nearest], bodies[body[nearest]])
+	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet) + out) * SimParams.CONTACT_RELAX
+
+
+## Push-out from inside a body (ADR 0003 item 8): x is a particle in no body, x_j its nearest
+## body particle, e_j that member's way out of the rest shape. Turned by the body's rotation,
+## e_j gives the outward normal N and the outline's distance along it; x is inside by
+## d = |e_j| - N.(x - x_j), and if so is moved d along N, to the outline. Nothing for a body
+## whose outline is stale (part of it erased). Mirror: push_out in powder.glslinc.
+static func _push_out(x: Vector2, x_j: Vector2, e_j: Vector2, b: Dictionary) -> Vector2:
+	if b.stale or e_j.length() < 1e-6:
+		return Vector2.ZERO
+	var r: Vector2 = b.rot
+	var e := Vector2(r.x * e_j.x - r.y * e_j.y, r.y * e_j.x + r.x * e_j.y)
+	var len := e.length()
+	var normal := e / len
+	var d := len - normal.dot(x - x_j)
+	return d * normal if d > 0.0 else Vector2.ZERO
 
 
 ## Quadratic drag of a grain toward its liquid neighbours' kernel-weighted velocity,
@@ -753,6 +984,26 @@ func _powder_liquid_drag(i: int, pred: PackedVector2Array, vel: PackedVector2Arr
 	var rel := sum / w_sum
 	var rate := SimParams.POWDER_LIQUID_DRAG * rel.length()
 	return rel * ((1.0 - exp(-rate * dt)) * minf(w_sum / rest_density, 1.0))
+
+
+## Linear drag of a body particle toward its liquid neighbours' kernel-weighted velocity,
+## scaled by how much liquid is around it (body_liquid_drag in powder.glslinc; ADR 0003).
+## Only wet particles feel it, so a body's drag grows with its wet surface while its mass
+## grows with its area: without it a floating body heaved at its natural period (~0.8 s for
+## an 8x6 cork) and a cork rising from the floor capsized at the surface.
+func _body_liquid_drag(i: int, pred: PackedVector2Array, vel: PackedVector2Array,
+		mat: PackedInt32Array, nb: PackedInt32Array, h: float, dt: float) -> Vector2:
+	var sum := Vector2.ZERO
+	var w_sum := 0.0
+	for j in nb:
+		if _class(mat[j]) != LIQUID:
+			continue
+		var w := poly6((pred[i] - pred[j]).length_squared(), h)
+		sum += (vel[j] - vel[i]) * w
+		w_sum += w
+	if w_sum <= 0.0:
+		return Vector2.ZERO
+	return sum / w_sum * ((1.0 - exp(-SimParams.BODY_LIQUID_DRAG * dt)) * minf(w_sum / rest_density, 1.0))
 
 
 ## XSPH viscosity: liquids blend toward their liquid neighbours' velocity. The material

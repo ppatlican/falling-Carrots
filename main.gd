@@ -86,9 +86,9 @@ func _on_view_toggled(view: String, enabled: bool) -> void:
 		_view_flags = ParticleSim.VIEW_HASH if enabled else 0
 
 
-## Debug until the body brush (M3 step 5): test-only rigid ("carrot", stiffness 1) and
-## jelly (stiffness 0.3) rows, as tests/test_bodies.gd _sim(). materials.json gets
-## cluster rows in step 5.
+## Debug until the body brush (M3 step 5): test-only rigid ("carrot", stiffness 1), jelly
+## (stiffness 0.3) and cork (rigid, density 0.5: it floats) rows, as tests/test_bodies.gd
+## _sim(). materials.json gets cluster rows in step 5.
 func _add_test_bodies(table) -> void:
 	var rows := []
 	for id in table.materials:
@@ -97,7 +97,8 @@ func _add_test_bodies(table) -> void:
 	var next: int = table.materials.keys().max() + 1
 	for extra in [
 			{"name": "carrot", "class": "cluster", "color": "#e8792b", "density": 1.2, "stiffness": 1.0, "tags": []},
-			{"name": "jelly", "class": "cluster", "color": "#d94f8a", "density": 1.1, "stiffness": 0.3, "tags": []}]:
+			{"name": "jelly", "class": "cluster", "color": "#d94f8a", "density": 1.1, "stiffness": 0.3, "tags": []},
+			{"name": "cork", "class": "cluster", "color": "#c8a46e", "density": 0.5, "stiffness": 1.0, "tags": []}]:
 		var r: Dictionary = sand.duplicate(true)
 		r.merge(extra, true)
 		r.id = next

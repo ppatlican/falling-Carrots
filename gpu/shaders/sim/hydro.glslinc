@@ -37,11 +37,19 @@
 // crossing a cell edge doesn't make p jump. The solve is projected red-black SOR (p kept
 // >= 0), warm-started from the last frame's p (kept in hydro_p).
 
-// Per coarse cell: x liquid density over rest, y powder density over rest.
-layout(set = 0, binding = 20, std430) buffer HydroPhi { vec2 hydro_phi[]; };
+// Bodies (ADR 0003): body particles fill a cell as water at rest does. Their volume counts
+// toward a cell being bed (hydro_solid), full (the bubble pull) and compressed; for the air
+// test and the free surface a cell's level counts them at their weight in water
+// (hydro_level), since a floating body displaces its own weight of water. The grid pushes
+// only liquid; a body is pushed by the pressure on its wet surface (body_p_sample,
+// solve_pressure.glsl).
+
+// Per coarse cell, over rest density: x liquid, y powder, z body volume, w body weight in
+// water (each body particle at min(density, 1)).
+layout(set = 0, binding = 20, std430) buffer HydroPhi { vec4 hydro_phi[]; };
 layout(set = 0, binding = 21, std430) buffer HydroP { float hydro_p[]; };      // pressure per coarse cell
-// Tent-weighted particle sums per coarse cell, times HYDRO_FP: [2c] liquid, [2c + 1]
-// powder. hydro_splat adds, hydro_phi reads and zeroes for the next frame.
+// Tent-weighted particle sums per coarse cell, times HYDRO_FP: [4c + k] for the channels of
+// hydro_phi. hydro_splat adds, hydro_phi reads and zeroes for the next frame.
 layout(set = 0, binding = 22, std430) buffer HydroAcc { int hydro_acc[]; };
 
 const float HYDRO_FP = 1024.0;
@@ -104,13 +112,13 @@ float hydro_tent_inside(float c, float a, float w) {
 	return 1.0 - 0.5 * (lo * lo + hi * hi);
 }
 
-// Adds a particle at x to the density sums (channel 0 liquid, 1 powder): its tent
-// weight (bilinear, half-width one cell) on the four nearest cell centres, in fixed
+// Adds a particle at x, times `amount`, to one of the density sums (channels of hydro_phi):
+// its tent weight (bilinear, half-width one cell) on the four nearest cell centres, in fixed
 // point so it can use atomicAdd.
 // Integer sums don't depend on the order of the adds, so the result is deterministic.
 // (A gather per cell over the hash took ~900 us at 50k: 920 threads, each looping
 // over ~300 particles.)
-void hydro_splat(vec2 x, uint channel) {
+void hydro_splat(vec2 x, uint channel, float amount) {
 	ivec2 size = hydro_size();
 	vec2 g = x / hydro_cell_size() - 0.5;
 	ivec2 b = ivec2(floor(g));
@@ -122,19 +130,20 @@ void hydro_splat(vec2 x, uint channel) {
 				continue;
 			}
 			float w = (dx == 0 ? 1.0 - f.x : f.x) * (dy == 0 ? 1.0 - f.y : f.y);
-			atomicAdd(hydro_acc[2u * hydro_index(c) + channel], int(round(w * HYDRO_FP)));
+			atomicAdd(hydro_acc[4u * hydro_index(c) + channel], int(round(w * amount * HYDRO_FP)));
 		}
 	}
 }
 
-// Liquid and powder density over rest at coarse cell c from the splatted sums: the tent
-// weight over the weight at rest spacing of the part of the tent inside the world (at
-// the walls only part of it can be filled).
-vec2 hydro_density(ivec2 ci) {
+// The channels of hydro_phi at coarse cell c from the splatted sums: the tent weight over
+// the weight at rest spacing of the part of the tent inside the world (at the walls only
+// part of it can be filled).
+vec4 hydro_density(ivec2 ci) {
 	float a = hydro_cell_size();
 	vec2 centre = (vec2(ci) + 0.5) * a;
 	uint i = hydro_index(ci);
-	vec2 sum = vec2(float(hydro_acc[2u * i]), float(hydro_acc[2u * i + 1u])) / HYDRO_FP;
+	vec4 sum = vec4(float(hydro_acc[4u * i]), float(hydro_acc[4u * i + 1u]),
+			float(hydro_acc[4u * i + 2u]), float(hydro_acc[4u * i + 3u])) / HYDRO_FP;
 	float inside = hydro_tent_inside(centre.x, a, params.world_size.x)
 			* hydro_tent_inside(centre.y, a, params.world_size.y);
 	return sum * params.spacing * params.spacing / (a * a * inside);
@@ -150,7 +159,18 @@ float hydro_theta(float phi_f, float phi_a) {
 // hydro_solve.glsl). Mirror: SimParams.HYDRO_SOLID.
 const float HYDRO_SOLID = 0.5;
 
-bool hydro_solid(vec2 phi) { return phi.y * HYDRO_POWDER_VOL >= HYDRO_SOLID; }
+// Share of a cell taken by bed: powder at its packing, and body volume.
+float hydro_solid_fill(vec4 phi) { return phi.y * HYDRO_POWDER_VOL + phi.z; }
+
+bool hydro_solid(vec4 phi) { return hydro_solid_fill(phi) >= HYDRO_SOLID; }
+
+// A cell's liquid level for the air test and the free surface: its liquid, plus its body
+// particles at their weight in water, counted in full only where the cell has at least
+// HYDRO_AIR of liquid (so a dry body's cells stay air). Counted by volume instead (or left
+// out), a floating body raised (or lowered) the grid's surface where it sat, and the pressure
+// on its sides pushed it away from (or after) wherever it went (CPU reference, ADR 0003).
+// Mirror: ParticleStep.hydro_level.
+float hydro_level(vec4 phi) { return phi.x + phi.w * min(phi.x / HYDRO_AIR, 1.0); }
 
 // Pressure at coarse cell c (the ghost in air cells). Past the grid edge it is mirrored,
 // so walls let nothing through. (Continuing p hydrostatically past the floor, to match
@@ -196,4 +216,13 @@ vec2 hydro_delta(vec2 x) {
 	vec2 grad = vec2(hydro_p_sample(x + vec2(e, 0.0)) - hydro_p_sample(x - vec2(e, 0.0)),
 			hydro_p_sample(x + vec2(0.0, e)) - hydro_p_sample(x - vec2(0.0, e))) / (2.0 * e);
 	return -grad * params.dt * params.dt;
+}
+
+// Grid pressure at x for a body's surface: the bilinear sample, continued hydrostatically
+// below the last row of cell centres, where the sample alone stops growing.
+// Mirror: ParticleStep._body_p_sample.
+float body_p_sample(vec2 x) {
+	float y_last = (float(hydro_size().y) - 0.5) * hydro_cell_size();
+	float s = hydro_p_sample(vec2(x.x, min(x.y, y_last)));
+	return s > 0.0 ? s + params.gravity * max(x.y - y_last, 0.0) : 0.0;
 }

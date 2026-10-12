@@ -44,6 +44,10 @@ const LIQUID_POWDER_SHARE := 0.54
 ## Quadratic drag of a grain toward the liquid around it, per px/s of relative speed per
 ## second: grains sink through water at ~sqrt(GRAVITY / it) (see powder.glslinc).
 const POWDER_LIQUID_DRAG := 0.06
+## Linear drag of a body particle toward the liquid around it, per second, scaled by how much
+## liquid is around it (ADR 0003): damps a floating body's heave and rocking.
+## Mirror: BODY_LIQUID_DRAG in powder.glslinc.
+const BODY_LIQUID_DRAG := 20.0
 ## Fastest a powder grain may move away from a contact because of the push-out alone
 ## (px/s). 0 makes sand inelastic: overlap is still resolved, but a push-out never adds
 ## velocity away from a contact. At 15 the impacts of falling grains rebounded them

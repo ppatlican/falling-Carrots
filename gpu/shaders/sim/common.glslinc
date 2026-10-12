@@ -68,17 +68,33 @@ layout(set = 0, binding = 19, rgba8) uniform image2D out_image;
 // a member counts only while its slot is alive and carries the body's id (a slot erased and
 // reused by another particle is skipped, not cleaned up). The CPU hands out ids and member
 // ranges (gpu/particle_sim.gd make_body); the GPU never allocates.
-layout(set = 0, binding = 23, std430) buffer RestOffset { vec2 rest_offset[]; };  // slot -> px in its body's rest shape
+// Per slot: xy its place in its body's rest shape (px), zw the way out of the rest shape
+// (to the nearest point of its outline, in the rest frame; ADR 0003, the push-out).
+layout(set = 0, binding = 23, std430) buffer RestOffset { vec4 rest_offset[]; };
 layout(set = 0, binding = 24, std430) buffer BodyMembers { uint body_members[]; };
 // One record per body id, bodies[0] unused. 48 bytes (std430).
 struct Body {
-	uvec4 info;   // first member, member count, live members, flags (reserved)
+	uvec4 info;   // first member, member count, live members, flags (BODY_*)
 	vec4 frame;   // centroid x, y, cos, sin: the current best fit (body pass)
-	vec4 rest;    // rest centroid x, y of the live members; 2 floats reserved
+	vec2 rest_c;  // rest centroid of the live members (body pass)
+	float p_ref;  // reference pressure for the wet-surface push (ADR 0003; body pass)
+	uint p_min;   // this substep's reference, as float bits (solve_pressure atomicMin)
 };
 layout(set = 0, binding = 25, std430) buffer Bodies { Body bodies[]; };
-// Body brush input (BRUSH_BODY): per particle, its spawn position (xy) and rest offset (zw).
+// Body brush input (BRUSH_BODY): per particle two vec4s, [2k] spawn position (xy) and rest
+// offset (zw), [2k + 1] the way out of the rest shape (xy).
 layout(set = 0, binding = 26, std430) buffer BodySpawn { vec4 body_spawn[]; };
+
+// Body record flags (info.w). STALE: the eraser took members, so the outline (rest_offset.zw)
+// is out of date and the push-out skips the body. WET_NOW / WET: a member touched liquid this
+// substep / last substep (solve_pressure sets WET_NOW, the body pass moves it to WET).
+const uint BODY_STALE = 1u;
+const uint BODY_WET_NOW = 2u;
+const uint BODY_WET = 4u;
+// p_min before anything is found this substep (above the bits of +INF, so atomicMin with any
+// float >= 0, INF included, lowers it).
+const uint BODY_P_UNSET = 0xFFFFFFFFu;
+const uint BODY_P_INF = 0x7F800000u;
 
 // Same layout as ParticleSim._push() in gpu/particle_sim.gd. 124 bytes (128 is the
 // portable push constant limit).

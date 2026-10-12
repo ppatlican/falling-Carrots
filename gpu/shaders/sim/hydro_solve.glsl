@@ -21,10 +21,14 @@
 // no difference: what is left is the 64 barriers on one compute unit.
 
 #define LOCAL_SIZE_X 128
-// common.glslinc stamp: Params 124 B, v16. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v17. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
 
+// Per cell: x its level (hydro_level), y its bed fill (hydro_solid_fill). The cell's own
+// compression and room, and the cell above's fullness, are read from hydro_phi when its row
+// is set up (once per frame), so shared memory stays 12 B per cell (16 KB is the Vulkan
+// minimum for a workgroup).
 shared vec2 s_phi[HYDRO_MAX_CELLS];
 shared float s_p[HYDRO_MAX_CELLS];
 
@@ -55,7 +59,7 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 	float head = params.gravity * a;
 	vec2 phi_c = s_phi[c];
 	float phi = phi_c.x;
-	bool solid = hydro_solid(phi_c);
+	bool solid = phi_c.y >= HYDRO_SOLID;
 	bool air = !solid && phi < HYDRO_AIR;
 	vec4 w = vec4(0.0);
 	float n = 0.0;
@@ -80,7 +84,7 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 		}
 		vec2 phi_nv = s_phi[hydro_index(nc)];
 		float phi_n = phi_nv.x;
-		bool solid_n = hydro_solid(phi_nv);
+		bool solid_n = phi_nv.y >= HYDRO_SOLID;
 		bool air_n = !solid_n && phi_n < HYDRO_AIR;
 		if (solid) {
 			// The bed carries the pressure of the water on it into its pores, continued
@@ -138,11 +142,14 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 	// held their p 0.2-0.5 head under hydrostatic and noisy. A floor lined with sand, whose
 	// bottom cells are bed and never pulled, calmed pure water from 0.74-0.78 px/s to 0.26
 	// (water_feel_probe bowl nosand vs floor=12 cols=0, 2026-10-11).
-	vec2 above = ci.y > 0 ? s_phi[hydro_index(ci - ivec2(0, 1))] : vec2(0.0);
-	bool covered = above.x + above.y * HYDRO_POWDER_VOL >= HYDRO_FULL && ci.y < size.y - 1;
-	float err = max(phi - 1.0, 0.0);
+	// Body volume counts as full room and as compression (ADR 0003): a body isn't a bubble to
+	// fill, and water squeezed under or into a body is pushed out.
+	vec4 above = ci.y > 0 ? hydro_phi[hydro_index(ci - ivec2(0, 1))] : vec4(0.0);
+	bool covered = above.x + above.y * HYDRO_POWDER_VOL + above.z >= HYDRO_FULL && ci.y < size.y - 1;
+	vec4 own = hydro_phi[c];
+	float err = max(own.x + own.z - 1.0, 0.0);
 	if (covered) {
-		err += min(phi + phi_c.y * HYDRO_POWDER_FULL - 1.0, 0.0);
+		err += min(own.x + own.y * HYDRO_POWDER_FULL + own.z - 1.0, 0.0);
 	}
 	float rhs = -a * a * hydro_k() * err / (params.dt * params.dt);
 	return HydroRow(w / n, (wall_sum - rhs) / n, HYDRO_ROW_LIQUID);
@@ -153,7 +160,8 @@ void main() {
 	uint n = uint(size.x * size.y);
 	uint tid = gl_LocalInvocationID.x;
 	for (uint c = tid; c < n; c += LOCAL_SIZE_X) {
-		s_phi[c] = hydro_phi[c];
+		vec4 phi = hydro_phi[c];
+		s_phi[c] = vec2(hydro_level(phi), hydro_solid_fill(phi));
 		s_p[c] = hydro_p[c];
 	}
 	memoryBarrierShared();

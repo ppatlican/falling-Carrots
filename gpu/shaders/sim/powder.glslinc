@@ -18,10 +18,13 @@
 // Friction is cut for grains surrounded by liquid (wet_slip), see the end of contact_delta.
 // Body particles (cluster solids, ADR 0002) follow the powder rule against grains and against
 // particles of other bodies. Same-body pairs are skipped (shape matching holds a body
-// together, body_match.glsl); body-liquid pairs do nothing until Milestone 3 step 4. In a
-// contact with a body, the lower side is heavier by STACK_K over the height between the body
-// centroids (a grain counts at its own height), on the friction as well as the push-out: with
-// mass-weighted friction a 3-box stack swayed for good (CPU reference, ADR 0002).
+// together, body_match.glsl). In a contact with a body, the lower side is heavier by STACK_K
+// over the height between the body centroids (a grain counts at its own height), on the
+// friction as well as the push-out: with mass-weighted friction a 3-box stack swayed for good
+// (CPU reference, ADR 0002). Body-liquid pairs (ADR 0003) touch at a full spacing and share
+// the push-out by density only (no STACK_K; no friction, as water has none). Bodies don't get
+// wet: WET_SLIP is a powder rule. A particle in no body that sits inside a body's outline is
+// also pushed out to it (push_out).
 
 // Share of a powder-liquid contact's push-out that the powder takes (liquid takes the rest).
 // Low, so water yields: water pushing into sand pushes the grains apart, they lose their
@@ -40,6 +43,31 @@ const float POWDER_LIQUID_REACH = 0.6;
 // Share of a contact's push-out that particle t takes, for rv = p_t - p_j (y down).
 float stack_weight(float m_t, float m_j, float rv_y) {
 	return m_j / (m_t * exp(clamp(params.stack_k * rv_y, -8.0, 8.0)) + m_j);
+}
+
+// Push-out from inside a body (ADR 0003 item 8). x is a particle in no body, j (sorted) its
+// nearest body particle and body j's body. j's way out of the rest shape (rest_offset.zw),
+// turned by the body's rotation from the last body pass, gives the outward normal N and the
+// outline's distance along it; x is inside by d = |e| - N.(x - x_j), and if so is moved d
+// along N, to the outline. Nothing for a body whose outline is stale (part of it erased).
+// A grain or water particle pushed into a lattice square sits at 0.7 spacing from four body
+// particles whose contact push-outs cancel, so without this it stayed inside: an 8x6 box
+// dropped 72 px onto sand ended with 7 grains inside (CPU reference; on the GPU from 100 px,
+// 16). Mirror: ParticleStep._push_out.
+vec2 push_out(vec2 x, uint j, uint body) {
+	if ((bodies[body].info.w & BODY_STALE) != 0u) {
+		return vec2(0.0);
+	}
+	vec2 e_rest = rest_offset[sorted_ids[j]].zw;
+	vec2 r = bodies[body].frame.zw;
+	vec2 e = vec2(r.x * e_rest.x - r.y * e_rest.y, r.y * e_rest.x + r.x * e_rest.y);
+	float len = length(e);
+	if (len < 1e-6) {
+		return vec2(0.0);
+	}
+	vec2 normal = e / len;
+	float d = len - dot(normal, x - s_pred[j]);
+	return d > 0.0 ? d * normal : vec2(0.0);
 }
 
 // Height used for STACK_K in a contact with a body: the body's centroid from the last body
@@ -62,36 +90,44 @@ vec2 contact_delta(uint t) {
 	float n_wet = 0.0;
 	float fric_w = 0.0;
 	float n_touch = 0.0;
+	uint nearest = 0xFFFFFFFFu;  // nearest body particle within a spacing, for a particle in no body
+	uint nearest_body = 0u;
+	float nearest_d = params.spacing;
 	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
 		if (j == t) continue;
 		uint flags_j = s_mat[j];  // one read for the material and the body id
 		Material mj = materials[flags_j & MAT_MASK];
 		bool j_powder = mj.info.x == CLASS_POWDER;
+		bool j_liquid = mj.info.x == CLASS_LIQUID;
 		uint j_body = flags_j >> BODY_SHIFT;
-		// Liquid-liquid: the density constraint. Body-liquid: not yet (step 4).
-		if (!t_powder && !j_powder && (t_body == 0u || j_body == 0u)) continue;
+		if (!t_powder && !j_powder && t_body == 0u && j_body == 0u) continue;  // liquid-liquid: the density constraint
 		if (t_body != 0u && t_body == j_body) continue;  // same body: shape matching
 		vec2 rv = pt - s_pred[j];
 		float dist = length(rv);
 		if (dist < params.h) {
 			n_near += 1.0;
-			n_wet += mj.info.x == CLASS_LIQUID ? 1.0 : 0.0;
+			n_wet += j_liquid ? 1.0 : 0.0;
 		}
-		bool mixed = t_liquid || mj.info.x == CLASS_LIQUID;
-		float reach = mixed ? POWDER_LIQUID_REACH * params.spacing : params.spacing;
+		if (t_body == 0u && j_body != 0u && dist < nearest_d) {
+			nearest = j;
+			nearest_body = j_body;
+			nearest_d = dist;
+		}
+		bool powder_liquid = (t_liquid && j_powder) || (j_liquid && t_powder);
+		float reach = powder_liquid ? POWDER_LIQUID_REACH * params.spacing : params.spacing;
 		if (dist >= reach) continue;
 		n_touch += 1.0;
 
 		vec2 normal = pair_dir(rv, dist, t, j);
 		float pen = reach - dist;
-		float w = mixed
+		float w = powder_liquid
 				? (t_powder ? POWDER_LIQUID_SHARE : 1.0 - POWDER_LIQUID_SHARE)
 				: mj.phys.x / (mt.phys.x + mj.phys.x);
 		float w_push = w;
 		if (t_powder && j_powder) {
 			w_push = stack_weight(mt.phys.x, mj.phys.x, rv.y);
-		} else if (!mixed) {
+		} else if (!t_liquid && !j_liquid) {
 			// A body, or a grain against one: friction takes the push-out's share (see top).
 			w_push = stack_weight(mt.phys.x, mj.phys.x, t_height - stack_height(j, j_body));
 			w = w_push;
@@ -117,11 +153,13 @@ vec2 contact_delta(uint t) {
 	fric /= max(fric_w, 1.0);
 	// Wet grains slip: friction drops with the share of liquid neighbours, so sand
 	// under water slumps and sinks instead of holding water pockets inside the pile.
-	float wet = n_near > 0.0 ? n_wet / n_near : 0.0;
+	// Bodies don't get wet (ADR 0003).
+	float wet = t_powder && n_near > 0.0 ? n_wet / n_near : 0.0;
 	if (t_liquid) {
-		sum /= max(n_touch, 1.0);  // liquid: averaged over the grains it touches (see top)
+		sum /= max(n_touch, 1.0);  // liquid: averaged over what it touches (see top)
 	}
-	return (sum + fric * (1.0 - params.wet_slip * wet)) * params.contact_relax;
+	vec2 out_push = nearest != 0xFFFFFFFFu ? push_out(pt, nearest, nearest_body) : vec2(0.0);
+	return (sum + fric * (1.0 - params.wet_slip * wet) + out_push) * params.contact_relax;
 }
 
 // Drag of a grain toward the liquid around it, per px/s of their relative speed and per
@@ -133,6 +171,33 @@ vec2 contact_delta(uint t) {
 // drag of 6 or 12 per second stopped that too, but slowed the drainage: 5.3k water left in
 // the sunk bed instead of 3.3k (water_feel_probe sink). Mirror: SimParams.POWDER_LIQUID_DRAG.
 const float POWDER_LIQUID_DRAG = 0.06;
+
+// Linear drag of a body particle toward the liquid around it, per second, scaled by how much
+// liquid is around it (ADR 0003). Only wet particles feel it, so a body's drag grows with its
+// wet surface while its mass grows with its area. Without it a floating cork heaved at its
+// natural period (~0.8 s for an 8x6 box) and a cork rising from the floor capsized at the
+// surface; at 40 it rolled over under water (CPU reference). Mirror: SimParams.BODY_LIQUID_DRAG.
+const float BODY_LIQUID_DRAG = 20.0;
+
+// Velocity change of body particle t from BODY_LIQUID_DRAG. Mirror: ParticleStep._body_liquid_drag.
+vec2 body_liquid_drag(uint t) {
+	vec2 pt = s_pred[t];
+	vec2 vt = s_vel[t];
+	vec2 sum = vec2(0.0);
+	float w_sum = 0.0;
+	FOR_EACH_NEIGHBOUR(t) {
+		uint j = k;
+		if (j == t || s_class(j) != CLASS_LIQUID) continue;
+		vec2 rv = pt - s_pred[j];
+		float w = poly6(dot(rv, rv));
+		sum += (s_vel[j] - vt) * w;
+		w_sum += w;
+	} END_NEIGHBOURS
+	if (w_sum <= 0.0) {
+		return vec2(0.0);
+	}
+	return sum / w_sum * ((1.0 - exp(-BODY_LIQUID_DRAG * params.dt)) * min(w_sum / params.rest_density, 1.0));
+}
 
 // Velocity change of grain t from POWDER_LIQUID_DRAG: toward its liquid neighbours'
 // kernel-weighted velocity, scaled by how much liquid is around it (1 in water at rest

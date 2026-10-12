@@ -183,10 +183,10 @@ func _buffer_specs() -> Array:
 ## Cluster solid buffers, bindings 23 to 26 (common.glslinc). [binding, name, bytes]
 func _body_buffer_specs() -> Array:
 	return [
-		[23, "rest_offset", cap * 8],
+		[23, "rest_offset", cap * 16],
 		[24, "body_members", cap * 4],
 		[25, "bodies", (body_cap + 1) * BODY_BYTES],
-		[26, "body_spawn", cap * 16],
+		[26, "body_spawn", cap * 32],
 	]
 
 
@@ -209,8 +209,8 @@ func _create_resources_rt() -> String:
 		return "could not create the %dx%d render texture" % [size.x, size.y]
 	bindings.append([specs.size(), RenderingDevice.UNIFORM_TYPE_IMAGE, image])  # binding 19
 	# Liquid density projection grid (hydro.glslinc), bindings 20 to 22.
-	# [binding, name, bytes per cell]: phi and acc hold liquid and powder.
-	for spec in [[20, "hydro_phi", 8], [21, "hydro_p", 4], [22, "hydro_acc", 8]]:
+	# [binding, name, bytes per cell]: phi and acc hold liquid, powder, body volume and weight.
+	for spec in [[20, "hydro_phi", 16], [21, "hydro_p", 4], [22, "hydro_acc", 16]]:
 		var hydro_bytes: int = _hydro_cells() * spec[2]
 		var hrid: RID = _ctx.create_buffer_rt(spec[1], hydro_bytes, PackedByteArray())
 		if not hrid.is_valid():
@@ -311,7 +311,8 @@ func request_clear() -> void:
 
 ## Makes one body (a rigid or soft body, by the material's stiffness) from spawned
 ## positions, as cpu_ref/particle_step.gd make_body does: the lowest free body id, a member
-## range by first fit, rest offsets from the positions relative to their mean. It spawns
+## range by first fit, rest offsets from the positions relative to their mean, and each
+## member's way out of the rest shape (ParticleStep.rest_outline, ADR 0003). It spawns
 ## with the next frame() that has no other body waiting. material should be a cluster
 ## material. Returns the body id, or 0 when no id, member range or pool room is free (as
 ## the brush stops when the pool is full). rest_shape (same size as positions, optional)
@@ -345,15 +346,20 @@ func make_body(positions: PackedVector2Array, material: int, rest_shape := Packe
 		rest_mean += rest_shape[k]
 	mean /= count
 	rest_mean /= count
+	var shape := PackedVector2Array()
+	for q in rest_shape:
+		shape.append(q - rest_mean)
+	var out: PackedVector2Array = ParticleStep.rest_outline(shape)
 	var spawn := PackedFloat32Array()
-	spawn.resize(count * 4)
+	spawn.resize(count * 8)
 	for k in count:
 		var p := positions[k]
-		var q := rest_shape[k] - rest_mean
-		spawn[k * 4] = p.x
-		spawn[k * 4 + 1] = p.y
-		spawn[k * 4 + 2] = q.x
-		spawn[k * 4 + 3] = q.y
+		spawn[k * 8] = p.x
+		spawn[k * 8 + 1] = p.y
+		spawn[k * 8 + 2] = shape[k].x
+		spawn[k * 8 + 3] = shape[k].y
+		spawn[k * 8 + 4] = out[k].x
+		spawn[k * 8 + 5] = out[k].y
 	_pending_bodies.append({"id": id, "material": material, "spawn": spawn.to_byte_array(), "mean": mean, "count": count})
 	body_count += 1
 	return id

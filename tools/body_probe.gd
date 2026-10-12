@@ -1,7 +1,7 @@
 ## Body probe: the cluster solid scenarios of tests/test_bodies.gd on the GPU sim, plus
 ## GPU-only checks and timing loads (docs/adr/0002-cluster-solid-layout.md). Needs a real
 ## window (no --headless). Run it in a copy of the repo, not the repo itself:
-##   Godot_console.exe --path <copy> --script res://tools/body_probe.gd -- [scenarios] [from=N] [shots=F,...]
+##   Godot_console.exe --path <copy> --script res://tools/body_probe.gd -- [scenarios] [from=N] [shots=F,...] [grid]
 ## scenarios: a comma list, default "tests" (the first seven, as in test_bodies.gd):
 ##   floor    8x6 rigid box resting on the floor, 240 frames: shape error, and |rotation| and
 ##            centroid speed over the last 120 frames
@@ -21,13 +21,26 @@
 ##   sand     a sand bed from wall to wall (320 x 31 grains, so it packs down but doesn't
 ##            slump), then at frame 300 an 8x6 box dropped from 100 px above the bed's top
 ##            (it lands at ~280 px/s), 900 frames: the box rests on the bed (shape, rotation,
-##            speed over the last 60 frames) and the sand grains inside its outline. Grains
-##            get in on such an impact, in the CPU reference too (ADR 0002 known limits), so
-##            a count above 0 reads KNOWN
+##            speed over the last 60 frames) with no sand grain inside its outline (the
+##            push-out, ADR 0003; before it, 16 grains got in)
 ##   sandlow  the same box placed 2 px above the bed's top: it must rest on the bed (shape,
 ##            speed), with no grain inside, its lowest particle no more than a spacing below
 ##            the bed's top before the drop
 ##   sandrow  seven such boxes along the bed (x 80 to 560): how much they tilt and sink
+##   watersink  a pool from wall to wall (320 x 40 water, 80 px deep), then at frame 120 an 8x6
+##            carrot (density 1.2) dropped from 20 px above the water, 600 frames: it sinks to the
+##            floor (or onto one layer of water on it) and keeps its shape, with no water inside its
+##            outline at any sample (ADR 0003)
+##   waterfloat the same pool, an 8x6 cork (density 0.5) set on the water at frame 120, 900
+##            frames: over the last 60, its mean draft (share of its height under the water's
+##            top particles) 0.25 to 0.7, mean speed under 3 px/s, tilt off level under 0.35 rad
+##            (CPU: draft ~0.3, it rides ~2 px high), no water inside
+##   waterdrop  the cork dropped from 60 px above the water: it plunges, comes back up and floats,
+##            as waterfloat
+##   waterbig   a 40x20 cork set on the water: its cells are bed for the grid (ADR 0003), as
+##            waterfloat
+##   waterbox   a 16x10 cork (the size main.tscn's Drop buttons make) set on the water, as
+##            waterfloat
 ##   reuse    two 8x6 boxes; the first erased whole at frame 60, a new box made at frame 90:
 ##            the erased body's id and member range are freed and the new box gets them
 ##            (ParticleSim frees a body when its live count reads back 0), 200 frames
@@ -60,13 +73,17 @@ const RECORDS := 257
 ## Sand bed of the sand scenarios: wall to wall, so it only packs down.
 const BED_COLS := 320
 const BED_ROWS := 31
+## Pool of the water scenarios: wall to wall, 80 px deep.
+const POOL_ROWS := 40
 
 var ctx
 var sim
 var table
 var carrot := -1
 var jelly := -1
+var cork := -1
 var sand := -1
+var water := -1
 var queue: Array = []
 var sc := {}  # the running scenario
 var frame_i := 0
@@ -86,6 +103,8 @@ func _initialize() -> void:
 		elif a.begins_with("shots="):
 			for v in a.substr(6).split(","):
 				shots.append(int(v))
+		elif a == "grid":
+			pass  # debug: water scenarios print grid columns
 		else:
 			names = a
 	for nm in names.split(","):
@@ -114,8 +133,9 @@ func _on_setup(err: String) -> void:
 	ready = true
 
 
-## The shipped table plus test-only rigid ("carrot", stiffness 1) and jelly (stiffness 0.3)
-## rows, as tests/test_bodies.gd _sim(): materials.json gets cluster rows in step 5.
+## The shipped table plus test-only rigid ("carrot", stiffness 1), jelly (stiffness 0.3) and
+## cork (rigid, density 0.5) rows, as tests/test_bodies.gd _sim(): materials.json gets cluster
+## rows in step 5.
 func _table():
 	var shipped = MaterialTable.new()
 	shipped.load_file()
@@ -127,15 +147,20 @@ func _table():
 	c.merge({"id": 2, "name": "carrot", "class": "cluster", "color": "#e8792b", "density": 1.2, "stiffness": 1.0, "tags": []}, true)
 	var j: Dictionary = sand_row.duplicate(true)
 	j.merge({"id": 3, "name": "jelly", "class": "cluster", "color": "#d94f8a", "density": 1.1, "stiffness": 0.3, "tags": []}, true)
+	var k: Dictionary = sand_row.duplicate(true)
+	k.merge({"id": 4, "name": "cork", "class": "cluster", "color": "#c8a46e", "density": 0.5, "stiffness": 1.0, "tags": []}, true)
 	rows.append(c)
 	rows.append(j)
+	rows.append(k)
 	var t = MaterialTable.new()
 	var problems: PackedStringArray = t.load_rows(rows)
 	if not problems.is_empty():
 		print("MATERIAL PROBLEMS: ", problems)
 	carrot = t.id_of("carrot")
 	jelly = t.id_of("jelly")
+	cork = t.id_of("cork")
 	sand = t.id_of("sand")
+	water = t.id_of("water")
 	return t
 
 
@@ -228,6 +253,14 @@ func _start(name: String) -> void:
 			sc.fall = 100.0 if name == "sand" else 2.0
 			sc.xs = [80.0, 160.0, 240.0, 320.0, 400.0, 480.0, 560.0] if name == "sandrow" else [X]
 			sc.late_speed = 0.0
+		"watersink", "waterfloat", "waterdrop", "waterbig", "waterbox":
+			sc.frames = 600 if name == "watersink" else 900
+			sc.every = 10
+			sc.from = 600
+			sc.slots = BED_COLS * POOL_ROWS
+			sc.hold = 119  # read the water's top, then make the body at 120
+			sc.most_inside = 0
+			sc.late = []
 		"reuse":
 			sc.frames = 200
 			_body(_box(Vector2(X - 40.0, FLOOR), 8, 6), carrot)
@@ -275,6 +308,23 @@ func _scenario_brush(brush: Dictionary) -> void:
 		elif frame_i == sc.hold + 1:
 			for k in sc.xs.size():  # the first spawns in this frame, the others one per frame
 				_body(_box(Vector2(sc.xs[k], sc.bed_tops[k] - sc.fall), 8, 6), carrot)
+	elif sc.name.begins_with("water"):
+		if frame_i == 1:
+			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": water, "count": BED_COLS * POOL_ROWS, "cols": BED_COLS,
+					"pos": Vector2(1.0, FLOOR - (POOL_ROWS - 1) * SimParams.SPACING)}, true)
+		elif frame_i == sc.hold + 1:
+			var top: float = sc.water_top
+			match sc.name:
+				"watersink":
+					_body(_box(Vector2(X, top - 20.0), 8, 6), carrot)
+				"waterfloat":
+					_body(_box(Vector2(X, top - 1.0), 8, 6), cork)
+				"waterdrop":
+					_body(_box(Vector2(X, top - 60.0), 8, 6), cork)
+				"waterbig":
+					_body(_box(Vector2(X, top - 1.0), 40, 20), cork)
+				"waterbox":
+					_body(_box(Vector2(X, top - 1.0), 16, 10), cork)
 	elif sc.name == "reuse":
 		if frame_i == 60:
 			brush.merge({"op": ParticleSim.BRUSH_ERASE, "pos": Vector2(X - 40.0, FLOOR - 5.0), "radius": 20.0}, true)
@@ -402,10 +452,60 @@ func _sample(f: int, b: Dictionary) -> void:
 						% [sc.fall, sc.bed_tops[0], bottom, inside, fit.err, fit.theta, sc.late_speed]
 				var rests: bool = fit.err < 0.1 and sc.late_speed < REST_SPEED \
 						and (sc.name == "sand" or bottom - sc.bed_tops[0] < SimParams.SPACING)
-				if sc.name == "sand" and rests and inside > 0:
-					print("BODY %s  KNOWN (grains enter a body on a fast impact)" % line)
+				_result(line, rests and inside == 0)
+		"watersink", "waterfloat", "waterdrop", "waterbig", "waterbox":
+			if f == sc.hold:
+				sc.water_top = _top_of(b, water, X, 40.0)
+				waiting = false
+			if not bodies.has(1):
+				return
+			var fit := _fit(bodies[1])
+			var inside := _inside(b, bodies[1], fit, water)
+			sc.most_inside = maxi(sc.most_inside, inside)
+			if f % 60 == 0:
+				print("  f=%d c=(%.1f, %.1f) rot %.3f v=%s draft %.2f inside %d" % [f, fit.c.x, fit.c.y, fit.theta,
+						_mean_vel(bodies[1]), _draft(b, bodies[1]), inside])
+			if f % 300 == 0 and OS.get_cmdline_user_args().has("grid"):
+				_print_grid_columns(b, [fit.c.x, fit.c.x + 120.0])
+				var top := INF
+				var left := INF
+				var right := -INF
+				for q in bodies[1].pos:
+					top = minf(top, q.y)
+					left = minf(left, q.x)
+					right = maxf(right, q.x)
+				var on_top := 0
+				for i in b.mat_flags.size() / 4:
+					var mf: int = b.mat_flags.decode_u32(i * 4)
+					var q := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+					if (mf & 0x100) != 0 and (mf & 0xFF) == water and q.y < top and q.x > left and q.x < right:
+						on_top += 1
+				_print_pressure_push(b, bodies[1])
+				print("  record: p_ref %.1f p_min bits %x flags %d; water over the body %d" % [
+						b.bodies.decode_float(1 * ParticleSim.BODY_BYTES + 40), b.bodies.decode_u32(1 * ParticleSim.BODY_BYTES + 44),
+						b.bodies.decode_u32(1 * ParticleSim.BODY_BYTES + 12), on_top])
+			if f > sc.frames - 60:
+				var theta: float = fit.theta
+				sc.late.append([_draft(b, bodies[1]), _mean_vel(bodies[1]).length(), absf(theta - roundf(theta / PI) * PI)])
+			if f == sc.frames:
+				var draft := 0.0
+				var speed := 0.0
+				var tilt := 0.0
+				for v in sc.late:
+					draft += v[0] / sc.late.size()
+					speed += v[1] / sc.late.size()
+					tilt = maxf(tilt, v[2])
+				var bottom := -INF
+				for q in bodies[1].pos:
+					bottom = maxf(bottom, q.y)
+				if sc.name == "watersink":
+					_result("carrot dropped into an 80 px pool: lowest particle %.2f px above the floor, water inside its outline %d at the end (most %d at a sample), shape error %.4f px, rotation %.4f rad, speed %.3f px/s"
+							% [FLOOR - bottom, inside, sc.most_inside, fit.err, fit.theta, _mean_vel(bodies[1]).length()],
+							FLOOR - bottom < 2.0 * SimParams.SPACING and sc.most_inside == 0 and fit.err < 0.1)
 				else:
-					_result(line, rests and inside == 0)
+					_result("%s: cork, last 60 frames: mean draft %.2f of its height, mean speed %.2f px/s, max tilt %.3f rad; water inside %d at the end (most %d at a sample), shape error %.4f px"
+							% [sc.name, draft, speed, tilt, inside, sc.most_inside, fit.err],
+							draft > 0.25 and draft < 0.7 and speed < 3.0 and tilt < 0.35 and inside == 0 and fit.err < 0.1)
 		"reuse":
 			if f == sc.frames:
 				var live1: int = b.bodies.decode_u32(1 * ParticleSim.BODY_BYTES + ParticleSim.BODY_LIVE_OFFSET)
@@ -454,8 +554,8 @@ func _finish() -> void:
 
 func _request_rt(f: int, slots: int) -> void:
 	var n := maxi(slots, 1)
-	for spec in [["pos", n * 8], ["vel", n * 8], ["mat_flags", n * 4], ["rest_offset", n * 8],
-			["bodies", RECORDS * ParticleSim.BODY_BYTES]]:
+	for spec in [["pos", n * 8], ["vel", n * 8], ["mat_flags", n * 4], ["rest_offset", n * 16],
+			["bodies", RECORDS * ParticleSim.BODY_BYTES], ["hydro_p", 0], ["hydro_phi", 0]]:
 		ctx.readback_async_rt(spec[0], _on_data_rt.bind(spec[0], f), 0, spec[1])
 
 
@@ -467,7 +567,7 @@ func _store(data: PackedByteArray, name: String, f: int) -> void:
 	if not got.has(f):
 		got[f] = {}
 	got[f][name] = data
-	if got[f].size() == 5:
+	if got[f].size() == 7:
 		var b: Dictionary = got[f]
 		got.erase(f)
 		if not sc.is_empty():
@@ -498,7 +598,7 @@ func _bodies_of(b: Dictionary) -> Dictionary:
 			out[id] = {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "rest": PackedVector2Array()}
 		out[id].pos.append(Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4)))
 		out[id].vel.append(Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4)))
-		out[id].rest.append(Vector2(b.rest_offset.decode_float(i * 8), b.rest_offset.decode_float(i * 8 + 4)))
+		out[id].rest.append(Vector2(b.rest_offset.decode_float(i * 16), b.rest_offset.decode_float(i * 16 + 4)))
 	return out
 
 
@@ -554,6 +654,12 @@ func _key(q: Vector2) -> Vector2i:
 
 ## Sand grains whose position, taken into the box's rest frame, lies inside its rest outline.
 func _grains_inside(b: Dictionary, body: Dictionary, fit: Dictionary) -> int:
+	return _inside(b, body, fit, sand)
+
+
+## Particles of `material` whose position, taken into the box's rest frame, lies inside the
+## bounding box of its rest lattice.
+func _inside(b: Dictionary, body: Dictionary, fit: Dictionary, material: int) -> int:
 	var lo := Vector2(INF, INF)
 	var hi := Vector2(-INF, -INF)
 	for q in body.rest:
@@ -562,13 +668,136 @@ func _grains_inside(b: Dictionary, body: Dictionary, fit: Dictionary) -> int:
 	var n := 0
 	for i in b.mat_flags.size() / 4:
 		var f: int = b.mat_flags.decode_u32(i * 4)
-		if (f & 0x100) == 0 or (f & 0xFF) != sand:
+		if (f & 0x100) == 0 or (f & 0xFF) != material or (f >> 16) != 0:
 			continue
 		var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
 		var q: Vector2 = (p - fit.c).rotated(-fit.theta) + fit.c0
 		if q.x > lo.x and q.x < hi.x and q.y > lo.y and q.y < hi.y:
 			n += 1
 	return n
+
+
+## Debug ("grid" argument): the density projection grid's p and channels down the columns
+## at the given x, from y 160 to the floor.
+func _print_grid_columns(b: Dictionary, xs: Array) -> void:
+	var cell := SimParams.H * SimParams.HYDRO_CELL
+	var gw := ceili(SimParams.WORLD_SIZE.x / SimParams.H)
+	var size := Vector2i((gw + SimParams.HYDRO_CELL - 1) / SimParams.HYDRO_CELL,
+			(ceili(SimParams.WORLD_SIZE.y / SimParams.H) + SimParams.HYDRO_CELL - 1) / SimParams.HYDRO_CELL)
+	for x in xs:
+		var cx := clampi(int(x / cell), 0, size.x - 1)
+		var line := "  column x %.0f:" % ((cx + 0.5) * cell)
+		for cy in range(int(160.0 / cell), size.y):
+			var c := cy * size.x + cx
+			line += " [y%.0f p%.0f w%.2f s%.2f b%.2f bw%.2f]" % [(cy + 0.5) * cell, b.hydro_p.decode_float(c * 4),
+					b.hydro_phi.decode_float(c * 16), b.hydro_phi.decode_float(c * 16 + 4),
+					b.hydro_phi.decode_float(c * 16 + 8), b.hydro_phi.decode_float(c * 16 + 12)]
+		print(line)
+
+
+## Debug ("grid"): the wet-surface pressure push on a body (as solve_pressure.glsl, with
+## p_ref 0 and no floor term) from the read-back particles and grid, against its weight, both
+## in px per substep summed over its particles; and its wet particles' mean wet face |g|.
+func _print_pressure_push(b: Dictionary, body: Dictionary) -> void:
+	var sp := SimParams.SPACING
+	var h := SimParams.H
+	var dt := SimParams.DT / 2.0
+	var ParticleStep = load("res://cpu_ref/particle_step.gd")
+	var cells := {}
+	for i in b.mat_flags.size() / 4:
+		var mf: int = b.mat_flags.decode_u32(i * 4)
+		if (mf & 0x100) == 0 or (mf & 0xFF) != water:
+			continue
+		var q := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		var key := Vector2i((q / h).floor())
+		if not cells.has(key):
+			cells[key] = PackedVector2Array()
+		cells[key].append(q)
+	var push := Vector2.ZERO
+	var n_wet := 0
+	var g_sum := 0.0
+	var bottom_p := 0.0
+	var n_bottom := 0
+	var low := -INF
+	for x in body.pos:
+		low = maxf(low, x.y)
+	for x in body.pos:
+		var g := Vector2.ZERO
+		var c := Vector2i((x / h).floor())
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				for q in cells.get(c + Vector2i(dx, dy), PackedVector2Array()):
+					g += ParticleStep.body_wet_face(q - x, h, sp)
+		if g.length() < 1e-6:
+			continue
+		n_wet += 1
+		g_sum += g.length()
+		var pw := _grid_p(b, x + 0.5 * sp * g.normalized())
+		push += -pw * g * dt * dt / (0.5 * sp)
+		if x.y > low - 0.5:
+			bottom_p += pw
+			n_bottom += 1
+	print("  pressure push (y up < 0): (%.2f, %.2f) px/substep, weight %.2f; %d wet, mean |g| %.2f; bottom row %d wet, mean p %.0f"
+			% [push.x, push.y, body.pos.size() * SimParams.GRAVITY * dt * dt, n_wet, g_sum / maxi(n_wet, 1), n_bottom, bottom_p / maxi(n_bottom, 1)])
+	# Gap under the body: per bottom-row particle, the nearest water particle below it.
+	var hist := {}
+	for x in body.pos:
+		if x.y < low - 0.5:
+			continue
+		var best := INF
+		for q_cell in [Vector2i((x / h).floor()) + Vector2i(0, 1), Vector2i((x / h).floor()) + Vector2i(0, 2),
+				Vector2i((x / h).floor()), Vector2i((x / h).floor()) + Vector2i(-1, 1), Vector2i((x / h).floor()) + Vector2i(1, 1)]:
+			for q in cells.get(q_cell, PackedVector2Array()):
+				if q.y > x.y:
+					best = minf(best, x.distance_to(q))
+		var key := "none" if best == INF else "%d" % int(best)
+		hist[key] = hist.get(key, 0) + 1
+	print("  nearest water below the bottom row (px, floor): %s" % str(hist))
+
+
+## Bilinear grid pressure at x, clamped to >= 0 (hydro_p_sample).
+func _grid_p(b: Dictionary, x: Vector2) -> float:
+	var cell := SimParams.H * SimParams.HYDRO_CELL
+	var size := Vector2i((ceili(SimParams.WORLD_SIZE.x / SimParams.H) + SimParams.HYDRO_CELL - 1) / SimParams.HYDRO_CELL,
+			(ceili(SimParams.WORLD_SIZE.y / SimParams.H) + SimParams.HYDRO_CELL - 1) / SimParams.HYDRO_CELL)
+	var g := x / cell - Vector2(0.5, 0.5)
+	var c0 := Vector2i(g.floor())
+	var f := g - Vector2(c0)
+	var v := []
+	for k in 4:
+		var c := (c0 + Vector2i(k & 1, k >> 1)).clamp(Vector2i.ZERO, size - Vector2i.ONE)
+		v.append(b.hydro_p.decode_float((c.y * size.x + c.x) * 4))
+	return maxf(lerpf(lerpf(v[0], v[1], f.x), lerpf(v[2], v[3], f.x), f.y), 0.0)
+
+
+## Highest particle of `material` (in no body) within half_width of x.
+func _top_of(b: Dictionary, material: int, x: float, half_width: float) -> float:
+	var top := INF
+	for i in b.mat_flags.size() / 4:
+		var f: int = b.mat_flags.decode_u32(i * 4)
+		if (f & 0x100) == 0 or (f & 0xFF) != material or (f >> 16) != 0:
+			continue
+		var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		if absf(p.x - x) < half_width:
+			top = minf(top, p.y)
+	return top
+
+
+## Share of a floating body's height under the water: from its outline's bottom up to the
+## water's surface (half a spacing over the top water particle, 6 to 40 px clear of its sides).
+func _draft(b: Dictionary, body: Dictionary) -> float:
+	var sp := SimParams.SPACING
+	var top := INF
+	var bottom := -INF
+	var left := INF
+	var right := -INF
+	for p in body.pos:
+		top = minf(top, p.y)
+		bottom = maxf(bottom, p.y)
+		left = minf(left, p.x)
+		right = maxf(right, p.x)
+	var surface := minf(_top_of(b, water, left - 23.0, 17.0), _top_of(b, water, right + 23.0, 17.0)) - 0.5 * sp
+	return (bottom + 0.5 * sp - surface) / (bottom - top + sp)
 
 
 ## Highest sand grain within half_width of x.

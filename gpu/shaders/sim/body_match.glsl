@@ -11,6 +11,8 @@
 //   2. The sums are reduced in shared memory. From them: centroid c, rest centroid c0 of
 //      the live members, and the rotation atan2(A10 - A01, A00 + A11) as (cos, sin), kept
 //      from the last pass when live < 2 or |A_pq| is near 0.
+//   Thread 0 also moves the reference pressure and wet flag solve_pressure found this substep
+//   into place for the next (ADR 0003 item 4).
 //   3. Every live member moves toward its goal c + R(q - c0) by
 //      k = 1 - (1 - stiffness)^(dt * 60 / iterations), so stiffness is the share of the shape
 //      error removed per 1/60 s whatever the substep and iteration counts.
@@ -23,7 +25,7 @@
 // Mirror: cpu_ref/particle_step.gd _match_shapes.
 
 #define LOCAL_SIZE_X 128
-// common.glslinc stamp: Params 124 B, v16. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v17. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Keeps the last rotation when |A_pq| is below this, per live member, in px^2.
@@ -64,7 +66,7 @@ void main() {
 		uint slot = body_members[m];
 		if (!live_member(slot, id)) continue;
 		vec2 p = s_pred[sorted_of(slot)] - c_last;
-		vec2 q = rest_offset[slot];
+		vec2 q = rest_offset[slot].xy;
 		n += 1.0;
 		sp += p;
 		sq += q;
@@ -107,7 +109,16 @@ void main() {
 	if (lid == 0u) {
 		bodies[id].info.z = uint(live);
 		bodies[id].frame = vec4(c, rot);
-		bodies[id].rest = vec4(c0, 0.0, 0.0);
+		bodies[id].rest_c = c0;
+		// The reference pressure and the wet flag solve_pressure found this substep carry to
+		// the next (ADR 0003 item 4). Only the first pass of a substep finds p_min set.
+		uint p_min = bodies[id].p_min;
+		if (p_min != BODY_P_UNSET) {
+			bodies[id].p_ref = uintBitsToFloat(p_min);
+			bodies[id].p_min = BODY_P_UNSET;
+			uint flags = bodies[id].info.w;
+			bodies[id].info.w = (flags & BODY_STALE) | ((flags & BODY_WET_NOW) != 0u ? BODY_WET : 0u);
+		}
 	}
 
 	for (uint m = first + lid; m < end; m += LOCAL_SIZE_X) {
@@ -115,7 +126,7 @@ void main() {
 		if (!live_member(slot, id)) continue;
 		float stiffness = materials[mat_flags[slot] & MAT_MASK].extra.y;
 		float k = 1.0 - pow(1.0 - stiffness, params.dt * 60.0 / float(params.iterations));
-		vec2 q = rest_offset[slot] - c0;
+		vec2 q = rest_offset[slot].xy - c0;
 		vec2 goal = c + vec2(rot.x * q.x - rot.y * q.y, rot.y * q.x + rot.x * q.y);
 		uint t = sorted_of(slot);
 		s_pred[t] += k * (goal - s_pred[t]);

@@ -5,9 +5,10 @@
 // circle brush's claim counter, and
 // refresh the live count that later passes and the capacity meter read. A new body
 // (BRUSH_BODY) gets its record: member range, all members live, frame at the spawn centroid
-// with no rotation. The body pass fills in the rest during the first solver iteration.
+// with no rotation, no reference pressure yet. The body pass fills in the rest during the
+// first solver iteration.
 
-// common.glslinc stamp: Params 124 B, v16. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v17. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {
@@ -27,7 +28,9 @@ void main() {
 		uint id = params.brush_material >> BODY_SHIFT;
 		bodies[id].info = uvec4(params.body_first, n, n, 0u);
 		bodies[id].frame = vec4(params.brush_pos, 1.0, 0.0);
-		bodies[id].rest = vec4(0.0);
+		bodies[id].rest_c = vec2(0.0);
+		bodies[id].p_ref = 0.0;
+		bodies[id].p_min = BODY_P_UNSET;
 	}
 	counters[2] = 0u;
 	counters[0] = free_count;
