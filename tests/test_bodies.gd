@@ -287,6 +287,40 @@ func test_light_box_rises_from_the_bottom() -> void:
 	expect(late.turn < 0.6, "the cork floats face up or down, tilt < 0.6 rad: %.3f" % late.turn)
 
 
+## ADR 0003 known limit: water's pressure pushes act on a body's wet particles only, relative to
+## its top (p_ref), so a jelly's bottom and lower sides are pushed at up to ~9 g and it was
+## squeezed out of shape, with water inside (GPU: 4.4 px off, 20-26 inside). The pushes on a soft
+## body are projected onto its rigid motion, so the water moves and turns it without deforming it.
+func test_sunk_jelly_keeps_its_shape() -> void:
+	var world := Vector2(64, 60)
+	# The control: the same jelly on the dry floor sags under its own weight.
+	var dry_sim = _sim(world)
+	var dry := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var dry_id: int = ParticleStep.make_body(dry, _box(Vector2(32, _floor_y(world)), 16, 10), _jelly)
+	for f in 240:
+		_frame(dry_sim, dry)
+	var sag: float = _fit(dry, dry_id).err
+	# The 16x10 jelly main.tscn drops (density 1.1), let go on the floor of a pool, 10 rows of
+	# water around it and 10 over it.
+	var sim = _sim(world)
+	var state := _pool(world, 32, 20, 16, 10)
+	var id: int = ParticleStep.make_body(state, _box(Vector2(32, _floor_y(world)), 16, 10), _jelly)
+	var most_inside := 0
+	var worst := 0.0
+	for f in 240:
+		_frame(sim, state)
+		if f % 10 == 9:
+			most_inside = maxi(most_inside, _inside(state, id, _water).size())
+			if f >= 120:
+				worst = maxf(worst, _fit(state, id).err)
+	var above := _floor_y(world) - _lowest(state, id)
+	_report("jelly 16x10 on the floor of a pool, 240 frames: shape error up to %.3f px over the last 2 s (%.3f px dry on the floor), %d water inside at the end (most %d), lowest particle %.2f px above the floor, speed %.3f px/s"
+			% [worst, sag, _inside(state, id, _water).size(), most_inside, above, _body_vel(state, id).length()])
+	expect(above < 2.0 * SimParams.SPACING, "the jelly stays on the floor (or one water layer above it): %.2f px above it" % above)
+	expect(worst < 2.0 * sag, "the sunk jelly keeps its shape within twice its dry sag (%.3f px): %.3f" % [sag, worst])
+	expect(most_inside == 0, "no water inside the jelly at any sample: up to %d" % most_inside)
+
+
 ## ADR 0002 known limit: an 8x6 box dropped 72 px onto sand ended with 7 grains inside.
 func test_box_dropped_on_sand_keeps_grains_out() -> void:
 	var world := Vector2(80, 140)
@@ -445,9 +479,9 @@ func _settle_in_water(sim, state: Dictionary, id: int, frames: int) -> Dictionar
 
 
 ## Water at rest spacing from the floor up, cols x rows, centred. With `gap` > 0 the middle
-## `gap` columns of the bottom 6 rows stay empty (room for a box on the floor).
-func _pool(world: Vector2, cols: int, rows: int, gap := 0) -> Dictionary:
-	return _lattice(world, cols, rows, _water, gap)
+## `gap` columns of the bottom `gap_rows` rows stay empty (room for a box on the floor).
+func _pool(world: Vector2, cols: int, rows: int, gap := 0, gap_rows := 6) -> Dictionary:
+	return _lattice(world, cols, rows, _water, gap, gap_rows)
 
 
 ## A sand bed from the floor up.
@@ -455,14 +489,14 @@ func _bed(world: Vector2, cols: int, rows: int) -> Dictionary:
 	return _lattice(world, cols, rows, _sand, 0)
 
 
-func _lattice(world: Vector2, cols: int, rows: int, material: int, gap: int) -> Dictionary:
+func _lattice(world: Vector2, cols: int, rows: int, material: int, gap: int, gap_rows := 6) -> Dictionary:
 	var sp := SimParams.SPACING
 	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
 	var x0 := 0.5 * (world.x - (cols - 1) * sp)
 	var mid := 0.5 * (cols - 1)
 	for r in rows:
 		for c in cols:
-			if gap > 0 and r < 6 and absf(c - mid) < 0.5 * gap:
+			if gap > 0 and r < gap_rows and absf(c - mid) < 0.5 * gap:
 				continue
 			state.pos.append(Vector2(x0 + c * sp, _floor_y(world) - r * sp))
 			state.vel.append(Vector2.ZERO)

@@ -3,7 +3,8 @@
 ##   predict  -> gravity, step clamp, wall clamp            (predict.glsl)
 ##   hash     -> neighbours within H                         (hash_*.glsl, scan_*.glsl)
 ##   hydro    -> liquid density projection grid               (hydro_*.glsl)
-##   solve    -> grid pressure push, then                   (solve_pressure.glsl)
+##   solve    -> grid pressure push, a soft body's made rigid (solve_pressure.glsl,
+##               body_project.glsl; ADR 0003 item 12), then
 ##               per iteration: lambda, delta, apply         (solve_*.glsl)
 ##               liquids: PBF density constraint (liquid.glslinc)
 ##               powders: frictional contacts   (powder.glslinc)
@@ -147,6 +148,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		else:
 			delta[i] = Vector2.ZERO
 		delta[i] = delta[i].limit_length(0.5 * SimParams.SPACING)
+	_project_body_pushes(delta, pred, mat, body, bodies, members)
 	for i in n:
 		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i], body[i] != 0)
 
@@ -360,6 +362,43 @@ func _match_shapes(pred: PackedVector2Array, mat: PackedInt32Array, body: Packed
 			var q := rest[m] - c0
 			var goal := c + Vector2(rot.x * q.x - rot.y * q.y, rot.y * q.x + rot.x * q.y)
 			pred[m] += k * (goal - pred[m])
+
+
+## A soft body's pressure pushes (ADR 0003 item 12) replaced by their rigid part: every live
+## member moves by the members' mean push plus the turn about their centroid whose torque the
+## pushes give, θ = Σ r × δ / Σ |r|², linearised (θ is at most a few hundredths of a radian). The
+## water moves and turns a jelly without squeezing it: relative to p_ref (its top) the pushes on
+## its bottom and lower sides reach ~9 g, and a 16 x 10 jelly crumpled 4.4-5.0 px out of shape
+## with water inside (body_probe waterjelly). A rigid body is left alone: matching at stiffness 1
+## takes out the rest.
+## Members of a body share a material, so their masses are equal. Mirror: body_project.glsl.
+func _project_body_pushes(delta: PackedVector2Array, pred: PackedVector2Array, mat: PackedInt32Array,
+		body: PackedInt32Array, bodies: Array, members: PackedInt32Array) -> void:
+	for id in range(1, bodies.size()):
+		var b: Dictionary = bodies[id]
+		var live := PackedInt32Array()
+		var c := Vector2.ZERO
+		var push := Vector2.ZERO
+		for k in range(b.first, b.first + b.count):
+			var m := members[k]
+			if body[m] == id:
+				live.append(m)
+				c += pred[m]
+				push += delta[m]
+		if live.is_empty() or materials[mat[live[0]]].stiffness >= 1.0:
+			continue
+		c /= live.size()
+		push /= live.size()
+		var torque := 0.0
+		var inertia := 0.0
+		for m in live:
+			var r := pred[m] - c
+			torque += r.cross(delta[m])
+			inertia += r.length_squared()
+		var turn := torque / inertia if inertia > BODY_ROT_EPS * live.size() else 0.0
+		for m in live:
+			var r := pred[m] - c
+			delta[m] = (push + turn * Vector2(-r.y, r.x)).limit_length(0.5 * SimParams.SPACING)
 
 
 ## Makes one body of `material` from spawned positions (the body brush, Milestone 3 step 5;

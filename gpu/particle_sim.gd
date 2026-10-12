@@ -12,10 +12,12 @@
 ##   hash      clear, count, 3-step prefix sum, scatter (copies state into cell order)
 ##   hydro     liquid density projection grid (splat, density, then all SOR sweeps in one
 ##             128-thread workgroup, hydro_solve)
-##   solve     grid pressure push (pressure, apply), then
+##   solve     grid pressure push (pressure, the bodies pass's projection, apply), then
 ##             solver_iterations x (lambda, delta, apply, then the bodies pass)
-##   bodies    shape matching, one 128-thread workgroup per body id (body_match); its own
-##             pass so its time shows separately, once after each iteration's apply
+##   bodies    one 128-thread workgroup per body id: a soft body's pressure pushes projected
+##             onto its rigid motion (body_project) between pressure and its apply, and shape
+##             matching (body_match) after each iteration's apply; its own passes so their
+##             time shows separately
 ##   velocity  update, XSPH, commit
 ##   render    clear image, draw liquid points, then powder points on top
 ##
@@ -36,7 +38,7 @@ const KERNELS := [
 	"brush_spawn", "brush_erase", "brush_finalize", "predict",
 	"hash_clear", "hash_count", "scan_local", "scan_blocks", "scan_add", "hash_scatter",
 	"hydro_splat", "hydro_phi", "hydro_solve", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
-	"body_match",
+	"body_project", "body_match",
 	"velocity_update", "velocity_xsph", "velocity_commit",
 	"render_clear", "render_points", "render_gap", "render_powder",
 ]
@@ -50,7 +52,7 @@ const SCAN_SHARED_BYTES := 64 * 4
 ## memory (phi vec2 + p float each). Mirror: LOCAL_SIZE_X in hydro_solve.glsl,
 ## HYDRO_MAX_CELLS in hydro.glslinc.
 const HYDRO_SOLVE_THREADS := 128
-## body_match: threads in each body's workgroup. Mirror: LOCAL_SIZE_X in body_match.glsl.
+## body_project, body_match: threads in each body's workgroup. Mirror: LOCAL_SIZE_X in both.
 const BODY_THREADS := 128
 const HYDRO_MAX_CELLS := 1024
 const HYDRO_SHARED_BYTES := HYDRO_MAX_CELLS * 12
@@ -245,8 +247,11 @@ func _build_passes_rt() -> void:
 			d.call("scan_add", cells), d.call("hash_scatter", all),
 		])
 		_ctx.add_pass("hydro", hydro_pass)
-		# Shape matching after every iteration's apply. Workgroups (one per body id) are set per frame.
-		var solve := [d.call("solve_pressure", all), d.call("solve_apply", all)]
+		# A soft body's pressure pushes made rigid before they're applied, then shape matching
+		# after every iteration's apply. Workgroups (one per body id) are set per frame.
+		_ctx.add_pass("solve", [d.call("solve_pressure", all)])
+		_ctx.add_pass("bodies", [d.call("body_project", 0)])
+		var solve := [d.call("solve_apply", all)]
 		for _i in _iterations:
 			solve.append_array([d.call("solve_lambda", all), d.call("solve_delta", all), d.call("solve_apply", all)])
 			_ctx.add_pass("solve", solve)
