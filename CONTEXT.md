@@ -34,6 +34,9 @@ _Avoid_: Deformable
 **Jelly**:
 The springy soft-body material, as in OE-Cake.
 
+**Stiffness**:
+The cluster-solid parameter: the share of a body's shape error removed per 1/60 s. 1 is a rigid body; lower is a soft body.
+
 **Gas**:
 A behaviour class of light, short-lived particles moved by heat and wind (fire, smoke, steam).
 
@@ -75,6 +78,16 @@ How tightly a material's particles sit when nothing squeezes them. A liquid well
 **Pile**:
 A settled heap of grains, held up by the grains under it.
 _Avoid_: Heap (in docs), stack
+
+**Body**:
+One group of cluster-solid particles, all of one material, that shape matching holds to a rest shape. Each particle carries its body's id; particles of the same body never push on each other.
+_Avoid_: Cluster (for one body), object
+
+**Rest shape**:
+How a body's particles sit when nothing deforms it, stored as each particle's rest offset. Shape matching pulls the body back toward it, moved and turned to fit where the particles are now.
+
+**Body cap**:
+The most bodies at once (`body_cap` in `config.json`). When every body id is in use, the body brush makes nothing.
 
 ## Player tools
 
@@ -145,6 +158,9 @@ _Avoid_: Hydro grid (the shader names say hydro, but it isn't hydrostatic: press
 
 **Frame**:
 One 1/60 s update of the simulation and one render.
+
+**Shape matching**:
+The cluster-solid rule (Müller et al. 2005): in each solver iteration, fit each body's rest shape to its particles (centre and rotation), then pull each particle toward its place in the fitted shape by the material's stiffness.
 
 **Substep**:
 One pass of predict to velocity inside a frame, at the frame time divided by the substep count (`config.json`). Settings are per second or per 1/60 s, so the substep count changes accuracy and cost, not how materials behave.
