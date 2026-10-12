@@ -23,8 +23,9 @@
 // friction as well as the push-out: with mass-weighted friction a 3-box stack swayed for good
 // (CPU reference, ADR 0002). Body-liquid pairs (ADR 0003) touch at a full spacing and share
 // the push-out by density only (no STACK_K; no friction, as water has none). Bodies don't get
-// wet: WET_SLIP is a powder rule. A particle in no body that sits inside a body's outline is
-// also pushed out to it (push_out).
+// wet: WET_SLIP is a powder rule. A particle that sits inside another body's outline is also
+// pushed out to it (push_out): all of it for a particle in no body, a body member its contact
+// share (body-body pairs, ADR 0003 item 11).
 
 // Share of a powder-liquid contact's push-out that the powder takes (liquid takes the rest).
 // Low, so water yields: water pushing into sand pushes the grains apart, they lose their
@@ -45,8 +46,8 @@ float stack_weight(float m_t, float m_j, float rv_y) {
 	return m_j / (m_t * exp(clamp(params.stack_k * rv_y, -8.0, 8.0)) + m_j);
 }
 
-// Push-out from inside a body (ADR 0003 item 8). x is a particle in no body, j (sorted) its
-// nearest body particle and body j's body. j's way out of the rest shape (rest_offset.zw),
+// Push-out from inside a body (ADR 0003 items 8 and 11). x is a particle, j (sorted) its
+// nearest particle of another body and body j's body. j's way out of the rest shape (rest_offset.zw),
 // turned by the body's rotation from the last body pass, gives the outward normal N and the
 // outline's distance along it; x is inside by d = |e| - N.(x - x_j), and if so is moved d
 // along N, to the outline. Nothing for a body whose outline is stale (part of it erased).
@@ -85,12 +86,13 @@ vec2 contact_delta(uint t) {
 	vec2 pt = s_pred[t];
 	vec2 move_t = pt - s_pos[t];
 	vec2 sum = vec2(0.0);
+	vec2 nearest_push = vec2(0.0);  // the nearest pair's contact push-out
 	vec2 fric = vec2(0.0);
 	float n_near = 0.0;
 	float n_wet = 0.0;
 	float fric_w = 0.0;
 	float n_touch = 0.0;
-	uint nearest = 0xFFFFFFFFu;  // nearest body particle within a spacing, for a particle in no body
+	uint nearest = 0xFFFFFFFFu;  // nearest particle of another body within a spacing
 	uint nearest_body = 0u;
 	float nearest_d = params.spacing;
 	FOR_EACH_NEIGHBOUR(t) {
@@ -109,7 +111,7 @@ vec2 contact_delta(uint t) {
 			n_near += 1.0;
 			n_wet += j_liquid ? 1.0 : 0.0;
 		}
-		if (t_body == 0u && j_body != 0u && dist < nearest_d) {
+		if (j_body != 0u && dist < nearest_d) {  // same-body pairs were skipped above
 			nearest = j;
 			nearest_body = j_body;
 			nearest_d = dist;
@@ -133,6 +135,9 @@ vec2 contact_delta(uint t) {
 			w = w_push;
 		}
 		sum += w_push * pen * normal;
+		if (j == nearest) {
+			nearest_push = w_push * pen * normal;
+		}
 
 		float mu = min(mt.phys.y, mj.phys.y);
 		if (mu > 0.0) {
@@ -158,7 +163,27 @@ vec2 contact_delta(uint t) {
 	if (t_liquid) {
 		sum /= max(n_touch, 1.0);  // liquid: averaged over what it touches (see top)
 	}
-	vec2 out_push = nearest != 0xFFFFFFFFu ? push_out(pt, nearest, nearest_body) : vec2(0.0);
+	vec2 out_push = vec2(0.0);
+	if (nearest != 0xFFFFFFFFu) {
+		out_push = push_out(pt, nearest, nearest_body);
+		if (t_body != 0u && dot(out_push, pt - s_pred[nearest]) < 0.0) {
+			// A member that has passed the nearest member's edge row (it lies on the inner side
+			// of it along the outline's normal) is pushed on inward by that pair's contact, so
+			// the outline decides instead (4 substeps, boxdrop: the rows locked 0.27 px apart,
+			// the pair push 1.73 px in against the outline's 1.27 out). Only then: at an offset
+			// stack's corner, dropping the pair whenever the push-out acted tilted the stack
+			// (stack3 0.044 rad).
+			sum -= nearest_push;
+		}
+		if (t_body != 0u) {
+			// Body-body (ADR 0003 item 11): each side is pushed out of the other's outline by its
+			// share of the contact, so the pair separates by the depth. Without it a carrot dropped
+			// 150 px onto another (~240 px/s, over a spacing per substep) ended inside it, the
+			// ordinary contacts balanced among the interleaved lattices (body_probe boxdrop).
+			out_push *= stack_weight(mt.phys.x, materials[s_material(nearest)].phys.x,
+					t_height - stack_height(nearest, nearest_body));
+		}
+	}
 	return (sum + fric * (1.0 - params.wet_slip * wet) + out_push) * params.contact_relax;
 }
 

@@ -46,6 +46,14 @@
 ##            ~10 s (still 2.6-4 px/s at 900 frames)
 ##   waterbox   a 16x10 cork (the size main.tscn's Drop buttons make) set on the water, as
 ##            waterfloat
+##   boxdrop  a 16x10 carrot resting on the floor, a second dropped 150 px straight onto it (frame
+##            60), 600 frames: no member of either inside the other's rest lattice at the end,
+##            both keep their shape and come to rest (body-body push-out). At ~270 px/s a box
+##            moves over a spacing a substep, so members may dip in at the impact: the check
+##            allows overlap in 4 samples (5 frames apart), under 2 spacings deep
+##   boxtilt  as boxdrop, the falling box turned 30 deg and 6 px to the right, so a corner hits
+##   boxhigh  as boxdrop from 330 px (main.tscn's Drop buttons, ~510 px/s at the impact), 4 px to
+##            the right: also whether the top box stays on the other
 ##   reuse    two 8x6 boxes; the first erased whole at frame 60, a new box made at frame 90:
 ##            the erased body's id and member range are freed and the new box gets them
 ##            (ParticleSim frees a body when its live count reads back 0), 200 frames
@@ -266,6 +274,12 @@ func _start(name: String) -> void:
 			sc.hold = 119  # read the water's top, then make the body at 120
 			sc.most_inside = 0
 			sc.late = []
+		"boxdrop", "boxtilt", "boxhigh":
+			sc.frames = 600
+			sc.every = 5
+			sc.most_inside = 0
+			sc.late_speed = 0.0
+			_body(_box(Vector2(X, FLOOR), 16, 10), carrot)
 		"reuse":
 			sc.frames = 200
 			_body(_box(Vector2(X - 40.0, FLOOR), 8, 6), carrot)
@@ -332,6 +346,12 @@ func _scenario_brush(brush: Dictionary) -> void:
 					_body(_box(Vector2(X, top - 1.0), 40, 20), cork)
 				"waterbox":
 					_body(_box(Vector2(X, top - 1.0), 16, 10), cork)
+	elif sc.name.begins_with("box") and frame_i == 60:
+		var tilt := deg_to_rad(30.0) if sc.name == "boxtilt" else 0.0
+		var dx: float = {"boxtilt": 6.0, "boxhigh": 4.0}.get(sc.name, 0.0)
+		var at := Vector2(X + dx, FLOOR - 10.0 * SimParams.SPACING - (330.0 if sc.name == "boxhigh" else 150.0))
+		# An upright rest shape, so _members_inside's box is the body's own.
+		_body(_box(at, 16, 10, tilt), carrot, _box(at, 16, 10))
 	elif sc.name == "reuse":
 		if frame_i == 60:
 			brush.merge({"op": ParticleSim.BRUSH_ERASE, "pos": Vector2(X - 40.0, FLOOR - 5.0), "radius": 20.0}, true)
@@ -517,6 +537,30 @@ func _sample(f: int, b: Dictionary) -> void:
 					_result("%s: cork, last 60 frames: mean draft %.2f of its height, mean speed %.2f px/s, max tilt %.3f rad; water inside %d at the end (most %d at a sample), shape error %.4f px"
 							% [sc.name, draft, speed, tilt, inside, sc.most_inside, fit.err],
 							draft > 0.25 and draft < 0.7 and speed < 3.0 and tilt < 0.35 and inside == 0 and fit.err < 0.1)
+		"boxdrop", "boxtilt", "boxhigh":
+			if bodies.size() < 2:
+				return
+			var inside := _members_inside(bodies[1], bodies[2]) + _members_inside(bodies[2], bodies[1])
+			sc.most_inside = maxi(sc.most_inside, inside)
+			sc.most_deep = maxf(sc.get("most_deep", 0.0), sc.deepest)
+			sc.overlap_samples = sc.get("overlap_samples", 0) + (1 if inside > 0 else 0)
+			if f > sc.frames - 60:
+				for id in bodies:
+					sc.late_speed = maxf(sc.late_speed, _mean_vel(bodies[id]).length())
+			if f % 60 == 0 or inside > 0:
+				var fit2 := _fit(bodies[2])
+				print("  f=%d top box c=(%.1f, %.1f) rot %.3f v=%s, members inside the other %d (deepest %.2f px into an outline), shape errors %.3f / %.3f" % [f, fit2.c.x, fit2.c.y,
+						fit2.theta, _mean_vel(bodies[2]), inside, sc.deepest, _fit(bodies[1]).err, fit2.err])
+			sc.deepest = 0.0
+			if f == sc.frames:
+				var err := maxf(_fit(bodies[1]).err, _fit(bodies[2]).err)
+				var gap := _closest_cross_pair(bodies)
+				var on_top: bool = _fit(bodies[2]).c.y < _fit(bodies[1]).c.y - 10.0 * SimParams.SPACING + 1.0
+				_result("%s: 16x10 carrot dropped onto another (on top at the end: %s): members inside the other %d at the end (most %d, deepest %.2f px into an outline, in %d samples), closest cross-body pair %.3f px, max shape error %.4f px, max speed (last 60 frames) %.3f px/s"
+						% [sc.name, on_top, inside, sc.most_inside, sc.most_deep, sc.overlap_samples, gap, err, sc.late_speed],
+						inside == 0 and sc.overlap_samples <= 4 and sc.most_deep < 2.0 * SimParams.SPACING
+						and gap >= 0.8 * SimParams.SPACING and err < 0.1 and sc.late_speed < REST_SPEED
+						and (on_top or sc.name == "boxtilt"))
 		"reuse":
 			if f == sc.frames:
 				var live1: int = b.bodies.decode_u32(1 * ParticleSim.BODY_BYTES + ParticleSim.BODY_LIVE_OFFSET)
@@ -666,6 +710,26 @@ func _key(q: Vector2) -> Vector2i:
 ## Sand grains whose position, taken into the box's rest frame, lies inside its rest outline.
 func _grains_inside(b: Dictionary, body: Dictionary, fit: Dictionary) -> int:
 	return _inside(b, body, fit, sand)
+
+
+## Members of body `other` whose position, taken into `body`'s rest frame, lies inside the
+## bounding box of its rest lattice: more than a spacing into it.
+func _members_inside(body: Dictionary, other: Dictionary) -> int:
+	var fit := _fit(body)
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for q in body.rest:
+		lo = lo.min(q)
+		hi = hi.max(q)
+	var n := 0
+	for p in other.pos:
+		var q: Vector2 = (p - fit.c).rotated(-fit.theta) + fit.c0
+		if q.x > lo.x and q.x < hi.x and q.y > lo.y and q.y < hi.y:
+			n += 1
+		# Depth inside the outline (half a spacing outside the lattice).
+		var depth := minf(minf(q.x - lo.x, hi.x - q.x), minf(q.y - lo.y, hi.y - q.y)) + 0.5 * SimParams.SPACING
+		sc.deepest = maxf(sc.get("deepest", 0.0), depth)
+	return n
 
 
 ## Particles of `material` whose position, taken into the box's rest frame, lies inside the

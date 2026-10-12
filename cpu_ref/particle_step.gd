@@ -909,18 +909,20 @@ static func stack_weight(m_i: float, m_j: float, rv_y: float) -> float:
 ## powder-liquid (the liquid yields) and body-liquid (by density only, ADR 0003); also
 ## static/kinetic friction on the relative sideways motion.
 ## Scaled by CONTACT_RELAX; summed for powders and bodies, averaged over the particles it
-## touches for a liquid (see powder.glslinc). A particle in no body that sits inside a body's
-## outline is also pushed out to it (_push_out).
+## touches for a liquid (see powder.glslinc). A particle that sits inside another body's
+## outline is also pushed out to it (_push_out): all of it for a particle in no body, a body
+## member its contact share (ADR 0003 item 11).
 func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, mat: PackedInt32Array,
 		body: PackedInt32Array, edge: PackedVector2Array, bodies: Array, nb: PackedInt32Array) -> Vector2:
 	var mi: Dictionary = materials[mat[i]]
 	var sum := Vector2.ZERO
+	var nearest_push := Vector2.ZERO  # the nearest pair's contact push-out
 	var fric := Vector2.ZERO
 	var n_near := 0
 	var n_wet := 0
 	var fric_w := 0.0
 	var n_touch := 0.0
-	var nearest := -1  # nearest body particle within a spacing, for a particle in no body
+	var nearest := -1  # nearest particle of another body within a spacing
 	var nearest_d := SimParams.SPACING
 	for j in nb:
 		var mj: Dictionary = materials[mat[j]]
@@ -934,7 +936,7 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			n_near += 1
 			if mj["class"] == LIQUID:
 				n_wet += 1
-		if body[i] == 0 and body[j] != 0 and dist < nearest_d:
+		if body[j] != 0 and dist < nearest_d:  # same-body pairs were skipped above
 			nearest = j
 			nearest_d = dist
 		var t_liquid: bool = mi["class"] == LIQUID
@@ -964,6 +966,8 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			w_push = stack_weight(mi.density, mj.density, yi - yj)
 			w = w_push
 		sum += w_push * pen * normal
+		if j == nearest:
+			nearest_push = w_push * pen * normal
 		var mu: float = minf(mi.friction, mj.friction)
 		if mu > 0.0:
 			var rel := (pred[i] - pos[i]) - (pred[j] - pos[j])
@@ -986,14 +990,23 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	var out := Vector2.ZERO
 	if nearest >= 0:
 		out = _push_out(pred[i], pred[nearest], edge[nearest], bodies[body[nearest]])
+		if body[i] != 0 and out.dot(pred[i] - pred[nearest]) < 0.0:
+			# Past the nearest member's edge row, that pair pushes inward: the outline decides
+			# (powder.glslinc contact_delta).
+			sum -= nearest_push
+		if body[i] != 0:
+			# Body-body: each side takes its contact share, so the pair separates by the depth
+			# (powder.glslinc contact_delta).
+			var yj: float = bodies[body[nearest]].centroid.y
+			out *= stack_weight(mi.density, materials[mat[nearest]].density, bodies[body[i]].centroid.y - yj)
 	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet) + out) * SimParams.CONTACT_RELAX
 
 
-## Push-out from inside a body (ADR 0003 item 8): x is a particle in no body, x_j its nearest
-## body particle, e_j that member's way out of the rest shape. Turned by the body's rotation,
-## e_j gives the outward normal N and the outline's distance along it; x is inside by
-## d = |e_j| - N.(x - x_j), and if so is moved d along N, to the outline. Nothing for a body
-## whose outline is stale (part of it erased). Mirror: push_out in powder.glslinc.
+## Push-out from inside a body (ADR 0003 items 8 and 11): x is a particle, x_j its nearest
+## particle of another body, e_j that member's way out of the rest shape. Turned by the
+## body's rotation, e_j gives the outward normal N and the outline's distance along it; x is
+## inside by d = |e_j| - N.(x - x_j), and if so is moved d along N, to the outline. Nothing
+## for a body whose outline is stale (part of it erased). Mirror: push_out in powder.glslinc.
 static func _push_out(x: Vector2, x_j: Vector2, e_j: Vector2, b: Dictionary) -> Vector2:
 	if b.stale or e_j.length() < 1e-6:
 		return Vector2.ZERO

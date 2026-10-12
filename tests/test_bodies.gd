@@ -343,6 +343,34 @@ func test_box_dropped_on_sand_keeps_grains_out() -> void:
 	expect(fit.err < 0.1, "the box keeps its shape: %.4f" % fit.err)
 
 
+## Body-body push-out (ADR 0003 item 11): without it the dropped box ended inside the other,
+## the ordinary contacts balanced among the interleaved lattices (body_probe boxdrop).
+func test_box_dropped_on_box_stays_out() -> void:
+	var world := Vector2(80, 220)
+	var sim = _sim(world)
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var floor_y := _floor_y(world)
+	var below: int = ParticleStep.make_body(state, _box(Vector2(40, floor_y), 16, 10), _carrot)
+	# Dropped 150 px onto it: lands at ~350 px/s, over a spacing per substep.
+	var above: int = ParticleStep.make_body(state, _box(Vector2(40, floor_y - 20.0 - 150.0), 16, 10), _carrot)
+	var most := 0
+	var max_speed := 0.0
+	for f in 300:
+		_frame(sim, state)
+		most = maxi(most, _members_inside(state, below, above) + _members_inside(state, above, below))
+		if f >= 240:
+			max_speed = maxf(max_speed, _body_vel(state, above).length())
+	var inside := _members_inside(state, below, above) + _members_inside(state, above, below)
+	var gap := _closest_cross_pair(state)
+	var err := maxf(_fit(state, below).err, _fit(state, above).err)
+	_report("16x10 carrot dropped 150 px onto another, 300 frames: %d members inside the other at the end (most %d in a frame), closest cross-body pair %.3f px, max shape error %.4f px, speed (last 60 frames) %.3f px/s"
+			% [inside, most, gap, err, max_speed])
+	expect_eq(inside, 0, "no member inside the other box at the end")
+	expect(gap >= 0.8 * SimParams.SPACING, "the box rests on the other, closest cross-body pair >= 0.8 spacing: %.3f px" % gap)
+	expect(err < 0.1, "both keep their shape: %.4f" % err)
+	expect(max_speed < REST_SPEED, "at rest, speed < %.1f px/s: %.3f" % [REST_SPEED, max_speed])
+
+
 func test_erasing_part_of_a_body_marks_its_outline_stale() -> void:
 	_sim()
 	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
@@ -551,6 +579,28 @@ func _inside(state: Dictionary, id: int, material: int) -> PackedInt32Array:
 		if q.x > lo.x and q.x < hi.x and q.y > lo.y and q.y < hi.y:
 			out.append(i)
 	return out
+
+
+## Members of body `other` inside body `id`'s rest lattice (more than half a spacing inside
+## its outline), taken into its rest frame.
+func _members_inside(state: Dictionary, id: int, other: int) -> int:
+	var fit := _fit(state, id)
+	var live := _live(state, id)
+	var c0 := Vector2.ZERO
+	for m in live:
+		c0 += state.rest[m]
+	c0 /= live.size()
+	var lo := Vector2(INF, INF)
+	var hi := -lo
+	for m in live:
+		lo = lo.min(state.rest[m] - c0)
+		hi = hi.max(state.rest[m] - c0)
+	var n := 0
+	for m in _live(state, other):
+		var q: Vector2 = (state.pos[m] - fit.c).rotated(-fit.theta)
+		if q.x > lo.x and q.x < hi.x and q.y > lo.y and q.y < hi.y:
+			n += 1
+	return n
 
 
 ## Share of a floating body's height under the water: from its outline's bottom up to the
