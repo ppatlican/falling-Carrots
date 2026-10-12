@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-10-12. Direction: an OE-Cake-style sandbox with rigid and soft bodies and in-game material parameters (`docs/adr/0001-oe-cake-direction.md`). Current milestone: **2 (GPU liquid + powder + brush): code complete and run on the PC GPU. On main: the density projection grid (water churn), water feel (2 substeps, drag per second, lattice brush), the sand brush and sleeping fixes (PRs #6, #7), the ghost-fluid free surface (hovering drops) and sand counting toward a full grid cell (air pockets under sinking sand). The owner played this build on 2026-10-10. Since then: water leaves sand out of its density, the grid holds water's weight on a sand bed and on the floor (the sand bowl, mounds and edges entries in Known issues), and sand beds hold ~0.4 water per grain; the owner played that build on 2026-10-12 ("looks OK"). Left for the milestone: re-measure GPU pass times, then measure the cap on a phone.**
+Last updated: 2026-10-12. Direction: an OE-Cake-style sandbox with rigid and soft bodies and in-game material parameters (`docs/adr/0001-oe-cake-direction.md`). Current milestone: **2 (GPU liquid + powder + brush): code complete and run on the PC GPU. On main: the density projection grid (water churn), water feel (2 substeps, drag per second, lattice brush), the sand brush and sleeping fixes (PRs #6, #7), the ghost-fluid free surface (hovering drops) and sand counting toward a full grid cell (air pockets under sinking sand). The owner played this build on 2026-10-10. Since then: water leaves sand out of its density, the grid holds water's weight on a sand bed and on the floor (the sand bowl, mounds and edges entries in Known issues), and sand beds hold ~0.4 water per grain; the owner played that build on 2026-10-12 ("looks OK"). GPU pass times re-measured on the PC (2026-10-12, Measured numbers). Left for the milestone: measure the cap on a phone.**
 
 Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `docs/SPEC.md`.
 
@@ -91,7 +91,25 @@ Run validator: `... --headless --path <project> --script res://tools/validate_ma
 | PC RTX 3080 Ti, 2026-10-10, probe `TIME`, back to back | 50k water, density projection grid (adds `hydro` 395) | 165 | 12 | 27 | 807 | 45 | 16 | ~1300 |
 | Phone | | | | | | | | |
 
-Solve dominates once particles are settled and packed, so measure the settled state. The 2026-10-10 rows are averaged from frame 600 while the water settles. Clocks swing 2–3× between runs at vsync'd 165 fps, so compare totals measured back to back (see `docs/agents/gpu-probe.md`).
+**2026-10-12, settled state, 2 substeps** (probe `TIME` averaged from frame 1800 of 3000, `--disable-vsync` so the GPU runs at full clock, one window, base and change back to back). Per frame, summed over both substeps. Scenes: `water 3000`, `sand 3000 5 279`, `water,sand 3000 2` (10k + 10k), `water,water,water,sand,sand 3000 5` (the owner's 3 × water then 2 × sand, 50k).
+
+| Particles | build | predict | hash | hydro | solve | velocity | render | TOTAL GPU |
+|---|---|---|---|---|---|---|---|---|
+| 50k water | 64 SOR dispatches | 8 | 33 | 350 | 438 | 46 | 22 | 898 |
+| 50k water | `hydro_solve` | 9 | 35 | 160 | 459 | 50 | 23 | 736 |
+| 50k sand at rest | 64 SOR dispatches | 8 | 31 | 399 | 256 | 66 | 12 | 773 |
+| 50k sand at rest | `hydro_solve` | 9 | 35 | 185 | 302 | 77 | 15 | 622 |
+| 20k (10k water, 10k sand) | 64 SOR dispatches | 8 | 25 | 427 | 694 | 123 | 47 | 1323 |
+| 20k (10k water, 10k sand) | `hydro_solve` | 8 | 26 | 152 | 674 | 117 | 40 | 1017 |
+| 50k (30k water, 20k sand) | 64 SOR dispatches | 9 | 38 | 424 | 787 | 132 | 46 | 1436 |
+| 50k (30k water, 20k sand) | `hydro_solve` | 8 | 35 | 172 | 757 | 121 | 45 | 1138 |
+
+- `hydro` cost the same at any particle count: it was launch and barrier overhead of 2 + 64 tiny dispatches per substep on a 920-cell grid. `hydro_solve` runs all 32 red-black sweeps in one 128-thread workgroup with p in shared memory and each cell's update precomputed (see its header). Same result up to float rounding; calm checks below. Of the ~165 µs left, splat and density are ~43; the rest is the 64 workgroup barriers (two layouts that keep every thread busy made no difference).
+- Mixed water and sand is the most expensive state: solve 0.7–0.8 ms. 50k sand is cheapest (sleeping grains).
+- At vsync'd 165 fps the driver lowers the clock until the frame fills a share of the 6 ms, so totals came out ~1.6–2.1 ms whatever the work, and single passes swung by ±700 µs between runs (the 64-dispatch baseline read hydro 423–672, solve 784–1387). Time with `--disable-vsync`; see `docs/agents/gpu-probe.md`.
+- Calm checks, base vs `hydro_solve` the same day (`water_feel_probe`, 3600 frames, plateau from 30 s, at most 2 windows): gentle bowl bulk 0.22–0.27 vs 0.23–0.24 px/s (3 runs each), max cell 0.86–1.01 vs 0.81–1.08, bed water 2059–2112 vs 2076–2106; steep bowl 0.42 vs 0.45, max cell 1.50 vs 1.44; `mounds` 0.42 vs 0.37, near sand 1.24 vs 1.15, max cell 2.78 vs 2.65; `bowl nosand` 0.34 vs 0.30; `sink` at rest from 15.8 vs 16.4 s, bed at y 329 in both. CPU tests 15 pass.
+
+Solve dominates once particles are settled and packed, so measure the settled state. The 2026-10-10 rows are averaged from frame 600 while the water settles.
 
 ## Hardware checklist (PC and phone)
 1. Drawing with left mouse/tap adds the selected material; right mouse erases any material.
@@ -219,7 +237,7 @@ Solve dominates once particles are settled and packed, so measure the settled st
 2. ~~Owner plays branch `worktree-less-pore-water`~~ Done: owner played it on 2026-10-12 and confirmed it ("looks OK"); the bed holds ~0.4 water per grain, the pool sits higher and dropped sand settles as a mound, with no objection from the owner to those side effects. On main (49d84f3).
 3. Push local main (the sand bowl, mounds and floor fixes, six commits) and have the owner play it: pure water with bare screen edges, sand mounds under a deep pool, a pool in a sand bowl, sand dropped into water. Decide on the side effects listed in those three Known issues entries.
 4. Record the owner's other findings from the 2026-10-10 play here (Known issues), and tune from them: slosh too long → water drag 0.3 per second; water brush too weak → initial downward speed or bigger brush; sand slab holding together ~1 s (see Sand sinking).
-5. Re-measure GPU pass times at the settled state (50k water, 50k sand, mixed), with 2 substeps and the `hydro` pass. `hydro` is mostly dispatch overhead (64 SOR dispatches).
+5. ~~Re-measure GPU pass times at the settled state~~ Done on the PC, 2026-10-12 (Measured numbers): 0.62–1.14 ms per frame at full clock; `hydro` 350–430 → 150–185 µs with all SOR sweeps in one workgroup (`hydro_solve`), calm checks unchanged.
 6. Measure the cap on a phone (the Milestone 2 goal). First add `*.json` to the Android preset's non-resource include filter. If over budget: `substeps` 1, fewer SOR sweeps, lower cap.
 7. Milestone 3 (cluster solids, rigid and soft bodies): shape-matched carrot boxes and jelly colliding and floating or sinking in water and sand, then the body brush. Cluster particles must count as displacement in the density projection grid. The two-tier question from the WorkBuddy notes is settled by ADR 0001: everything stays in one PBD solver.
 8. Milestone 3b (material parameters): parameter panel with runtime upload, `cohesion`/`adhesion`/`plasticity` columns, per-material liquid density. Probe both ends of every slider; run `erase` and `shaft` on any powder cohesion.

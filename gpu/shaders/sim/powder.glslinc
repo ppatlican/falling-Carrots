@@ -10,7 +10,7 @@
 // the upper grain gives way, so a pile is held up from the bottom instead of being
 // crushed. Powder-liquid pairs don't use that: they use POWDER_LIQUID_SHARE, so water yields.
 // A liquid particle's push from the grains it touches is averaged, not summed: the density
-// projection grid holds water up at a sand bed (hydro_sweep), so the push only has to keep
+// projection grid holds water up at a sand bed (hydro_solve.glsl), so the push only has to keep
 // water off the grains. Summed, it threw water touching several grains out of the bed along
 // the slope's normal, and a pool in a sand bowl kept an eddy over the slopes at 2 px/s,
 // up to 19 (water_feel_probe bowl). Averaged before the grid held the bed, 12-15k of 27k

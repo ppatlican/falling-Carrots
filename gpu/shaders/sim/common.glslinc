@@ -13,7 +13,12 @@
 //             a cell sit next to each other in memory. The solver and velocity passes work
 //             only on s_* arrays; velocity_commit writes the results back to the slots.
 
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+// 64-thread 1D workgroups (SPEC 2.7). A kernel that needs another size defines
+// LOCAL_SIZE_X before including this file (only hydro_solve.glsl).
+#ifndef LOCAL_SIZE_X
+#define LOCAL_SIZE_X 64
+#endif
+layout(local_size_x = LOCAL_SIZE_X, local_size_y = 1, local_size_z = 1) in;
 
 // --- Particle state ---------------------------------------------------------------
 layout(set = 0, binding = 0, std430) buffer Pos { vec2 pos[]; };        // position at frame start

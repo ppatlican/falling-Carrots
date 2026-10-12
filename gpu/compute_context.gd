@@ -72,9 +72,10 @@ static func groups_for(count: int) -> int:
 	return ceili(float(count) / WORKGROUP_SIZE)
 
 
-## Checks device limits for our 64-thread 1D dispatches, shared memory and push
-## constants. Returns "" if OK, else the problem.
-func check_limits_rt(max_groups_x: int, push_bytes := 16, shared_bytes := 0) -> String:
+## Checks device limits for our 64-thread 1D dispatches, the largest workgroup any
+## kernel uses (`threads`), shared memory and push constants. Returns "" if OK, else the
+## problem.
+func check_limits_rt(max_groups_x: int, push_bytes := 16, shared_bytes := 0, threads := WORKGROUP_SIZE) -> String:
 	var size_x := rd.limit_get(RenderingDevice.LIMIT_MAX_COMPUTE_WORKGROUP_SIZE_X)
 	var invocations := rd.limit_get(RenderingDevice.LIMIT_MAX_COMPUTE_WORKGROUP_INVOCATIONS)
 	var count_x := rd.limit_get(RenderingDevice.LIMIT_MAX_COMPUTE_WORKGROUP_COUNT_X)
@@ -86,9 +87,10 @@ func check_limits_rt(max_groups_x: int, push_bytes := 16, shared_bytes := 0) -> 
 		return "GPU push constant limit too small: need %d bytes, device allows %d" % [push_bytes, max_push]
 	if max_shared < shared_bytes:
 		return "GPU shared memory limit too small: need %d bytes, device allows %d" % [shared_bytes, max_shared]
-	if size_x < WORKGROUP_SIZE or invocations < WORKGROUP_SIZE:
+	var need := maxi(threads, WORKGROUP_SIZE)
+	if size_x < need or invocations < need:
 		return "GPU workgroup limit too small: need %d threads, device allows %d (x) / %d (total)" \
-				% [WORKGROUP_SIZE, size_x, invocations]
+				% [need, size_x, invocations]
 	if count_x < max_groups_x:
 		return "GPU dispatch limit too small: need %d workgroups, device allows %d. Lower particle_cap in config.json." \
 				% [max_groups_x, count_x]

@@ -7,7 +7,8 @@
 ##   top      list the highest particles instead of the fastest risers
 ##   gap=N    drop the blocks N frames apart (30 is about the pace of clicking +10k)
 ##   every=N  sample every N frames (default 60; a bounce with a 1 s period hides at 60)
-## At the end: mean GPU time per pass from frame 600 on (TIME lines).
+##   from=N   average pass times from frame N on (default 600; pick a settled frame)
+## At the end: mean GPU time per pass from frame `from` on (TIME lines, then their total).
 ## Every sample (60 frames): speed, wall and RMS-drift stats per material. Every 5th sample:
 ## a grid of 20 px cells (S speed, V mean vy, N count, M count of the last material) and
 ## the 12 fastest-rising (or highest) particles with their neighbourhood.
@@ -31,8 +32,8 @@ var max_frames := 1500
 var blocks := 5
 var spawn_y := 8.0
 var n_samples := 0
-var time_sums := {}  # pass name -> [gpu_us sum, frames], from TIME_FROM on
-const TIME_FROM := 600
+var time_sums := {}  # pass name -> [gpu_us sum, frames], from time_from on
+var time_from := 600  # from "from=N"
 var gap := 1  # from "gap=N": frames between block drops (1 = consecutive)
 var seq: Array = []
 var frame_i := 0
@@ -60,6 +61,8 @@ func _initialize() -> void:
 			gap = maxi(1, int(a.substr(4)))
 		if a.begins_with("every="):
 			sample_every = maxi(1, int(a.substr(6)))
+		if a.begins_with("from="):
+			time_from = maxi(0, int(a.substr(5)))
 	var config = GameConfig.load_from_file()
 	cap = config.particle_cap
 	table = MaterialTable.new()
@@ -105,7 +108,7 @@ func _process(_delta: float) -> bool:
 		brush.cols = cols
 		brush.pos = Vector2((SimParams.WORLD_SIZE.x - cols * SimParams.SPACING) * 0.5, spawn_y - (80.0 * ((frame_i - 1) / gap) if spawn_y > 8.0 else 0.0))
 	sim.frame(brush, 0)
-	if frame_i >= TIME_FROM:
+	if frame_i >= time_from:
 		for t in ctx.get_timings():
 			if t.gpu_us >= 0:
 				var acc: Array = time_sums.get(t.name, [0.0, 0])
@@ -116,8 +119,12 @@ func _process(_delta: float) -> bool:
 		RenderingServer.call_on_render_thread(_request)
 	if frame_i >= max_frames:
 		print("done after %d frames, live %d" % [frame_i, sim.live_count])
+		var total := 0.0
 		for k in time_sums:
-			print("TIME %-10s gpu_us=%8.1f" % [k, time_sums[k][0] / maxi(time_sums[k][1], 1)])
+			var us: float = time_sums[k][0] / maxi(time_sums[k][1], 1)
+			total += us
+			print("TIME %-10s gpu_us=%8.1f" % [k, us])
+		print("TIME %-10s gpu_us=%8.1f" % ["total", total])
 		sim.shutdown()
 		quit(0)
 	return false
