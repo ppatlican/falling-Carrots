@@ -65,7 +65,8 @@ const LIQUID_KICK := 2.0
 ## which the cell above counts as full (thin cells under full water are pulled full), and
 ## the red-black sweeps per frame (warm-started from the last frame). Fewer sweeps don't
 ## converge in deep water: 16 left 50k water moving at 6.5 px/s with a 12 px tilt
-## instead of at rest (GPU probe). The sweeps are most of the pass's cost.
+## instead of at rest (GPU probe). All sweeps run in one workgroup (hydro_solve.glsl).
+## Mirror: HYDRO_SWEEPS in hydro.glslinc.
 const HYDRO_CELL := 4
 const HYDRO_AIR := 0.3
 const HYDRO_SOR := 1.8
