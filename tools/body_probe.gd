@@ -46,6 +46,14 @@
 ##            ~10 s (still 2.6-4 px/s at 900 frames)
 ##   waterbox   a 16x10 cork (the size main.tscn's Drop buttons make) set on the water, as
 ##            waterfloat
+##   waterdeep  a 270 px deep pool from wall to wall (320 x 135 water), a 16x10 cork let go at y 12
+##            at frame 120 (main.tscn's Drop cork): it plunges and floats, as waterfloat
+##   waterdeeptilt  the same, the cork turned 30 deg
+##   pourfloor  a 16x10 cork on the floor, then 4 x "+10k water" from the top 30 frames apart (main.tscn's
+##            fill, as the owner clicks it), 1500 frames: the cork rises through ~240 px of poured
+##            water and floats, as waterfloat. Before a bare member read the grid (ADR 0003 item 4),
+##            the pour's voids beside it took its buoyancy and it stayed on the floor
+##   pourdrop   the same pour, the cork dropped turned 30 deg at frame 75, while it pours
 ##   boxdrop  a 16x10 carrot resting on the floor, a second dropped 150 px straight onto it (frame
 ##            60), 600 frames: no member of either inside the other's rest lattice at the end,
 ##            both keep their shape and come to rest (body-body push-out). At ~270 px/s a box
@@ -98,6 +106,11 @@ const BED_COLS := 320
 const BED_ROWS := 31
 ## Pool of the water scenarios: wall to wall, 80 px deep.
 const POOL_ROWS := 40
+## Pool of the deep water scenarios: wall to wall, 270 px deep (~43k particles, the owner's
+## screen of water when a dropped cork stayed on the floor, 2026-10-13).
+const DEEP_ROWS := 135
+## Blocks of "+10k water" the pour scenarios drop, 30 frames apart.
+const POURS := 4
 
 var ctx
 var sim
@@ -276,12 +289,21 @@ func _start(name: String) -> void:
 			sc.fall = 100.0 if name == "sand" else 2.0
 			sc.xs = [80.0, 160.0, 240.0, 320.0, 400.0, 480.0, 560.0] if name == "sandrow" else [X]
 			sc.late_speed = 0.0
-		"watersink", "waterjelly", "waterfloat", "waterdrop", "waterbig", "waterbox":
+		"watersink", "waterjelly", "waterfloat", "waterdrop", "waterbig", "waterbox", "waterdeep", "waterdeeptilt", "pourfloor", "pourdrop":
 			sc.frames = {"watersink": 600, "waterjelly": 600, "waterbig": 1500}.get(name, 900)
 			sc.every = 10
 			sc.from = 600
-			sc.slots = BED_COLS * POOL_ROWS
-			sc.hold = 119  # read the water's top, then make the body at 120
+			sc.rows = DEEP_ROWS if name.begins_with("waterdeep") else POOL_ROWS
+			sc.slots = BED_COLS * sc.rows
+			sc.hold = 119
+			if name.begins_with("pour"):
+				# As the owner fills main.tscn: "+10k water" every 30 frames, POURS times.
+				sc.frames = 1500
+				sc.slots = POURS * SimParams.BENCH_BLOCK
+				sc.hold = -2
+				sc.water_top = 90.0
+				if name == "pourfloor":
+					_body(_box(Vector2(X, FLOOR), 16, 10), cork)  # read the water's top, then make the body at 120
 			sc.most_inside = 0
 			sc.late = []
 		"boxdrop", "boxtilt", "boxhigh", "plank", "boxside", "boxstack":
@@ -359,10 +381,18 @@ func _scenario_brush(brush: Dictionary) -> void:
 		elif frame_i == sc.hold + 1:
 			for k in sc.xs.size():  # the first spawns in this frame, the others one per frame
 				_body(_box(Vector2(sc.xs[k], sc.bed_tops[k] - sc.fall), 8, 6), carrot)
+	elif sc.name.begins_with("pour"):
+		if frame_i % 30 == 0 and frame_i <= 30 * POURS:
+			var cols := SimParams.BENCH_COLS
+			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": water, "count": SimParams.BENCH_BLOCK, "cols": cols,
+					"pos": Vector2((SimParams.WORLD_SIZE.x - cols * SimParams.SPACING) * 0.5, 8.0)}, true)
+		elif sc.name == "pourdrop" and frame_i == 75:
+			# As main.tscn's Drop cork while the water is still coming in, turned 30 deg.
+			_body(_box(Vector2(X, 30.0), 16, 10, deg_to_rad(30.0)), cork, _box(Vector2(X, 30.0), 16, 10))
 	elif sc.name.begins_with("water"):
 		if frame_i == 1:
-			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": water, "count": BED_COLS * POOL_ROWS, "cols": BED_COLS,
-					"pos": Vector2(1.0, FLOOR - (POOL_ROWS - 1) * SimParams.SPACING)}, true)
+			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": water, "count": BED_COLS * sc.rows, "cols": BED_COLS,
+					"pos": Vector2(1.0, FLOOR - (sc.rows - 1) * SimParams.SPACING)}, true)
 		elif frame_i == sc.hold + 1:
 			var top: float = sc.water_top
 			match sc.name:
@@ -378,6 +408,10 @@ func _scenario_brush(brush: Dictionary) -> void:
 					_body(_box(Vector2(X, top - 1.0), 40, 20), cork)
 				"waterbox":
 					_body(_box(Vector2(X, top - 1.0), 16, 10), cork)
+				"waterdeep", "waterdeeptilt":
+					# As main.tscn's Drop cork: a 16x10 cork let go at y 12 (bottom row at 30).
+					var tilt := deg_to_rad(30.0) if sc.name == "waterdeeptilt" else 0.0
+					_body(_box(Vector2(X, 30.0), 16, 10, tilt), cork, _box(Vector2(X, 30.0), 16, 10))
 	elif sc.name in ["boxdrop", "boxtilt", "boxhigh", "plank", "boxstack"] and frame_i == 60:
 		var tilt := deg_to_rad(30.0) if sc.name == "boxtilt" else 0.0
 		var dx: float = {"boxtilt": 6.0, "boxhigh": 4.0, "plank": 4.0, "boxstack": 4.0}.get(sc.name, 0.0)
@@ -515,7 +549,7 @@ func _sample(f: int, b: Dictionary) -> void:
 				var rests: bool = fit.err < 0.1 and sc.late_speed < REST_SPEED \
 						and (sc.name == "sand" or bottom - sc.bed_tops[0] < SimParams.SPACING)
 				_result(line, rests and inside == 0)
-		"watersink", "waterjelly", "waterfloat", "waterdrop", "waterbig", "waterbox":
+		"watersink", "waterjelly", "waterfloat", "waterdrop", "waterbig", "waterbox", "waterdeep", "waterdeeptilt", "pourfloor", "pourdrop":
 			if f == sc.hold:
 				sc.water_top = _top_of(b, water, X, 40.0)
 				waiting = false
@@ -524,9 +558,10 @@ func _sample(f: int, b: Dictionary) -> void:
 			var fit := _fit(bodies[1])
 			var inside := _inside(b, bodies[1], fit, water)
 			sc.most_inside = maxi(sc.most_inside, inside)
-			if f % 60 == 0:
-				print("  f=%d c=(%.1f, %.1f) rot %.3f v=%s draft %.2f inside %d; water top at x 40 / 600 %.1f / %.1f" % [f, fit.c.x, fit.c.y, fit.theta,
-						_mean_vel(bodies[1]), _draft(b, bodies[1]), inside, _top_of(b, water, 40.0, 17.0), _top_of(b, water, 600.0, 17.0)])
+			if f % 60 == 0 or (sc.name.begins_with("waterdeep") and f % 20 == 0) or (sc.name.begins_with("pour") and f % 20 == 0):
+				print("  f=%d c=(%.1f, %.1f) rot %.3f v=%s draft %.2f inside %d; water top at x 40 / 600 %.1f / %.1f; p_ref %.0f" % [f, fit.c.x, fit.c.y, fit.theta,
+						_mean_vel(bodies[1]), _draft(b, bodies[1]), inside, _top_of(b, water, 40.0, 17.0), _top_of(b, water, 600.0, 17.0),
+						b.bodies.decode_float(1 * ParticleSim.BODY_BYTES + 40)])
 			if f % 300 == 0 and OS.get_cmdline_user_args().has("grid"):
 				_print_grid_columns(b, [fit.c.x, fit.c.x + 120.0])
 				var top := INF

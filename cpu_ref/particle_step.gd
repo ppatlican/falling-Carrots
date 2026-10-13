@@ -953,13 +953,17 @@ func _body_p_sample(x: Vector2, phi: PackedVector4Array, p: PackedFloat32Array) 
 ## that was wet last substep also counts the floor below it as a face of liquid (water seeps
 ## under it), so a light body on the floor of a pool rises.
 ## Also gives the body's reference pressure for the next substep (p_min, which the body pass
-## moves to p_ref): the lowest p over its wet particles (INF if none), or 0 if a boundary
-## member touches air (nothing but its own body within 1.5 spacings, away from the walls).
-## Closed in by liquid, grains, other bodies, the floor and walls, a body is pushed only by
-## the pressure difference across it, so deep water doesn't squeeze it past the correction
-## cap. With a face in air it floats, and its pressure is absolute: referred to its lowest wet
-## pressure instead, a cork bobbing up until only its bottom row was wet lost all its lift at
-## the top of each bob, and the bob grew (ADR 0003). Mirror: body_pressure_delta in solve_pressure.glsl.
+## moves to p_ref): the lowest p over its wet particles (INF if none) and over its bare
+## boundary members (nothing but its own body within 1.5 spacings, away from the walls), each
+## of which reads the grid's p at its outline point: 0 out of the water, the water's pressure in
+## a void under it. Closed in by liquid, grains, other bodies, the floor and walls, a body is
+## pushed only by the pressure difference across it, so deep water doesn't squeeze it past the
+## correction cap. With a face out of the water it floats, and its pressure is absolute:
+## referred to its lowest wet pressure instead, a cork bobbing up until only its bottom row was
+## wet lost all its lift at the top of each bob, and the bob grew (ADR 0003). A bare member used
+## to read 0 wherever it was, so a void in poured water beside it made a deep cork's pushes
+## absolute, capped and cancelling, and it stayed on the floor (ADR 0003 item 4).
+## Mirror: body_pressure_delta in solve_pressure.glsl.
 func _body_pressure_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
 		edge: PackedVector2Array, b: Dictionary, nb: PackedInt32Array, phi: PackedVector4Array,
 		p: PackedFloat32Array, dt: float) -> Vector2:
@@ -982,7 +986,10 @@ func _body_pressure_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Arra
 	var ref := pw if wet else INF
 	var at_wall := x.x < 1.5 * sp or x.y < 1.5 * sp or x.x > world_size.x - 1.5 * sp or x.y > world_size.y - 1.5 * sp
 	if not touching and not at_wall and edge[i].length() < 0.75 * sp:
-		ref = 0.0  # a boundary member in air
+		# A bare boundary member: the grid's p at its outline point, 0 out of the water.
+		var r: Vector2 = b.rot
+		var e := Vector2(r.x * edge[i].x - r.y * edge[i].y, r.y * edge[i].x + r.x * edge[i].y)
+		ref = minf(ref, _body_p_sample(x + e, phi, p))
 	b.p_min = minf(b.p_min if b.get("p_min") != null else INF, ref)
 	if x.y >= world_size.y - 1.5 * sp and b.get("wet", false):
 		g.y = maxf(g.y, 1.0)

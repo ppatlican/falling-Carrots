@@ -37,14 +37,19 @@ vec2 body_wet_face(vec2 d) {
 // substep also counts the floor below it as a face of liquid (water seeps under it), so a light
 // body on the floor of a pool rises.
 // It also gives the body its reference pressure for the next substep (atomicMin of the float's
-// bits into p_min, which body_match moves to p_ref): the lowest p over its wet particles, or 0
-// if a boundary member (its way out, rest_offset.zw, half a spacing long) touches air (nothing
-// but its own body within 1.5 spacings, away from the walls). Closed in by liquid, grains,
-// other bodies, the floor and walls, a body is pushed only by the pressure difference across
-// it: at the floor of a 30k pool the absolute push would be ~2 px per substep, past the cap.
-// With a face in air it floats, and the pressure is absolute: referred to its lowest wet
-// pressure instead, a cork bobbing up until only its bottom row was wet lost its lift at the
-// top of each bob, and the bob grew (CPU reference). Mirror: ParticleStep._body_pressure_delta.
+// bits into p_min, which body_match moves to p_ref): the lowest p over its wet particles and
+// over its bare boundary members (its way out, rest_offset.zw, half a spacing long; nothing but
+// its own body within 1.5 spacings, away from the walls), each of which reads the grid's p at
+// its outline point. Closed in by liquid, grains, other bodies, the floor and walls, a body is
+// pushed only by the pressure difference across it: at the floor of a 30k pool the absolute
+// push would be ~2 px per substep, past the cap. With a face out of the water, that face reads
+// 0 (the grid's p is 0 past the free surface) and it floats on the absolute pressure: referred
+// to its lowest wet pressure instead, a cork bobbing up until only its bottom row was wet lost
+// its lift at the top of each bob, and the bob grew (CPU reference). A bare member reads the
+// grid, not 0: poured water is full of small voids, and a 16 x 10 cork on the floor of a 270 px
+// pool had one beside some member nearly every substep; p_ref went to 0, the pushes on every
+// face hit the cap and cancelled, and it stayed on the floor (body_probe pourfloor, pourdrop).
+// Mirror: ParticleStep._body_pressure_delta.
 vec2 body_pressure_delta(uint t, uint body) {
 	float sp = params.spacing;
 	vec2 x = s_pred[t];
@@ -71,8 +76,12 @@ vec2 body_pressure_delta(uint t, uint body) {
 	}
 	bool at_wall = x.x < 1.5 * sp || x.y < 1.5 * sp || x.x > params.world_size.x - 1.5 * sp
 			|| x.y > params.world_size.y - 1.5 * sp;
-	if (!touching && !at_wall && length(rest_offset[sorted_ids[t]].zw) < 0.75 * sp) {
-		ref = 0u;  // a boundary member in air
+	vec2 e_rest = rest_offset[sorted_ids[t]].zw;
+	if (!touching && !at_wall && length(e_rest) < 0.75 * sp) {
+		// A bare boundary member: the grid's p at its outline point, 0 out of the water.
+		vec2 r = bodies[body].frame.zw;
+		vec2 e = vec2(r.x * e_rest.x - r.y * e_rest.y, r.y * e_rest.x + r.x * e_rest.y);
+		ref = min(ref, floatBitsToUint(body_p_sample(x + e)));
 	}
 	atomicMin(bodies[body].p_min, ref);
 	if (x.y >= params.world_size.y - 1.5 * sp && (bodies[body].info.w & BODY_WET) != 0u) {

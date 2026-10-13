@@ -272,12 +272,14 @@ func test_light_box_floats_at_its_density() -> void:
 	expect_eq(_inside(state, id, _water).size(), 0, "no water inside the cork")
 
 
+## 96 px wide: in a 48 px pool the cork, rising at its full buoyancy (p_ref the pressure at its
+## top, not 0, see the next test), drifted into a wall and rested on its side against it.
 func test_light_box_rises_from_the_bottom() -> void:
-	var world := Vector2(48, 60)
+	var world := Vector2(96, 60)
 	var sim = _sim(world)
 	# The pool leaves an 8-column gap on the floor for a cork, with the water around it.
-	var state := _pool(world, 24, 18, 8)
-	var id: int = ParticleStep.make_body(state, _box(Vector2(24, _floor_y(world)), 8, 6), _cork)
+	var state := _pool(world, 48, 18, 8)
+	var id: int = ParticleStep.make_body(state, _box(Vector2(48, _floor_y(world)), 8, 6), _cork)
 	var late := _settle_in_water(sim, state, id, 420)
 	_report("cork box let go on the floor of a pool, 420 frames, last 60: mean draft %.2f of its height, mean speed %.2f px/s, max tilt %.3f rad, %d water inside"
 			% [late.draft, late.speed, late.turn, _inside(state, id, _water).size()])
@@ -285,6 +287,36 @@ func test_light_box_rises_from_the_bottom() -> void:
 	# It comes up fast and rocks in this narrow pool's slosh for seconds (still +-0.4 rad at
 	# 7 s); the check is that it floats on a face, not on its side (1.57 rad).
 	expect(late.turn < 0.6, "the cork floats face up or down, tilt < 0.6 rad: %.3f" % late.turn)
+
+
+## A bare boundary member (nothing within 1.5 spacings) under water is not out of the water: it
+## reads the grid's pressure at its outline point, not 0, so a submerged body's p_ref stays the
+## pressure at its top. Read as 0, a void beside one member set p_ref to 0 and the pushes went
+## absolute; deep down they hit the half-spacing cap on every face and cancelled. On the GPU a
+## 16 x 10 cork under 240 px of poured water, whose small voids sat beside some member nearly
+## every substep, stayed on the floor (body_probe pourfloor, pourdrop). Here the pool is
+## shallow enough that the cork rose anyway, but p_ref fell to the floor value by frame 30.
+func test_submerged_body_keeps_its_reference_pressure() -> void:
+	var world := Vector2(96, 60)
+	var sim = _sim(world)
+	var state := _pool(world, 48, 18, 8)
+	var id: int = ParticleStep.make_body(state, _box(Vector2(48, _floor_y(world)), 8, 6), _cork)
+	var surface := _floor_y(world) - 17 * SimParams.SPACING
+	var lowest := INF
+	var frames := 0
+	for f in 90:
+		_frame(sim, state)
+		var top := INF
+		for m in _live(state, id):
+			top = minf(top, state.pos[m].y)
+		if top > surface + 6.0:  # well under the water
+			lowest = minf(lowest, state.bodies[id].p_ref)
+			frames += 1
+	_report("cork box rising from the floor of a 36 px pool, 90 frames: lowest p_ref %.0f over %d frames well under water (floor value %.0f)"
+			% [lowest, frames, SimParams.GRAVITY * SimParams.BODY_SURFACE_DROP])
+	expect(frames > 30, "the cork stays well under water for over 30 frames: %d" % frames)
+	expect(lowest > 1.5 * SimParams.GRAVITY * SimParams.BODY_SURFACE_DROP,
+			"under water, p_ref stays the pressure at the cork's top, over 1.5 x the floor value: %.0f" % lowest)
 
 
 ## ADR 0003 known limit: water's pressure pushes act on a body's wet particles only, relative to
