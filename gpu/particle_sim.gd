@@ -12,10 +12,12 @@
 ##   hash      clear, count, 3-step prefix sum, scatter (copies state into cell order)
 ##   hydro     liquid density projection grid (splat, density, then all SOR sweeps in one
 ##             128-thread workgroup, hydro_solve)
-##   solve     grid pressure push (pressure, the bodies pass's projection, apply), then
+##   solve     bodies' swept contacts (body_sweep), grid pressure push (pressure, the bodies
+##             pass's projection and move back out of other bodies, apply), then
 ##             solver_iterations x (lambda, delta, apply, then the bodies pass)
 ##   bodies    one 128-thread workgroup per body id: a soft body's pressure pushes projected
-##             onto its rigid motion (body_project) between pressure and its apply, and shape
+##             onto its rigid motion and every body moved back out of the bodies it went into
+##             this substep (body_project) between pressure and its apply, and shape
 ##             matching (body_match) after each iteration's apply; its own passes so their
 ##             time shows separately
 ##   velocity  update, XSPH, commit
@@ -37,7 +39,7 @@ const SHADER_DIR := "res://gpu/shaders/sim/"
 const KERNELS := [
 	"brush_spawn", "brush_erase", "brush_finalize", "predict",
 	"hash_clear", "hash_count", "scan_local", "scan_blocks", "scan_add", "hash_scatter",
-	"hydro_splat", "hydro_phi", "hydro_solve", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
+	"hydro_splat", "hydro_phi", "hydro_solve", "body_sweep", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
 	"body_project", "body_match",
 	"velocity_update", "velocity_xsph", "velocity_commit",
 	"render_clear", "render_points", "render_gap", "render_powder",
@@ -247,9 +249,10 @@ func _build_passes_rt() -> void:
 			d.call("scan_add", cells), d.call("hash_scatter", all),
 		])
 		_ctx.add_pass("hydro", hydro_pass)
-		# A soft body's pressure pushes made rigid before they're applied, then shape matching
-		# after every iteration's apply. Workgroups (one per body id) are set per frame.
-		_ctx.add_pass("solve", [d.call("solve_pressure", all)])
+		# Bodies' swept contacts, a soft body's pressure pushes made rigid and every body moved back
+		# out of the bodies it went into before they're applied, then shape matching after every
+		# iteration's apply. Workgroups (one per body id) are set per frame.
+		_ctx.add_pass("solve", [d.call("body_sweep", all), d.call("solve_pressure", all)])
 		_ctx.add_pass("bodies", [d.call("body_project", 0)])
 		var solve := [d.call("solve_apply", all)]
 		for _i in _iterations:
@@ -322,7 +325,9 @@ func request_clear() -> void:
 ## material. Returns the body id, or 0 when no id, member range or pool room is free (as
 ## the brush stops when the pool is full). rest_shape (same size as positions, optional)
 ## gives the rest offsets instead, for a body spawned deformed (the probes' squashed jelly).
-func make_body(positions: PackedVector2Array, material: int, rest_shape := PackedVector2Array()) -> int:
+## velocity (optional) is every member's speed at the spawn (the probes' sideways collision).
+func make_body(positions: PackedVector2Array, material: int, rest_shape := PackedVector2Array(),
+		velocity := Vector2.ZERO) -> int:
 	var count := positions.size()
 	if rest_shape.is_empty():
 		rest_shape = positions
@@ -365,6 +370,8 @@ func make_body(positions: PackedVector2Array, material: int, rest_shape := Packe
 		spawn[k * 8 + 3] = shape[k].y
 		spawn[k * 8 + 4] = out[k].x
 		spawn[k * 8 + 5] = out[k].y
+		spawn[k * 8 + 6] = velocity.x
+		spawn[k * 8 + 7] = velocity.y
 	_pending_bodies.append({"id": id, "material": material, "spawn": spawn.to_byte_array(), "mean": mean, "count": count})
 	body_count += 1
 	return id

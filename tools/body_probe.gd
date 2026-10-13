@@ -54,8 +54,16 @@
 ##   boxtilt  as boxdrop, the falling box turned 30 deg and 6 px to the right, so a corner hits
 ##   boxhigh  as boxdrop from 330 px (main.tscn's Drop buttons, ~390 px/s at the impact), 4 px to
 ##            the right: also whether the top box stays on the other. At 1.6 spacings a substep
-##            it dips ~2.5 spacings in for a frame (only swept contacts or more substeps stop
-##            that), so the depth allowed is 3 spacings; it used to bounce off instead
+##            it dipped ~2.5 spacings in for a frame, tilting 0.17 rad, until the swept contacts
+##            (ADR 0003 item 14); before item 13 it bounced off
+##   plank    as boxhigh onto a 16x2 plank on the floor: whether the carrot tunnels through
+##            a body only 2 particles thick at ~390 px/s
+##   boxside  two 16x10 carrots let go 120 px above the floor 50 px apart, flying at each other
+##            at 200 px/s each (400 px/s together, as boxhigh's impact): no member inside the
+##            other at the end, and how fast they come apart again (the rebound, under 20 px/s)
+##   boxstack as boxhigh onto a stack of three 16x10 carrots: the top one stays on, the stack
+##            stays standing (lower boxes under 0.05 rad at the end)
+##            All box scenarios print the largest |rotation| any box reached (the impact tilt).
 ##   reuse    two 8x6 boxes; the first erased whole at frame 60, a new box made at frame 90:
 ##            the erased body's id and member range are freed and the new box gets them
 ##            (ParticleSim frees a body when its live count reads back 0), 200 frames
@@ -276,12 +284,34 @@ func _start(name: String) -> void:
 			sc.hold = 119  # read the water's top, then make the body at 120
 			sc.most_inside = 0
 			sc.late = []
-		"boxdrop", "boxtilt", "boxhigh":
+		"boxdrop", "boxtilt", "boxhigh", "plank", "boxside", "boxstack":
 			sc.frames = 600
 			sc.every = 5
 			sc.most_inside = 0
 			sc.late_speed = 0.0
-			_body(_box(Vector2(X, FLOOR), 16, 10), carrot)
+			sc.max_tilt = 0.0
+			sc.rebound = 0.0
+			sc.touched = false
+			match name:
+				"plank":
+					_body(_box(Vector2(X, FLOOR), 16, 2), carrot)
+				"boxside":
+					# Bodies spawn one per frame, so the second starts where and as fast as it
+					# would be had it been made with the first (one frame of 2 substeps of fall),
+					# and they meet level, as in the CPU test. Started a frame late (0.9 px lower)
+					# it passes too: the pair turns together up to 0.07 rad before it lands.
+					for k in 2:
+						var side := -1.0 if k == 0 else 1.0
+						var sub := SimParams.DT / 2.0
+						var at := Vector2(X + side * 40.0 - side * 200.0 * SimParams.DT * k,
+								FLOOR - 120.0 + 3.0 * SimParams.GRAVITY * sub * sub * k)
+						_body(_box(at, 16, 10), carrot, PackedVector2Array(),
+								Vector2(-side * 200.0, SimParams.GRAVITY * SimParams.DT * k))
+				"boxstack":
+					for k in 3:
+						_body(_box(Vector2(X, FLOOR - k * 10.0 * SimParams.SPACING), 16, 10), carrot)
+				_:
+					_body(_box(Vector2(X, FLOOR), 16, 10), carrot)
 		"reuse":
 			sc.frames = 200
 			_body(_box(Vector2(X - 40.0, FLOOR), 8, 6), carrot)
@@ -311,8 +341,8 @@ func _start(name: String) -> void:
 
 
 ## Makes a body and counts its particles into the readback.
-func _body(points: PackedVector2Array, material: int, rest := PackedVector2Array()) -> int:
-	var id: int = sim.make_body(points, material, rest)
+func _body(points: PackedVector2Array, material: int, rest := PackedVector2Array(), velocity := Vector2.ZERO) -> int:
+	var id: int = sim.make_body(points, material, rest, velocity)
 	if id == 0:
 		print("make_body refused (%d particles)" % points.size())
 		return 0
@@ -348,10 +378,13 @@ func _scenario_brush(brush: Dictionary) -> void:
 					_body(_box(Vector2(X, top - 1.0), 40, 20), cork)
 				"waterbox":
 					_body(_box(Vector2(X, top - 1.0), 16, 10), cork)
-	elif sc.name.begins_with("box") and frame_i == 60:
+	elif sc.name in ["boxdrop", "boxtilt", "boxhigh", "plank", "boxstack"] and frame_i == 60:
 		var tilt := deg_to_rad(30.0) if sc.name == "boxtilt" else 0.0
-		var dx: float = {"boxtilt": 6.0, "boxhigh": 4.0}.get(sc.name, 0.0)
-		var at := Vector2(X + dx, FLOOR - 10.0 * SimParams.SPACING - (330.0 if sc.name == "boxhigh" else 150.0))
+		var dx: float = {"boxtilt": 6.0, "boxhigh": 4.0, "plank": 4.0, "boxstack": 4.0}.get(sc.name, 0.0)
+		# Height of what it lands on, in spacings: the plank's 2 rows, the stack's 3 boxes.
+		var under: float = {"plank": 2.0, "boxstack": 30.0}.get(sc.name, 10.0)
+		var fall := 150.0 if sc.name in ["boxdrop", "boxtilt"] else 330.0
+		var at := Vector2(X + dx, FLOOR - under * SimParams.SPACING - fall)
 		# An upright rest shape, so _members_inside's box is the body's own.
 		_body(_box(at, 16, 10, tilt), carrot, _box(at, 16, 10))
 	elif sc.name == "reuse":
@@ -539,31 +572,67 @@ func _sample(f: int, b: Dictionary) -> void:
 					_result("%s: cork, last 60 frames: mean draft %.2f of its height, mean speed %.2f px/s, max tilt %.3f rad; water inside %d at the end (most %d at a sample), shape error %.4f px"
 							% [sc.name, draft, speed, tilt, inside, sc.most_inside, fit.err],
 							draft > 0.25 and draft < 0.7 and speed < 3.0 and tilt < 0.35 and inside == 0 and fit.err < 0.1)
-		"boxdrop", "boxtilt", "boxhigh":
-			if bodies.size() < 2:
+		"boxdrop", "boxtilt", "boxhigh", "plank", "boxside", "boxstack":
+			if bodies.size() < sc.ids.size() or sc.ids.size() < 2:
 				return
-			var inside := _members_inside(bodies[1], bodies[2]) + _members_inside(bodies[2], bodies[1])
+			var ids: Array = bodies.keys()
+			ids.sort()
+			var fits := {}
+			for id in ids:
+				fits[id] = _fit(bodies[id])
+				sc.max_tilt = maxf(sc.max_tilt, absf(fits[id].theta))
+			var inside := 0
+			for a in ids:
+				for o in ids:
+					if a != o:
+						inside += _members_inside(bodies[a], bodies[o])
 			sc.most_inside = maxi(sc.most_inside, inside)
 			sc.most_deep = maxf(sc.get("most_deep", 0.0), sc.deepest)
 			sc.overlap_samples = sc.get("overlap_samples", 0) + (1 if inside > 0 else 0)
+			# The moving box (the last made) and the one it hits (the one made before it).
+			var top: int = ids[-1]
+			var low: int = ids[-2]
+			if not sc.touched:
+				for p in bodies[top].pos:
+					for q in bodies[low].pos:
+						if p.distance_to(q) < SimParams.SPACING:
+							sc.touched = true
+							break
+					if sc.touched:
+						break
+			if sc.touched:
+				# Speed apart along the line from the hit box to the moving one, after they met.
+				var dir: Vector2 = (fits[top].c - fits[low].c).normalized()
+				if sc.name != "boxside":
+					dir = Vector2.UP
+				sc.rebound = maxf(sc.rebound, (_mean_vel(bodies[top]) - _mean_vel(bodies[low])).dot(dir))
 			if f > sc.frames - 60:
 				for id in bodies:
 					sc.late_speed = maxf(sc.late_speed, _mean_vel(bodies[id]).length())
 			if f % 60 == 0 or inside > 0:
-				var fit2 := _fit(bodies[2])
-				print("  f=%d top box c=(%.1f, %.1f) rot %.3f v=%s, members inside the other %d (deepest %.2f px into an outline), shape errors %.3f / %.3f" % [f, fit2.c.x, fit2.c.y,
-						fit2.theta, _mean_vel(bodies[2]), inside, sc.deepest, _fit(bodies[1]).err, fit2.err])
+				print("  f=%d top box c=(%.1f, %.1f) rot %.3f v=%s, members inside another %d (deepest %.2f px into an outline), shape errors %s" % [f, fits[top].c.x, fits[top].c.y,
+						fits[top].theta, _mean_vel(bodies[top]), inside, sc.deepest, ", ".join(ids.map(func(id): return "%.3f" % fits[id].err))])
 			sc.deepest = 0.0
 			if f == sc.frames:
-				var err := maxf(_fit(bodies[1]).err, _fit(bodies[2]).err)
+				var err := 0.0
+				var low_tilt := 0.0
+				for id in ids:
+					err = maxf(err, fits[id].err)
+					if id != top:
+						low_tilt = maxf(low_tilt, absf(fits[id].theta))
 				var gap := _closest_cross_pair(bodies)
-				var on_top: bool = _fit(bodies[2]).c.y < _fit(bodies[1]).c.y - 10.0 * SimParams.SPACING + 1.0
-				_result("%s: 16x10 carrot dropped onto another (on top at the end: %s): members inside the other %d at the end (most %d, deepest %.2f px into an outline, in %d samples), closest cross-body pair %.3f px, max shape error %.4f px, max speed (last 60 frames) %.3f px/s"
-						% [sc.name, on_top, inside, sc.most_inside, sc.most_deep, sc.overlap_samples, gap, err, sc.late_speed],
+				var below: float = {"plank": 2.0}.get(sc.name, 10.0)
+				var on_top: bool = fits[top].c.y < fits[low].c.y - 0.5 * (10.0 + below) * SimParams.SPACING + 1.0
+				if sc.name == "boxside":
+					on_top = absf(fits[top].c.x - fits[low].c.x) > 16.0 * SimParams.SPACING - 1.0  # side by side
+				_result("%s: 16x10 carrot dropped onto another (%s at the end: %s): members inside another %d at the end (most %d, deepest %.2f px into an outline, in %d samples), closest cross-body pair %.3f px, max shape error %.4f px, max speed (last 60 frames) %.3f px/s, largest |rotation| %.3f rad, rebound %.1f px/s, lower boxes' |rotation| at the end %.3f rad"
+						% [sc.name, "side by side" if sc.name == "boxside" else "on top", on_top, inside, sc.most_inside, sc.most_deep, sc.overlap_samples, gap, err,
+						sc.late_speed, sc.max_tilt, sc.rebound, low_tilt],
 						inside == 0 and sc.overlap_samples <= 4
-						and sc.most_deep < (3.0 if sc.name == "boxhigh" else 2.0) * SimParams.SPACING
+						and sc.most_deep < 2.0 * SimParams.SPACING
 						and gap >= 0.8 * SimParams.SPACING and err < 0.1 and sc.late_speed < REST_SPEED
-						and (on_top or sc.name == "boxtilt"))
+						and (on_top or sc.name == "boxtilt") and (sc.rebound < 20.0 or sc.name in ["boxdrop", "boxtilt"])
+						and (low_tilt < 0.05 or sc.name != "boxstack"))
 		"reuse":
 			if f == sc.frames:
 				var live1: int = b.bodies.decode_u32(1 * ParticleSim.BODY_BYTES + ParticleSim.BODY_LIVE_OFFSET)

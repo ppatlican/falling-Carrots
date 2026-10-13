@@ -405,6 +405,61 @@ func test_fast_box_drop_stacks_off_centre() -> void:
 	expect(max_speed < REST_SPEED, "at rest, speed < %.1f px/s: %.3f" % [REST_SPEED, max_speed])
 
 
+func test_fast_box_drop_on_plank_stays_on_top() -> void:
+	var world := Vector2(160, 420)
+	var sim = _sim(world)
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var floor_y := _floor_y(world)
+	var plank: int = ParticleStep.make_body(state, _box(Vector2(80, floor_y), 16, 2), _carrot)
+	var above: int = ParticleStep.make_body(state, _box(Vector2(84, floor_y - 4.0 - 330.0), 16, 10), _carrot)
+	var r := _drop_run(sim, state, plank, above, 400)
+	var on_top: bool = _fit(state, above).c.y < _fit(state, plank).c.y - 6.0 * SimParams.SPACING + 1.0
+	_report("16x10 carrot dropped 330 px, 4 px off centre, onto a 16x2 plank, 400 frames: on top %s, %s"
+			% [on_top, _drop_line(r)])
+	expect(on_top, "the box doesn't tunnel through the plank")
+	_expect_drop(r)
+
+
+func test_boxes_colliding_sideways_stay_apart() -> void:
+	var world := Vector2(160, 160)
+	var sim = _sim(world)
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var floor_y := _floor_y(world)
+	var left: int = ParticleStep.make_body(state, _box(Vector2(40, floor_y - 120.0), 16, 10), _carrot)
+	var right: int = ParticleStep.make_body(state, _box(Vector2(120, floor_y - 120.0), 16, 10), _carrot)
+	for m in _live(state, left):
+		state.vel[m] = Vector2(200.0, 0.0)
+	for m in _live(state, right):
+		state.vel[m] = Vector2(-200.0, 0.0)
+	var r := _drop_run(sim, state, left, right, 300)
+	var apart: float = absf(_fit(state, right).c.x - _fit(state, left).c.x)
+	_report("two 16x10 carrots flying at each other at 200 px/s each, 300 frames: centres %.2f px apart, %s"
+			% [apart, _drop_line(r)])
+	expect(apart > 16.0 * SimParams.SPACING - 1.0, "side by side, not one inside the other: %.2f px apart" % apart)
+	_expect_drop(r)
+
+
+func test_fast_box_drop_on_a_stack_of_three() -> void:
+	var world := Vector2(160, 420)
+	var sim = _sim(world)
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var floor_y := _floor_y(world)
+	var stack: Array[int] = []
+	for k in 3:
+		stack.append(ParticleStep.make_body(state, _box(Vector2(80, floor_y - k * 10.0 * SimParams.SPACING), 16, 10), _carrot))
+	var above: int = ParticleStep.make_body(state, _box(Vector2(84, floor_y - 60.0 - 330.0), 16, 10), _carrot)
+	var r := _drop_run(sim, state, stack[2], above, 400)
+	var on_top: bool = _fit(state, above).c.y < _fit(state, stack[2]).c.y - 10.0 * SimParams.SPACING + 1.0
+	var lean := 0.0
+	for id in stack:
+		lean = maxf(lean, absf(_fit(state, id).theta))
+	_report("16x10 carrot dropped 330 px, 4 px off centre, onto a stack of three, 400 frames: on top %s, the stack's |rotation| %.3f rad, %s"
+			% [on_top, lean, _drop_line(r)])
+	expect(on_top, "the box stays on the stack")
+	expect(lean < 0.05, "the stack stays standing, |rotation| < 0.05 rad: %.3f" % lean)
+	_expect_drop(r)
+
+
 func test_erasing_part_of_a_body_marks_its_outline_stale() -> void:
 	_sim()
 	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
@@ -511,6 +566,63 @@ func _body_vel(state: Dictionary, id: int) -> Vector2:
 	for m in live:
 		v += state.vel[m]
 	return v / live.size()
+
+
+## Runs a body-on-body impact: `moving` flies at `hit`. Returns the fastest rebound after they
+## touch (speed apart along the line between their centroids), the largest |rotation| any
+## body reached, the most members inside another body in a frame and in how many frames, and
+## at the end: members inside, the closest cross-body pair, shape error and speed over the last
+## 60 frames.
+func _drop_run(sim, state: Dictionary, hit: int, moving: int, frames: int) -> Dictionary:
+	var r := {"rebound": 0.0, "tilt": 0.0, "most_inside": 0, "frames_inside": 0, "speed": 0.0}
+	var touched := false
+	var ids: Array = range(1, state.bodies.size())
+	for f in frames:
+		_frame(sim, state)
+		touched = touched or _pair_gap(state, hit, moving) < SimParams.SPACING
+		var dir: Vector2 = (_fit(state, moving).c - _fit(state, hit).c).normalized()
+		if touched:
+			r.rebound = maxf(r.rebound, (_body_vel(state, moving) - _body_vel(state, hit)).dot(dir))
+		var inside := 0
+		for a in ids:
+			r.tilt = maxf(r.tilt, absf(_fit(state, a).theta))
+			for o in ids:
+				if a != o:
+					inside += _members_inside(state, a, o)
+		r.most_inside = maxi(r.most_inside, inside)
+		r.frames_inside += 1 if inside > 0 else 0
+		r.inside = inside
+		if f >= frames - 60:
+			for a in ids:
+				r.speed = maxf(r.speed, _body_vel(state, a).length())
+	r.gap = _closest_cross_pair(state)
+	r.err = 0.0
+	for a in ids:
+		r.err = maxf(r.err, _fit(state, a).err)
+	return r
+
+
+func _drop_line(r: Dictionary) -> String:
+	return "fastest rebound %.1f px/s, largest |rotation| %.3f rad, most members inside another %d (in %d frames), %d at the end, closest cross-body pair %.3f px, shape error %.4f px, speed (last 60 frames) %.3f px/s" \
+			% [r.rebound, r.tilt, r.most_inside, r.frames_inside, r.inside, r.gap, r.err, r.speed]
+
+
+func _expect_drop(r: Dictionary) -> void:
+	expect(r.rebound < 20.0, "no bounce, rebound < 20 px/s: %.1f" % r.rebound)
+	expect_eq(r.inside, 0, "no member inside another body at the end")
+	expect(r.gap >= 0.8 * SimParams.SPACING, "closest cross-body pair >= 0.8 spacing: %.3f px" % r.gap)
+	expect(r.err < 0.1, "rigid bodies keep their shape: %.4f px" % r.err)
+	expect(r.speed < REST_SPEED, "at rest, speed < %.1f px/s: %.3f" % [REST_SPEED, r.speed])
+
+
+## Closest pair of particles between two bodies.
+func _pair_gap(state: Dictionary, a: int, b: int) -> float:
+	var best := INF
+	var others := _live(state, b)
+	for i in _live(state, a):
+		for j in others:
+			best = minf(best, state.pos[i].distance_to(state.pos[j]))
+	return best
 
 
 func _closest_cross_pair(state: Dictionary) -> float:

@@ -13,7 +13,8 @@
 // to the ceiling and hung there, 2655 of 5640 grains still in the air 1 s after a 1 s pour
 // would have landed them (water feel probe, sandair r=10 n=94 spawn=60 move=0).
 // Body (BRUSH_BODY, the body brush): like a block, but thread t takes its position, rest
-// offset and way out of the rest shape from body_spawn[2t], [2t + 1], puts the body id into mat_flags and its slot into the body's member range.
+// offset and way out of the rest shape from body_spawn[2t], [2t + 1] (xy), and its velocity
+// from body_spawn[2t + 1].zw, puts the body id into mat_flags and its slot into the body's member range.
 // brush_finalize.glsl then lowers the free count. Mirror: cpu_ref/particle_pool.gd.
 
 // common.glslinc stamp: Params 124 B, v17. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
@@ -87,7 +88,7 @@ void main() {
 
 	pos[slot] = p;
 	pred[slot] = p;
-	vel[slot] = vec2(0.0);
+	vel[slot] = body ? body_spawn[2u * t + 1u].zw : vec2(0.0);
 	if (body) {
 		mat_flags[slot] = (params.brush_material & (MAT_MASK | (0xFFFFu << BODY_SHIFT))) | ALIVE;
 		rest_offset[slot] = vec4(body_spawn[2u * t].zw, body_spawn[2u * t + 1u].xy);

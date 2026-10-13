@@ -73,6 +73,12 @@ const LIQUID_KICK := 2.0
 ## Shape matching still moves the particles; only the speed it leaves them is capped.
 ## Mirror: BODY_KICK in velocity_update.glsl.
 const BODY_KICK := 4.0
+## Swept contacts between bodies (ADR 0003 item 14), in spacings: the deepest a member may
+## already be inside another body's outline at the start of a substep and still count as coming
+## from outside, and the least it must go further in that substep. Slower approaches are left to
+## the contacts and push-out (without the least depth a 5-box stack leaned and never rested).
+## Mirror: SWEEP_DEPTH in body_sweep.glsl.
+const SWEEP_DEPTH := 0.25
 
 ## Liquid density projection on a coarse grid (gpu/shaders/sim/hydro.glslinc): cell size
 ## in hash cells, the density (over rest) below which a cell is air, the SOR

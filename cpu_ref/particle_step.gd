@@ -143,6 +143,9 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	_hydro_solve(phi, hydro_p, dt)
 	var delta := PackedVector2Array()
 	delta.resize(n)
+	# Swept contacts: each body that went into another this substep rewound along its path to
+	# where they first touched (body_sweep.glsl, body_project.glsl).
+	var back := _sweep_bodies(pos, pred, mat, body, edge, bodies, members, neighbours)
 	for i in n:
 		if _class(mat[i]) == LIQUID:
 			delta[i] = _hydro_delta(pred[i], phi, hydro_p, dt)
@@ -153,15 +156,14 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		delta[i] = delta[i].limit_length(0.5 * SimParams.SPACING)
 	_project_body_pushes(delta, pred, mat, body, bodies, members)
 	for i in n:
-		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i], body[i] != 0)
+		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i] + back[i], mat[i], body[i] != 0)
 
 	# Solver iterations: lambda, delta, apply, then shape matching.
 	var lambda := PackedFloat32Array()
 	lambda.resize(n)
 	# A body member's push from other bodies this substep, summed over the iterations and spread
 	# over its body (velocity_update takes its separating speed out). GPU: vel (solve_delta).
-	var pushed := PackedVector2Array()
-	pushed.resize(n)
+	var pushed := back.duplicate()
 	for _it in iterations:
 		for i in n:
 			lambda[i] = minf(_lambda(i, pred, mat, neighbours[i], h), 0.0) if _class(mat[i]) == LIQUID else 0.0
@@ -209,6 +211,81 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	state.pos = pos
 	state.vel = vel
 	state.hydro_p = hydro_p
+
+
+## Swept contacts between bodies (ADR 0003 item 14): each body is rewound along its path by the
+## largest share of the substep any of its members went on after touching another body
+## (_sweep_delta; the member that touched first sets it), every member by that share of its own
+## move, not clamped. Returns each particle's move (0 outside bodies), which also starts its push
+## from other bodies (pushed). Mirror: body_sweep.glsl, and body_project.glsl for the rewind.
+func _sweep_bodies(pos: PackedVector2Array, pred: PackedVector2Array, mat: PackedInt32Array,
+		body: PackedInt32Array, edge: PackedVector2Array, bodies: Array, members: PackedInt32Array,
+		neighbours: Array) -> PackedVector2Array:
+	var back := PackedVector2Array()
+	back.resize(pred.size())
+	for id in range(1, bodies.size()):
+		var b: Dictionary = bodies[id]
+		var live := PackedInt32Array()
+		var rewind := 0.0
+		for k in range(b.first, b.first + b.count):
+			var m := members[k]
+			if body[m] != id:
+				continue
+			live.append(m)
+			rewind = maxf(rewind, _sweep_delta(m, pos, pred, mat, body, edge, bodies, neighbours[m]))
+		if rewind > 0.0:
+			for m in live:
+				back[m] = -rewind * (pred[m] - pos[m])
+	return back
+
+
+## Body member i's swept contact with other bodies (body_sweep.glsl): if it started this substep
+## outside another body's outline (at most SWEEP_DEPTH inside) and is predicted to end inside
+## it, at least SWEEP_DEPTH further in, the share of the substep after it first touched: its
+## depth past the face it came through, less any it started with, over how far the two came
+## together along the face's normal (0 if it didn't go in). Both bodies rewind that share of
+## their paths, so together they undo the overlap. Along the face's normal instead, a carrot
+## landing near a plank's corner (a diagonal normal) was moved back sideways and slid off; by
+## contact mass, the plank's share went into the floor. The face is that of the other body's
+## member nearest it at the start: a fast carrot's bottom row ends past the top rows of the body
+## below, and through a 2-row plank, where the nearest member at the end has its outline facing
+## the wrong way.
+func _sweep_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, mat: PackedInt32Array,
+		body: PackedInt32Array, edge: PackedVector2Array, bodies: Array, nb: PackedInt32Array) -> float:
+	var near0 := -1  # other-body member nearest at the start
+	var near0_d2 := INF
+	var near1 := -1  # other-body member nearest at the end, within a spacing
+	var near1_d := SimParams.SPACING
+	for j in nb:
+		if body[j] == 0 or body[j] == body[i]:
+			continue
+		var d2 := pos[i].distance_squared_to(pos[j])
+		if d2 < near0_d2:
+			near0 = j
+			near0_d2 = d2
+		var d_end := pred[i].distance_to(pred[j])
+		if d_end < near1_d:
+			near1 = j
+			near1_d = d_end
+	if near1 < 0:
+		return 0.0
+	# Ends inside the other body's outline: a member passing beside a corner doesn't count.
+	if _push_out(pred[i], pred[near1], edge[near1], bodies[body[near1]]) == Vector2.ZERO:
+		return 0.0
+	var b: Dictionary = bodies[body[near0]]
+	if b.stale or edge[near0].length() < 1e-6:
+		return 0.0
+	var r: Vector2 = b.rot
+	var e := Vector2(r.x * edge[near0].x - r.y * edge[near0].y, r.y * edge[near0].x + r.x * edge[near0].y)
+	var len := e.length()
+	var normal := e / len
+	var d0 := len - normal.dot(pos[i] - pos[near0])
+	var d1 := len - normal.dot(pred[i] - pred[near0])
+	var gone_in := d1 - maxf(d0, 0.0)
+	if d0 > SimParams.SWEEP_DEPTH * SimParams.SPACING or gone_in < SimParams.SWEEP_DEPTH * SimParams.SPACING:
+		return 0.0
+	# How far they came together along N: d1 - d0, at least gone_in.
+	return minf(gone_in / (d1 - d0), 1.0)
 
 
 ## A body's push from other bodies this substep (o, contacts and push-out) may stop it along
