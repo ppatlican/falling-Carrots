@@ -41,11 +41,39 @@ const int HYDRO_ROW_AIR = 1;     // ghost pressure: t
 const int HYDRO_ROW_LIQUID = 2;  // max(mix(max(p, 0), t, HYDRO_SOR), 0)
 const int HYDRO_ROW_KEEP = 3;    // walled in: max(p, 0)
 
+// Body volume from which a cell is a body's: it isn't pulled full, and as bed it is a wall to
+// the water beside it, not porous sand (see hydro_row). Mirror: SimParams.HYDRO_BODY_CELL.
+const float HYDRO_BODY_CELL = 0.05;
+
+// A cell short of HYDRO_AIR but holding at least this much liquid and HYDRO_MIXED_SOLID of
+// bed fill (sand or body) is under water, not air, when the cell above isn't air (hydro_air).
+// Mirror: SimParams.HYDRO_MIXED_WET, HYDRO_MIXED_SOLID.
+const float HYDRO_MIXED_WET = 0.02;
+const float HYDRO_MIXED_SOLID = 0.1;
+
 struct HydroRow {
 	vec4 w;
 	float b;
 	int mode;
 };
+
+// True when coarse cell ci is air (p = 0 past the surface): neither bed nor HYDRO_AIR full of
+// liquid. A cell that sand or a body partly fills and that holds some water, under a cell that
+// isn't air, is under water: its room is the water's gap from the grains and the body, not
+// air. Read as air, such a cell beside a cork wedged on the floor under sand (water 0.2, sand
+// 0.24, body 0.24) put p = 0 on the floor under ~170 px of water for a frame, and the cork's
+// faces read 0 and it heaved (body_probe sandcorks). Mirror: ParticleStep.hydro_air.
+bool hydro_air(ivec2 ci) {
+	vec2 v = s_phi[hydro_index(ci)];
+	if (v.y >= HYDRO_SOLID || v.x >= HYDRO_AIR) {
+		return false;
+	}
+	if (ci.y > 0 && v.x >= HYDRO_MIXED_WET && v.y >= HYDRO_MIXED_SOLID) {
+		vec2 u = s_phi[hydro_index(ci - ivec2(0, 1))];
+		return u.y < HYDRO_SOLID && u.x < HYDRO_AIR;
+	}
+	return true;
+}
 
 // The projected SOR update of coarse cell ci as a HydroRow. Per cell, with a the cell
 // size: sum over in-grid neighbours of (p_n - p) = -a^2 HYDRO_K err / dt^2. Side walls and
@@ -60,7 +88,7 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 	vec2 phi_c = s_phi[c];
 	float phi = phi_c.x;
 	bool solid = phi_c.y >= HYDRO_SOLID;
-	bool air = !solid && phi < HYDRO_AIR;
+	bool air = hydro_air(ci);
 	vec4 w = vec4(0.0);
 	float n = 0.0;
 	float wall_sum = 0.0;
@@ -85,7 +113,7 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 		vec2 phi_nv = s_phi[hydro_index(nc)];
 		float phi_n = phi_nv.x;
 		bool solid_n = phi_nv.y >= HYDRO_SOLID;
-		bool air_n = !solid_n && phi_n < HYDRO_AIR;
+		bool air_n = hydro_air(nc);
 		if (solid) {
 			// The bed carries the pressure of the water on it into its pores, continued
 			// hydrostatically from each neighbour that isn't air: p = p_n - head * off.y.
@@ -100,8 +128,20 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 			// zero-gradient wall gave the water at the bed no support from the grid: the
 			// contact push carried its weight, along the slope's normal only, and the layer
 			// on a slope slid down and drove a loop through the pool (water_feel_probe bowl).
+			// Sand bed is porous: its p is the water's continued into the pores (above), so a
+			// liquid cell beside it takes that p as its neighbour's, which at rest is the same
+			// head. A pocket of water closed in by bed then still reads the pool's pressure
+			// through the sand; as a wall it had no p of its own to keep (any p solved it), and
+			// a cork wedged in a corner under sand (body_probe sandcorks) took its pocket's p
+			// to 0 or to 5.8 million in a frame. Bed that is mostly body stays a wall: a body
+			// lets no water through.
 			if (!air) {
-				wall_sum += head * float(off.y);
+				if (hydro_phi[hydro_index(nc)].z < HYDRO_BODY_CELL) {
+					w[k] = 1.0;
+					n += 1.0;
+				} else {
+					wall_sum += head * float(off.y);
+				}
 			}
 		} else if (air) {
 			// Ghost pressure: average over liquid neighbours of their p extrapolated
@@ -144,9 +184,16 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 	// (water_feel_probe bowl nosand vs floor=12 cols=0, 2026-10-11).
 	// Body volume counts as full room and as compression (ADR 0003): a body isn't a bubble to
 	// fill, and water squeezed under or into a body is pushed out.
-	vec4 above = ci.y > 0 ? hydro_phi[hydro_index(ci - ivec2(0, 1))] : vec4(0.0);
-	bool covered = above.x + above.y * HYDRO_POWDER_VOL + above.z >= HYDRO_FULL && ci.y < size.y - 1;
+	// A cell a body partly fills (HYDRO_BODY_CELL) is never pulled: water keeps a contact
+	// gap from the body, so it reads short of full with no air in it. Pulled, a cork held
+	// down in a corner of a deep pool by sand (body_probe sandcorks) had its cells flip every
+	// few frames between short of full (p pulled to 0 under ~170 px of water: its faces read
+	// 0 and it fell) and squeezed (p 2-3x hydrostatic once water rushed in: it shot up), and
+	// the whole pool's p swung with them: the sea jumped (owner report, 2026-10-13).
 	vec4 own = hydro_phi[c];
+	vec4 above = ci.y > 0 ? hydro_phi[hydro_index(ci - ivec2(0, 1))] : vec4(0.0);
+	bool covered = above.x + above.y * HYDRO_POWDER_VOL + above.z >= HYDRO_FULL && ci.y < size.y - 1
+			&& own.z < HYDRO_BODY_CELL;
 	float err = max(own.x + own.z - 1.0, 0.0);
 	if (covered) {
 		err += min(own.x + own.y * HYDRO_POWDER_FULL + own.z - 1.0, 0.0);

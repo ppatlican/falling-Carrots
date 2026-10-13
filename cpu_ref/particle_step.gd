@@ -902,7 +902,7 @@ func _hydro_solve(phi: PackedVector4Array, p: PackedFloat32Array, dt: float) -> 
 				if (ci.x + ci.y) % 2 != parity:
 					continue
 				var solid := hydro_solid(phi[c])
-				var air := not solid and hydro_level(phi[c]) < SimParams.HYDRO_AIR
+				var air := hydro_air(phi, ci, size)
 				var sum := 0.0
 				var n := 0.0
 				var wall_sum := 0.0
@@ -916,14 +916,18 @@ func _hydro_solve(phi: PackedVector4Array, p: PackedFloat32Array, dt: float) -> 
 						continue
 					var ni := nc.y * size.x + nc.x
 					var solid_n := hydro_solid(phi[ni])
-					var air_n := not solid_n and hydro_level(phi[ni]) < SimParams.HYDRO_AIR
+					var air_n := hydro_air(phi, nc, size)
 					if solid:
 						if not air_n:  # sand bed: the water's pressure continued hydrostatically
 							sum += p[ni] - head * off.y
 							n += 1.0
 					elif solid_n:
-						if not air:  # a wall holding the water's weight: dp/dn = rho g . n
-							wall_sum += head * off.y
+						if not air:
+							if phi[ni].z < SimParams.HYDRO_BODY_CELL:  # porous sand bed: its p, the water's continued
+								sum += p[ni]
+								n += 1.0
+							else:  # a body: a wall holding the water's weight, dp/dn = rho g . n
+								wall_sum += head * off.y
 					elif air:
 						if not air_n:  # ghost: liquid p extrapolated through 0 at the surface
 							sum += p[ni] * (1.0 - 1.0 / _hydro_theta(hydro_level(phi[ni]), hydro_level(phi[c])))
@@ -945,7 +949,11 @@ func _hydro_solve(phi: PackedVector4Array, p: PackedFloat32Array, dt: float) -> 
 				# Under a full cell (water, powder and bodies), a cell with room left is pulled full (a trapped bubble).
 				# Body volume counts as full room (ADR 0003), so a body is not a bubble to fill.
 				# Never in the floor row: half outside the world, it reads a little short of full.
-				var covered := ci.y > 0 and ci.y < size.y - 1 and phi[c - size.x].x + phi[c - size.x].y * SimParams.HYDRO_POWDER_VOL + phi[c - size.x].z >= SimParams.HYDRO_FULL
+				# Nor where a body partly fills the cell (HYDRO_BODY_CELL): water keeps a contact gap from
+				# it, so the cell reads short of full with no air in it. Pulled, a pinned cork's cells flipped
+				# between p 0 and squeezed, and the whole pool's p with them.
+				var covered := ci.y > 0 and ci.y < size.y - 1 and phi[c - size.x].x + phi[c - size.x].y * SimParams.HYDRO_POWDER_VOL + phi[c - size.x].z >= SimParams.HYDRO_FULL \
+						and phi[c].z < SimParams.HYDRO_BODY_CELL
 				# Compression counts body volume too, so water squeezed under or into a body is pushed out.
 				var err := maxf(phi[c].x + phi[c].z - 1.0, 0.0)
 				if covered:
@@ -953,6 +961,20 @@ func _hydro_solve(phi: PackedVector4Array, p: PackedFloat32Array, dt: float) -> 
 				var k := 1.0 - pow(1.0 - SimParams.HYDRO_K, dt * 60.0)  # share per step (hydro_k())
 				var rhs := -a * a * k * err / (dt * dt)
 				p[c] = maxf(lerpf(maxf(p[c], 0.0), (sum + wall_sum - rhs) / n, SimParams.HYDRO_SOR), 0.0)
+
+
+## True when cell ci is air (hydro_air): neither bed nor HYDRO_AIR full of liquid. A cell that
+## sand or a body partly fills and that holds some water, under a cell that isn't air, is under
+## water: its room is the water's gap from the grains and the body, not air.
+static func hydro_air(phi: PackedVector4Array, ci: Vector2i, size: Vector2i) -> bool:
+	var c := ci.y * size.x + ci.x
+	var fill := phi[c].y * SimParams.HYDRO_POWDER_VOL + phi[c].z
+	var level := hydro_level(phi[c])
+	if fill >= SimParams.HYDRO_SOLID or level >= SimParams.HYDRO_AIR:
+		return false
+	if ci.y > 0 and level >= SimParams.HYDRO_MIXED_WET and fill >= SimParams.HYDRO_MIXED_SOLID:
+		return not hydro_solid(phi[c - size.x]) and hydro_level(phi[c - size.x]) < SimParams.HYDRO_AIR
+	return true
 
 
 ## True when a cell is bed: a solid wall for the grid (hydro_solid). Sand at its packing, and

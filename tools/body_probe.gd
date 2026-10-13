@@ -58,8 +58,8 @@
 ##            as main.tscn's Drop cork (y 12) along the world from frame 240, then 2 x "+10k water"
 ##            at frames 600 and 630, 2400 frames: every cork rises off the sand and floats (mean
 ##            draft under RISEN over the last 60 frames). Corks wedged in a wall corner under the
-##            sand slope often stay down (ADR 0003 item 15, Known limits), so it fails now and
-##            then. Prints each cork's centre, speed, draft, p_ref, wet flag, its bottom's height
+##            sand slope used to stay down and shake (ADR 0003 item 15, Known limits; item 16
+##            stopped the shaking), so it may still fail now and then. Prints each cork's centre, speed, draft, p_ref, wet flag, its bottom's height
 ##            over the sand beside it and the grains over its top; with "grid", the grid's columns
 ##            and each cork's pressure push by row against its weight
 ##   boxdrop  a 16x10 carrot resting on the floor, a second dropped 150 px straight onto it (frame

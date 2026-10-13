@@ -111,6 +111,15 @@ const HYDRO_SOLID := 0.5
 ## surface looked ~3% short and sucked water in: a pool over sand mounds circulated over
 ## the peaks (water_feel_probe mounds).
 const HYDRO_POWDER_FULL := 0.9
+## Body volume from which a cell is a body's for the grid: it isn't pulled full (water keeps a
+## contact gap from a body, so the cell reads short of full though it holds no air), and as
+## bed it is a wall to the water beside it, not porous sand. Mirror: hydro_solve.glsl.
+const HYDRO_BODY_CELL := 0.05
+## A cell short of HYDRO_AIR that holds at least HYDRO_MIXED_WET of liquid and HYDRO_MIXED_SOLID
+## of bed fill (sand or body) is under water, not air, when the cell above isn't air: its room
+## is the water's gap from the grains and the body. Mirror: hydro_air in hydro_solve.glsl.
+const HYDRO_MIXED_WET := 0.02
+const HYDRO_MIXED_SOLID := 0.1
 ## Free surface (ghost fluid): liquid density over rest at the surface, and the smallest
 ## share of a cell the surface may sit from a liquid cell's centre.
 const HYDRO_SURFACE := 0.5
