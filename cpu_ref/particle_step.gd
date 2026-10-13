@@ -31,6 +31,9 @@ var world_size: Vector2
 ## Per material id: { "class": int, "density", "friction", "viscosity", "drag", "stiffness" }.
 var materials: Dictionary
 var rest_density: float
+## _contact_delta's part that pushes a body member away from other bodies (contacts and
+## push-out), as powder.glslinc's body_out.
+var _body_out := Vector2.ZERO
 
 
 ## material_table: a loaded cpu_ref/material_table.gd.
@@ -155,6 +158,10 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	# Solver iterations: lambda, delta, apply, then shape matching.
 	var lambda := PackedFloat32Array()
 	lambda.resize(n)
+	# A body member's push from other bodies this substep, summed over the iterations and spread
+	# over its body (velocity_update takes its separating speed out). GPU: vel (solve_delta).
+	var pushed := PackedVector2Array()
+	pushed.resize(n)
 	for _it in iterations:
 		for i in n:
 			lambda[i] = minf(_lambda(i, pred, mat, neighbours[i], h), 0.0) if _class(mat[i]) == LIQUID else 0.0
@@ -164,15 +171,20 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 				d = _liquid_delta(i, pred, mat, lambda, neighbours[i], h, dt)
 			d += _contact_delta(i, pos, pred, mat, body, edge, bodies, neighbours[i])
 			delta[i] = d.limit_length(0.5 * SimParams.SPACING)
+			if body[i] != 0 and d.length() > 1e-9:
+				pushed[i] += _body_out * (delta[i].length() / d.length())
 		for i in n:
 			pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i], body[i] != 0)
 		_match_shapes(pred, mat, body, rest, bodies, members, dt, iterations)
+		_spread_body_pushes(pushed, body, bodies, members)
 
 	# Velocity update, drag, then XSPH viscosity from the raw velocities.
 	var new_vel := PackedVector2Array()
 	new_vel.resize(n)
 	for i in n:
 		var v := (pred[i] - pos[i]) / dt
+		if body[i] != 0:
+			v = stop_not_launch(v, pushed[i], dt)
 		var v_pre := vel[i].limit_length(SimParams.MAX_STEP / dt)
 		if _class(mat[i]) == POWDER:
 			# Sleeping (velocity_update.glsl): a grain held up that barely moved stays put.
@@ -197,6 +209,39 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	state.pos = pos
 	state.vel = vel
 	state.hydro_p = hydro_p
+
+
+## A body's push from other bodies this substep (o, contacts and push-out) may stop it along
+## its direction n but not send it away: the rest only undoes the overlap (pre-stabilization,
+## Macklin et al. 2014). As speed, a carrot dropped 330 px onto another bounced back out at
+## 78 px/s and slid off (body_probe boxhigh). Same as velocity_update.glsl.
+static func stop_not_launch(v: Vector2, o: Vector2, dt: float) -> Vector2:
+	var o_len := o.length()
+	if o_len <= 1e-6:
+		return v
+	var n := o / o_len
+	var v_n := v.dot(n)
+	var w_n := v_n - o_len / dt  # without the push
+	return v + ((w_n if w_n >= 0.0 else minf(v_n, 0.0)) - v_n) * n
+
+
+## Each live member's push from other bodies so far becomes its body's mean: shape matching
+## spreads a push on a few members over the whole body. Mirror: body_match.glsl.
+func _spread_body_pushes(pushed: PackedVector2Array, body: PackedInt32Array, bodies: Array,
+		members: PackedInt32Array) -> void:
+	for id in range(1, bodies.size()):
+		var b: Dictionary = bodies[id]
+		var sum := Vector2.ZERO
+		var live := 0
+		for k in range(b.first, b.first + b.count):
+			if body[members[k]] == id:
+				sum += pushed[members[k]]
+				live += 1
+		if live == 0:
+			continue
+		for k in range(b.first, b.first + b.count):
+			if body[members[k]] == id:
+				pushed[members[k]] = sum / live
 
 
 ## The solver's correction may stop a particle but leave it at most
@@ -917,6 +962,7 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	var mi: Dictionary = materials[mat[i]]
 	var sum := Vector2.ZERO
 	var nearest_push := Vector2.ZERO  # the nearest pair's contact push-out
+	var sum_bodies := Vector2.ZERO  # body member i: the part of sum from other bodies
 	var fric := Vector2.ZERO
 	var n_near := 0
 	var n_wet := 0
@@ -966,6 +1012,8 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			w_push = stack_weight(mi.density, mj.density, yi - yj)
 			w = w_push
 		sum += w_push * pen * normal
+		if body[i] != 0 and body[j] != 0:
+			sum_bodies += w_push * pen * normal
 		if j == nearest:
 			nearest_push = w_push * pen * normal
 		var mu: float = minf(mi.friction, mj.friction)
@@ -994,11 +1042,13 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			# Past the nearest member's edge row, that pair pushes inward: the outline decides
 			# (powder.glslinc contact_delta).
 			sum -= nearest_push
+			sum_bodies -= nearest_push
 		if body[i] != 0:
 			# Body-body: each side takes its contact share, so the pair separates by the depth
 			# (powder.glslinc contact_delta).
 			var yj: float = bodies[body[nearest]].centroid.y
 			out *= stack_weight(mi.density, materials[mat[nearest]].density, bodies[body[i]].centroid.y - yj)
+	_body_out = (sum_bodies + out) * SimParams.CONTACT_RELAX if body[i] != 0 else Vector2.ZERO
 	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet) + out) * SimParams.CONTACT_RELAX
 
 

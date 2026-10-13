@@ -371,6 +371,40 @@ func test_box_dropped_on_box_stays_out() -> void:
 	expect(max_speed < REST_SPEED, "at rest, speed < %.1f px/s: %.3f" % [REST_SPEED, max_speed])
 
 
+## A fast, off-centre drop (body_probe boxhigh): at ~390 px/s the box moves 1.6 spacings a
+## substep and dips ~2.5 spacings in. Its push back out came back as speed: it bounced up at
+## ~78 px/s, tilted and slid off. The push may stop a body but not send it away (velocity
+## update, stop_not_launch).
+func test_fast_box_drop_stacks_off_centre() -> void:
+	var world := Vector2(160, 420)
+	var sim = _sim(world)
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var floor_y := _floor_y(world)
+	var below: int = ParticleStep.make_body(state, _box(Vector2(80, floor_y), 16, 10), _carrot)
+	var above: int = ParticleStep.make_body(state, _box(Vector2(84, floor_y - 20.0 - 330.0), 16, 10), _carrot)
+	var touched := false
+	var rebound := 0.0
+	var max_speed := 0.0
+	for f in 400:
+		_frame(sim, state)
+		var v := _body_vel(state, above)
+		touched = touched or _closest_cross_pair(state) < SimParams.SPACING
+		if touched:
+			rebound = maxf(rebound, -v.y)
+		if f >= 340:
+			max_speed = maxf(max_speed, v.length())
+	var inside := _members_inside(state, below, above) + _members_inside(state, above, below)
+	var on_top: bool = _fit(state, above).c.y < _fit(state, below).c.y - 10.0 * SimParams.SPACING + 1.0
+	var gap := _closest_cross_pair(state)
+	_report("16x10 carrot dropped 330 px, 4 px off centre, onto another, 400 frames: on top %s, fastest rebound %.1f px/s, %d members inside the other, closest cross-body pair %.3f px, speed (last 60 frames) %.3f px/s"
+			% [on_top, rebound, inside, gap, max_speed])
+	expect(on_top, "the box stays on the other")
+	expect(rebound < 20.0, "no bounce, rebound < 20 px/s: %.1f" % rebound)
+	expect_eq(inside, 0, "no member inside the other box at the end")
+	expect(gap >= 0.8 * SimParams.SPACING, "closest cross-body pair >= 0.8 spacing: %.3f px" % gap)
+	expect(max_speed < REST_SPEED, "at rest, speed < %.1f px/s: %.3f" % [REST_SPEED, max_speed])
+
+
 func test_erasing_part_of_a_body_marks_its_outline_stale() -> void:
 	_sim()
 	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}

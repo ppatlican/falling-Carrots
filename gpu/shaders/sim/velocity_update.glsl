@@ -18,6 +18,7 @@
 // churned at ~37 px/s (30k) and ~60 px/s (50k), with jets of 150-350 px/s up the side
 // walls. A cap of 0 would stop the water levelling, since the slow sideways push from a
 // higher surface starts from rest. Depth pressure comes from the grid (hydro.glslinc).
+// Body particles first lose the separating speed of their push from other bodies (see main).
 // Body particles (ADR 0002) never sleep and get the same kind of cap, BODY_KICK: a box
 // spawned into the floor or pushed out of another body may leave at most that much faster.
 // Without it, a box spawned 4 px into the floor launched at 284 px/s (CPU reference).
@@ -65,6 +66,22 @@ void main() {
 	}
 	float drag = materials[s_material(t)].phys.w;
 	vec2 v = (s_pred[t] - s_pos[t]) / params.dt;
+	vec2 o = s_body(t) != 0u ? vel[sorted_ids[t]] : vec2(0.0);
+	float o_len = length(o);
+	if (o_len > 1e-6) {
+		// The body's push from other bodies this substep (contacts and push-out; vel, the mean
+		// over its members; solve_delta, body_match) may stop it along its direction n but not
+		// send it away: the rest only undoes the overlap (pre-stabilization, Macklin et al. 2014). As
+		// speed, a carrot dropped 330 px onto another (~390 px/s, 1.6 spacings a substep at 2
+		// substeps) went 5 px in, came back out at 78 px/s, tilted and slid off (body_probe
+		// boxhigh); a speed cap per member did nothing, as shape matching hands the whole body
+		// the bottom row's push. Taking all of it out let the box sink 10 px in: the push
+		// is what stops it. Counting the push-out alone left a 57 px/s rebound from the contacts.
+		vec2 n = o / o_len;
+		float v_n = dot(v, n);
+		float w_n = v_n - o_len / params.dt;  // without the push-out
+		v += ((w_n >= 0.0 ? w_n : min(v_n, 0.0)) - v_n) * n;
+	}
 	vec2 v_pre = s_vel[t];  // velocity predict moved with (after gravity, before the solver)
 	float max_v = params.max_step / params.dt;
 	if (length(v_pre) > max_v) {

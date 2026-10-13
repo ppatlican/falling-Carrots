@@ -52,8 +52,10 @@
 ##            moves over a spacing a substep, so members may dip in at the impact: the check
 ##            allows overlap in 4 samples (5 frames apart), under 2 spacings deep
 ##   boxtilt  as boxdrop, the falling box turned 30 deg and 6 px to the right, so a corner hits
-##   boxhigh  as boxdrop from 330 px (main.tscn's Drop buttons, ~510 px/s at the impact), 4 px to
-##            the right: also whether the top box stays on the other
+##   boxhigh  as boxdrop from 330 px (main.tscn's Drop buttons, ~390 px/s at the impact), 4 px to
+##            the right: also whether the top box stays on the other. At 1.6 spacings a substep
+##            it dips ~2.5 spacings in for a frame (only swept contacts or more substeps stop
+##            that), so the depth allowed is 3 spacings; it used to bounce off instead
 ##   reuse    two 8x6 boxes; the first erased whole at frame 60, a new box made at frame 90:
 ##            the erased body's id and member range are freed and the new box gets them
 ##            (ParticleSim frees a body when its live count reads back 0), 200 frames
@@ -558,7 +560,8 @@ func _sample(f: int, b: Dictionary) -> void:
 				var on_top: bool = _fit(bodies[2]).c.y < _fit(bodies[1]).c.y - 10.0 * SimParams.SPACING + 1.0
 				_result("%s: 16x10 carrot dropped onto another (on top at the end: %s): members inside the other %d at the end (most %d, deepest %.2f px into an outline, in %d samples), closest cross-body pair %.3f px, max shape error %.4f px, max speed (last 60 frames) %.3f px/s"
 						% [sc.name, on_top, inside, sc.most_inside, sc.most_deep, sc.overlap_samples, gap, err, sc.late_speed],
-						inside == 0 and sc.overlap_samples <= 4 and sc.most_deep < 2.0 * SimParams.SPACING
+						inside == 0 and sc.overlap_samples <= 4
+						and sc.most_deep < (3.0 if sc.name == "boxhigh" else 2.0) * SimParams.SPACING
 						and gap >= 0.8 * SimParams.SPACING and err < 0.1 and sc.late_speed < REST_SPEED
 						and (on_top or sc.name == "boxtilt"))
 		"reuse":

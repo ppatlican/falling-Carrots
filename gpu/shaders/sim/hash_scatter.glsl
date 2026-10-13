@@ -18,5 +18,8 @@ void main() {
 	s_pred[t] = pred[i];
 	s_pos[t] = pos[i];
 	s_vel[t] = vel[i];
+	// vel is free until velocity_commit: through the solve it holds a body member's push from
+	// other bodies (solve_delta, body_match, velocity_update).
+	vel[i] = vec2(0.0);
 	s_mat[t] = mat_flags[i];
 }

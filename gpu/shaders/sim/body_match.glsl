@@ -13,6 +13,7 @@
 //      from the last pass when live < 2 or |A_pq| is near 0.
 //   Thread 0 also moves the reference pressure and wet flag solve_pressure found this substep
 //   into place for the next (ADR 0003 item 4).
+//   Every live member's push from other bodies so far (vel, solve_delta) becomes the body's mean.
 //   3. Every live member moves toward its goal c + R(q - c0) by
 //      k = 1 - (1 - stiffness)^(dt * 60 / iterations), so stiffness is the share of the shape
 //      error removed per 1/60 s whatever the substep and iteration counts.
@@ -44,6 +45,7 @@ shared float sh_n[LOCAL_SIZE_X];
 shared vec2 sh_p[LOCAL_SIZE_X];  // sum of p - last centroid
 shared vec2 sh_q[LOCAL_SIZE_X];  // sum of rest offsets
 shared vec2 sh_a[LOCAL_SIZE_X];  // sum of (p.q, q x p), p relative to the last centroid
+shared vec2 sh_o[LOCAL_SIZE_X];  // sum of the members' pushes from other bodies so far (vel)
 
 // Sorted index of a live slot this frame (as hash_scatter places it).
 uint sorted_of(uint slot) {
@@ -70,6 +72,7 @@ void main() {
 	vec2 sp = vec2(0.0);
 	vec2 sq = vec2(0.0);
 	vec2 sa = vec2(0.0);
+	vec2 so = vec2(0.0);
 	for (uint m = first + lid; m < end; m += LOCAL_SIZE_X) {
 		uint slot = body_members[m];
 		if (!live_member(slot, id)) continue;
@@ -79,8 +82,10 @@ void main() {
 		sp += p;
 		sq += q;
 		sa += vec2(dot(p, q), q.x * p.y - q.y * p.x);
+		so += vel[slot];
 	}
 	sh_n[lid] = n;
+	sh_o[lid] = so;
 	sh_p[lid] = sp;
 	sh_q[lid] = sq;
 	sh_a[lid] = sa;
@@ -92,6 +97,7 @@ void main() {
 			sh_p[lid] += sh_p[lid + s];
 			sh_q[lid] += sh_q[lid + s];
 			sh_a[lid] += sh_a[lid + s];
+			sh_o[lid] += sh_o[lid + s];
 		}
 		memoryBarrierShared();
 		barrier();
@@ -108,6 +114,7 @@ void main() {
 	vec2 q_sum = sh_q[0];
 	vec2 c = c_last + p_sum / live;
 	vec2 c0 = q_sum / live;
+	vec2 o_mean = sh_o[0] / live;
 	// Sums about the centroids: sum (p - P/n).(q - Q/n) = sum p.q - P.Q/n, and likewise for x.
 	vec2 a = sh_a[0] - vec2(dot(p_sum, q_sum), q_sum.x * p_sum.y - q_sum.y * p_sum.x) / live;
 	vec2 rot = frame.zw;
@@ -138,5 +145,9 @@ void main() {
 		vec2 goal = c + vec2(rot.x * q.x - rot.y * q.y, rot.y * q.x + rot.x * q.y);
 		uint t = sorted_of(slot);
 		s_pred[t] += k * (goal - s_pred[t]);
+		// Shape matching spreads a push on a few members over the whole body, so each
+		// member keeps the body's mean (the mean of the last mean plus new pushes adds up
+		// the iterations; velocity_update takes it out).
+		vel[slot] = o_mean;
 	}
 }

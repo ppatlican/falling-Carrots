@@ -77,7 +77,10 @@ float stack_height(uint t, uint body) {
 	return body != 0u ? bodies[body].frame.y : s_pred[t].y;
 }
 
-vec2 contact_delta(uint t) {
+// body_out: the part of the result that pushes a body member away from another body (contacts
+// and push-out, ADR 0003 item 11), for velocity_update, which lets it stop the body but not
+// send it away; 0 for anything else.
+vec2 contact_delta(uint t, out vec2 body_out) {
 	Material mt = materials[s_material(t)];
 	bool t_powder = mt.info.x == CLASS_POWDER;
 	bool t_liquid = mt.info.x == CLASS_LIQUID;
@@ -87,6 +90,7 @@ vec2 contact_delta(uint t) {
 	vec2 move_t = pt - s_pos[t];
 	vec2 sum = vec2(0.0);
 	vec2 nearest_push = vec2(0.0);  // the nearest pair's contact push-out
+	vec2 sum_bodies = vec2(0.0);  // body member t: the part of sum from other bodies
 	vec2 fric = vec2(0.0);
 	float n_near = 0.0;
 	float n_wet = 0.0;
@@ -135,6 +139,9 @@ vec2 contact_delta(uint t) {
 			w = w_push;
 		}
 		sum += w_push * pen * normal;
+		if (t_body != 0u && j_body != 0u) {
+			sum_bodies += w_push * pen * normal;
+		}
 		if (j == nearest) {
 			nearest_push = w_push * pen * normal;
 		}
@@ -164,6 +171,7 @@ vec2 contact_delta(uint t) {
 		sum /= max(n_touch, 1.0);  // liquid: averaged over what it touches (see top)
 	}
 	vec2 out_push = vec2(0.0);
+	body_out = vec2(0.0);
 	if (nearest != 0xFFFFFFFFu) {
 		out_push = push_out(pt, nearest, nearest_body);
 		if (t_body != 0u && dot(out_push, pt - s_pred[nearest]) < 0.0) {
@@ -174,6 +182,7 @@ vec2 contact_delta(uint t) {
 			// stack's corner, dropping the pair whenever the push-out acted tilted the stack
 			// (stack3 0.044 rad).
 			sum -= nearest_push;
+			sum_bodies -= nearest_push;
 		}
 		if (t_body != 0u) {
 			// Body-body (ADR 0003 item 11): each side is pushed out of the other's outline by its
@@ -182,6 +191,7 @@ vec2 contact_delta(uint t) {
 			// ordinary contacts balanced among the interleaved lattices (body_probe boxdrop).
 			out_push *= stack_weight(mt.phys.x, materials[s_material(nearest)].phys.x,
 					t_height - stack_height(nearest, nearest_body));
+			body_out = (sum_bodies + out_push) * params.contact_relax;
 		}
 	}
 	return (sum + fric * (1.0 - params.wet_slip * wet) + out_push) * params.contact_relax;
