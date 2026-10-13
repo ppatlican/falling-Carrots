@@ -26,10 +26,10 @@ The project is already a unified particle solver (SPEC 2.2), which is OE-Cake's 
 | Viscosity is an XSPH blend capped at 1.0, which only averages neighbour velocities | Enough for water and oil; thick liquids (honey, batter) may need a stronger viscosity model. Measure before promising a full range |
 | Solver constants tuned for sand and water (`STACK_K`, `WET_SLIP`, `POWDER_LIQUID_SHARE`, `LIQUID_KICK`, `HYDRO_POWDER_VOL` and `HYDRO_POWDER_FULL`, which assume sand's packing) | They stay global and are not exposed. When a new material or a slider extreme breaks one of their assumptions, the range is narrowed or the constant becomes a column; no material-specific branches in shaders |
 | Sleeping freezes any grain that clings, so cohesion on powders risks permanent mid-air clumps | Cohesion on powders must pass the `erase` and `shaft` probe scenarios; the cap on the cohesion force is what lets clumps break |
-| The density projection grid sees only liquid and powder | Cluster particles must count as displacement in the grid, or water fills bodies and boats don't float (Milestone 3) |
+| The density projection grid sees only liquid and powder | Cluster particles must count as displacement in the grid, or water fills bodies and boats don't float (Milestone 3). Done: ADR 0003 items 1–3 |
 | The GPU material row is 64 bytes: three float vec4s full, and three unused slots in the integer `info` vec4 | New float columns grow the row by a vec4 (to 80 bytes) rather than bit-casting floats into `info`, and need a shader stamp bump (SPEC 2.7) |
 
 ## Not decided
 - Shaking or tilting the container (OE-Cake's signature tool). Turning gravity is cheap since gravity is a shader parameter. Moving the walls needs moving boundaries in the wall density, the static grid and the density projection grid. Deferred until the owner asks.
 - Whether panel edits persist. v1 has no save/load, so edits last the session, with a reset per material.
-- Cutting bodies stays deferred; clusters are bonded so it can be added without redesign (SPEC 2.2).
+- A cutting tool stays deferred (SPEC §9). The eraser splitting a body it leaves in pieces was decided for Milestone 3 by ADR 0004 (owner, 2026-10-13); a cutting tool would reuse that split. (This used to say clusters are bonded; the layout ADR 0002 chose has no bonds, a piece is found from which members touch.)

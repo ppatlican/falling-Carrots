@@ -60,7 +60,7 @@ Memory at the default 50k cap: 400 KB rest offsets, 200 KB member list, 12 KB re
 - **Nothing else changed for liquids and powders:** 50k sand at rest and sand into water (`gpu_probe`) settle as on main the same day. The body rules cost the contact loop 20–70 µs a frame (3–10% of the solve) in sand into water, nothing in sand at rest.
 
 ## Known limits until later steps
-- A body erased in two stays one body until cutting exists: its halves stay linked across the gap.
+- A body erased in two stays one body: its halves stay linked across the gap. To be fixed in Milestone 3 by ADR 0004 (each piece becomes its own body).
 - A 5-box stack offset 2 px per box still drops its top box (CPU, landing from 1 px gaps).
 - **A big body is slow:** the fused pass costs ~0.09 µs per member of the largest body per frame (436–462 µs for one 5000-particle body, 200 × 100 px), on a 3080 Ti. Until the body brush (step 5) caps a body's size, or the pass is split so several workgroups share a body (a reduction pass plus a goal pass per iteration, rejected below on dispatch count before this was measured), a large body costs more than the whole liquid solve.
 - ~~Water fills bodies; grains get into a body on a fast impact~~ (an 8 × 6 box dropped 100 px onto sand ended with 16 grains inside on the GPU): fixed by ADR 0003 (bodies in the density projection grid and in water's PBF density, body–liquid contacts, and the push-out from inside a body); 0 grains and no water inside in the same scenarios.
@@ -79,4 +79,4 @@ Memory at the default 50k cap: 400 KB rest offsets, 200 KB member list, 12 KB re
 - How the body brush turns a drawn shape into members (rest-spacing lattice fill, one body per stroke) and what happens when a stroke is larger than the free pool.
 - ~~Body–liquid coupling (step 4)~~: decided in ADR 0003.
 - Whether body particles count as support (cradling) for sleeping grains. Today only grains and walls do, so sand on a box may keep creeping.
-- Cutting (SPEC 2.2): splitting a member range into two bodies with new ids fits this layout but isn't designed.
+- Splitting a body: decided for the eraser by ADR 0004 (each piece left becomes its own body); a cutting tool stays deferred. Splitting a member range into bodies with new ids fits this layout; how is open (ADR 0004, "Not decided yet").

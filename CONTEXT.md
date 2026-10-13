@@ -110,7 +110,7 @@ The in-game panel of sliders for the selected material's parameters, with copy t
 _Avoid_: Material editor, inspector
 
 **Eraser**:
-The brush's remove mode; the only thing that deletes particles besides gas lifetime.
+The brush's remove mode; the only thing that deletes particles besides gas lifetime. A body it leaves in pieces becomes one body per piece (ADR 0004; not built yet).
 
 **Block fill**:
 A benchmark button that adds a 10k-particle rectangle of one material.
