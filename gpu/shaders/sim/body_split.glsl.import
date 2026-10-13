@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dnwpv2rwywe10"
+path="res://.godot/imported/body_split.glsl-2091a7071de085efad348d73c593a6cf.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/body_split.glsl"
+dest_files=["res://.godot/imported/body_split.glsl-2091a7071de085efad348d73c593a6cf.res"]
+
+[params]
+

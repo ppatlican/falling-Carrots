@@ -1,6 +1,7 @@
 ## CPU reference: cluster solids by shape matching (ADR 0002). Rigid and jelly boxes on
-## the floor, stacked, half erased, spawned into the floor and dropped on a corner; in water
-## (sinking, floating, water kept out) and dropped onto sand (grains kept out), ADR 0003.
+## the floor, stacked, half erased, erased in two (each piece its own body, ADR 0004), spawned
+## into the floor and dropped on a corner; in water (sinking, floating, water kept out) and
+## dropped onto sand (grains kept out), ADR 0003.
 ## Runs at the config.json defaults (2 substeps, 4 iterations). Thresholds come from what
 ## the owner could see: 0.1 px is a tenth of a pixel, and a body moving under 0.5 px/s
 ## shifts by less than a pixel in 2 s.
@@ -9,6 +10,7 @@ extends "res://tests/test_case.gd"
 const MaterialTable = preload("res://cpu_ref/material_table.gd")
 const ParticleStep = preload("res://cpu_ref/particle_step.gd")
 const SimParams = preload("res://core/sim_params.gd")
+const ParticleSim = preload("res://gpu/particle_sim.gd")
 
 const WORLD := Vector2(80, 60)
 const SUBSTEPS := 2
@@ -492,15 +494,134 @@ func test_fast_box_drop_on_a_stack_of_three() -> void:
 	_expect_drop(r)
 
 
-func test_erasing_part_of_a_body_marks_its_outline_stale() -> void:
+func test_erasing_part_of_a_body_works_its_outline_out_again() -> void:
 	_sim()
 	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
 	var a: int = ParticleStep.make_body(state, _box(Vector2(20, 50), 8, 6), _carrot)
 	var b: int = ParticleStep.make_body(state, _box(Vector2(60, 50), 8, 6), _carrot)
-	expect(not state.bodies[a].stale and not state.bodies[b].stale, "new bodies have a fresh outline")
+	var sp := SimParams.SPACING
+	# Row 1, column 1 is inside the box: its way out is 1.5 spacings to the nearest outline.
+	expect(absf(state.edge[9].length() - 1.5 * sp) < 1e-3, "inner member's way out is 1.5 spacings: %.3f" % state.edge[9].length())
+	var b_edge: Vector2 = state.edge[48 + 9]
 	ParticleStep.erase_particles(state, PackedInt32Array([0, 1, 2]))
-	expect(state.bodies[a].stale, "the body that lost members is marked stale")
-	expect(not state.bodies[b].stale, "the other body keeps its outline")
+	# The eraser took the three members above and left of it: it is on the outline now (index 6
+	# after the erase), half a spacing in, out upward toward where the erased members were.
+	var e: Vector2 = state.edge[6]
+	expect(not state.bodies[a].stale and not state.bodies[b].stale, "both bodies have an outline to push out with")
+	expect(absf(e.length() - 0.5 * sp) < 1e-3, "the uncovered member is half a spacing inside the new outline: %.3f" % e.length())
+	expect(e.y < 0.0, "its way out leads up, where the erased members were: %s" % str(e))
+	expect_eq(state.edge[45 + 9], b_edge, "the other body's outline is unchanged")
+
+
+func test_erasing_a_body_in_two_makes_two_bodies() -> void:
+	var sim = _sim()
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var id: int = ParticleStep.make_body(state, _box(Vector2(40, FLOOR), 16, 10), _carrot)
+	for f in 60:
+		_frame(sim, state)
+	var pieces := _erase_middle_columns(state, id)
+	expect_eq(pieces.size(), 2, "bodies left after erasing the middle two columns")
+	if pieces.size() != 2:
+		return
+	expect(pieces.has(id), "one piece keeps the body's id")
+	for p in pieces:
+		expect_eq(_live(state, p).size(), 70, "members of body %d (7 columns x 10 rows)" % p)
+		expect(not state.bodies[p].stale, "body %d has an outline to push out with" % p)
+	# Lift the right piece: it rises on its own, the left one stays on the floor.
+	var left: int = pieces[0] if _fit(state, pieces[0]).c.x < _fit(state, pieces[1]).c.x else pieces[1]
+	var right: int = pieces[1] if left == pieces[0] else pieces[0]
+	var left_start := _fit(state, left)
+	var right_start := _fit(state, right)
+	for m in _live(state, right):
+		state.vel[m] = Vector2(0.0, -120.0)
+	for f in 10:
+		_frame(sim, state)
+	var lf := _fit(state, left)
+	var rf := _fit(state, right)
+	var left_moved: float = lf.c.distance_to(left_start.c)
+	var rise: float = right_start.c.y - rf.c.y
+	_report("box erased in two, right piece lifted: right rose %.2f px, left moved %.4f px and turned %.5f rad, shape errors %.4f / %.4f px"
+			% [rise, left_moved, lf.theta, lf.err, rf.err])
+	expect(rise > 4.0, "the lifted piece rises, > 4 px: %.2f" % rise)
+	expect(left_moved < 0.1, "the other piece stays where it was, < 0.1 px: %.4f" % left_moved)
+	expect(absf(lf.theta) < 0.01, "the other piece stays upright, |rotation| < 0.01 rad: %.4f" % lf.theta)
+	expect(lf.err < 0.1 and rf.err < 0.1, "both pieces keep their shape within 0.1 px: %.4f, %.4f" % [lf.err, rf.err])
+
+
+func test_pieces_keep_the_motion_they_had() -> void:
+	var sim = _sim(Vector2(120, 160))
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	# Two boxes falling side by side; the right one is the control, left whole.
+	var id: int = ParticleStep.make_body(state, _box(Vector2(30, 40), 16, 10), _carrot)
+	var control: int = ParticleStep.make_body(state, _box(Vector2(90, 40), 16, 10), _carrot)
+	for f in 20:
+		_frame(sim, state)
+	var pieces := _erase_middle_columns(state, id)
+	expect_eq(pieces.size(), 2, "bodies left of the erased box")
+	for f in 5:
+		_frame(sim, state)
+	var v := _body_vel(state, control)
+	var cy: float = _fit(state, control).c.y
+	for p in pieces:
+		var fit := _fit(state, p)
+		var dv: float = _body_vel(state, p).distance_to(v)
+		_report("falling box erased in two, piece %d 5 frames after: %.3f px/s off the control's velocity, %.4f px off its height, shape error %.4f px"
+				% [p, dv, absf(fit.c.y - cy), fit.err])
+		expect(dv < 0.5, "piece %d falls as the control does, within 0.5 px/s: %.3f" % [p, dv])
+		expect(absf(fit.c.y - cy) < 0.1, "piece %d is level with the control, within 0.1 px: %.4f" % [p, absf(fit.c.y - cy)])
+		expect(fit.err < 0.1, "piece %d keeps its shape within 0.1 px: %.4f" % [p, fit.err])
+
+
+func test_body_pieces_on_the_rest_lattice() -> void:
+	var sp := SimParams.SPACING
+	var rest := PackedVector2Array()
+	# Three columns on the left, a gap of one column, two on the right, and a lone particle
+	# diagonal to the right piece's corner (connected: diagonals touch).
+	for y in 4:
+		for x in [0, 1, 2, 4, 5]:
+			rest.append(Vector2(x, y) * sp)
+	rest.append(Vector2(6, 4) * sp)
+	var pieces: Array = ParticleStep.body_pieces(rest)
+	expect_eq(pieces.size(), 2, "pieces")
+	if pieces.size() == 2:
+		expect_eq(pieces[0].size(), 12, "the largest piece comes first")
+		expect_eq(pieces[1].size(), 9, "the right piece with its diagonal neighbour")
+
+
+func test_split_plan_for_the_gpu() -> void:
+	var sp := SimParams.SPACING
+	# A 6 x 2 body whose two middle columns were erased (slots 100.., member range 4..15).
+	var rest := PackedVector2Array()
+	var slots := PackedInt32Array()
+	var live := PackedByteArray()
+	for y in 2:
+		for x in 6:
+			rest.append(Vector2(x, y) * sp)
+			slots.append(100 + y * 6 + x)
+			live.append(0 if x == 2 or x == 3 else 1)
+	var bodies := [{"first": 0, "count": 0, "made": 0}, {"first": 0, "count": 4, "made": 1, "rest": PackedVector2Array()},
+			{"first": 4, "count": 12, "made": 1, "rest": rest}]
+	var plan: Dictionary = ParticleSim.plan_split(bodies, 2, slots, live, 8, 1000)
+	expect_eq(plan.count, 8, "one entry per live member")
+	expect_eq(plan.new_ids, PackedInt32Array([3]), "the right piece gets the next free id")
+	expect_eq(bodies[2].count, 4, "the kept piece holds the front of the old range")
+	expect_eq(bodies[3].first, 12, "the new piece's range starts after the 8 members live at the readback")
+	expect_eq(bodies[3].made, ParticleSim.NOT_MADE, "the new piece is made when the split is sent")
+	var e: PackedByteArray = plan.entries
+	expect_eq([e.decode_u32(0), e.decode_u32(4), e.decode_u32(8), e.decode_u32(12)], [100, 2, 2, 4], "first entry: slot, old id, id, member")
+	expect_eq([e.decode_u32(24), e.decode_u32(28)], [4, ParticleSim.SPLIT_FIRST], "it writes the kept piece's record")
+	expect_eq([e.decode_u32(4 * 32), e.decode_u32(4 * 32 + 8), e.decode_u32(4 * 32 + 12)], [104, 3, 12], "the right piece's first entry")
+	# No id left (max id 2): the right piece stays on the old id, with its own outline.
+	bodies = [{"first": 0, "count": 0, "made": 0}, {"first": 0, "count": 4, "made": 1, "rest": PackedVector2Array()},
+			{"first": 4, "count": 12, "made": 1, "rest": rest}]
+	plan = ParticleSim.plan_split(bodies, 2, slots, live, 2, 1000)
+	expect(plan.new_ids.is_empty(), "no new body when no id is free")
+	expect_eq(bodies[2].count, 8, "the piece stays on the old body")
+	e = plan.entries
+	expect_eq(e.decode_u32(28), ParticleSim.SPLIT_FIRST, "one record entry")
+	expect_eq(e.decode_u32(7 * 32 + 8), 2, "the last member keeps the old id")
+	expect(absf(Vector2(e.decode_float(4 * 32 + 16), e.decode_float(4 * 32 + 20)).length() - 0.5 * sp) < 1e-3,
+			"an attached piece still gets its own outline")
 
 
 # --- Helpers -----------------------------------------------------------------------
@@ -554,6 +675,30 @@ func _box(bottom: Vector2, cols: int, rows: int, angle: float = 0.0) -> PackedVe
 		for x in cols:
 			out.append(centre + (Vector2(x, y) * sp - 0.5 * size).rotated(angle))
 	return out
+
+
+## Erases the two columns of a body's rest lattice nearest its centroid (a 16-column box loses
+## columns 7 and 8). Returns the ids of the bodies that hold what is left of it.
+func _erase_middle_columns(state: Dictionary, id: int) -> Array:
+	var live := _live(state, id)
+	var c0 := Vector2.ZERO
+	for m in live:
+		c0 += state.rest[m]
+	c0 /= live.size()
+	var gone := PackedInt32Array()
+	for m in live:
+		if absf(state.rest[m].x - c0.x) < SimParams.SPACING:
+			gone.append(m)
+	var others := {}
+	for b in state.body:
+		if b != id:
+			others[b] = true
+	ParticleStep.erase_particles(state, gone)
+	var ids := []
+	for b in state.body:
+		if not others.has(b) and not ids.has(b):
+			ids.append(b)
+	return ids
 
 
 ## Live members of a body, as the solver counts them.

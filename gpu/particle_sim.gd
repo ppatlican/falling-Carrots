@@ -7,7 +7,8 @@
 ##
 ## Passes per frame, each timed separately in the debug overlay. predict to velocity run
 ## once per substep, with dt = SimParams.DT / substeps (times summed over substeps):
-##   brush     add (spawn + finalize), erase (erase + finalize) or one body (make_body)
+##   brush     a planned body split (body_split, ADR 0004), then add (spawn + finalize),
+##             erase (erase + finalize) or one body (make_body)
 ##   predict   gravity, predicted positions
 ##   hash      clear, count, 3-step prefix sum, scatter (copies state into cell order)
 ##   hydro     liquid density projection grid (splat, density, then all SOR sweeps in one
@@ -37,7 +38,7 @@ const ParticlePool = preload("res://cpu_ref/particle_pool.gd")
 
 const SHADER_DIR := "res://gpu/shaders/sim/"
 const KERNELS := [
-	"brush_spawn", "brush_erase", "brush_finalize", "predict",
+	"body_split", "brush_spawn", "brush_erase", "brush_finalize", "predict",
 	"hash_clear", "hash_count", "scan_local", "scan_blocks", "scan_add", "hash_scatter",
 	"hydro_splat", "hydro_phi", "hydro_solve", "body_sweep", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
 	"body_project", "body_match",
@@ -68,8 +69,14 @@ const BRUSH_BODY := 4
 ## Bytes per body record (Body in common.glslinc), and the offset of its live count.
 const BODY_BYTES := 48
 const BODY_LIVE_OFFSET := 8
+## Offset of a body record's flags (info.w), and its stale-outline flag (BODY_STALE).
+const BODY_FLAGS_OFFSET := 12
+const BODY_STALE := 1
 ## "made" of a body that hasn't spawned yet.
 const NOT_MADE := 1 << 62
+## body_split entry flag: the first entry of a piece, which writes its record. Mirror:
+## SPLIT_FIRST in body_split.glsl.
+const SPLIT_FIRST := 1
 
 ## view_flags bits (VIEW_* in common.glslinc).
 const VIEW_HASH := 1
@@ -102,7 +109,8 @@ var _counter_in_flight := false
 var _clear_pending := false
 var _check: Dictionary = {}
 ## Bodies as the CPU hands them out (ADR 0002): index = body id, 0 unused. Each
-## { "first", "count" (0 = free id), "made" (frame it spawned, NOT_MADE until then) }.
+## { "first", "count" (0 = free id), "made" (frame it spawned, NOT_MADE until then),
+## "rest" (rest offset of each member of the range, for splitting it, ADR 0004) }.
 ## ParticleStep._first_fit allocates member ranges from these, as in the CPU reference.
 var _bodies: Array = []
 ## Bodies waiting to spawn, one per frame: { "id", "material", "spawn" (bytes), "mean", "count" }.
@@ -111,6 +119,19 @@ var _pending_bodies: Array = []
 var _freed_ids := PackedInt32Array()
 var _body_check_wanted := false
 var _body_check_in_flight := false
+## Splitting bodies the eraser cut (ADR 0004): the body records read back after an erase show
+## which bodies lost members (BODY_STALE); their member ranges and every slot's flags are read
+## back next (_split_ids, in flight until _split_data has both), then the split is planned
+## (plan_split) and waits in _pending_split until a frame with no body spawn sends it.
+var _split_ids := PackedInt32Array()
+var _split_in_flight := false
+var _split_data := {}
+## { "entries" (bytes for body_spawn), "count", "new_ids", "read_frame" }, or empty.
+var _pending_split := {}
+## Last frame the eraser ran, and how often bodies were forgotten (request_clear), so a
+## readback from before a clear is dropped.
+var _last_erase_frame := -1
+var _clears := 0
 
 
 func _init(ctx, particle_cap: int, solver_iterations: int, material_table, substeps := 1, max_bodies := 256) -> void:
@@ -238,7 +259,8 @@ func _build_passes_rt() -> void:
 	var pixels := ComputeContext.groups_for(int(SimParams.WORLD_SIZE.x * SimParams.WORLD_SIZE.y))
 	var d := func(k: String, groups: int) -> Array: return [k, k, groups]
 	# Brush dispatch sizes are set per frame (0 = skipped).
-	_ctx.add_pass("brush", [d.call("brush_spawn", 0), d.call("brush_erase", 0), d.call("brush_finalize", 0)])
+	_ctx.add_pass("brush", [d.call("body_split", 0), d.call("brush_spawn", 0), d.call("brush_erase", 0),
+			d.call("brush_finalize", 0)])
 	var hydro := ComputeContext.groups_for(_hydro_cells())
 	var hydro_pass := [d.call("hydro_splat", all), d.call("hydro_phi", hydro), d.call("hydro_solve", 1)]
 	for _s in _substeps:
@@ -289,31 +311,61 @@ func frame(brush: Dictionary, view_flags: int) -> void:
 	if clear:
 		live_count = 0
 	var spawn := PackedByteArray()
+	var split_count := 0
 	if not clear and not _pending_bodies.is_empty():
 		var b: Dictionary = _pending_bodies.pop_front()
 		_bodies[b.id].made = _frame
 		spawn = b.spawn
 		brush = {"op": BRUSH_BODY, "pos": b.mean, "material": b.material | (b.id << 16), "count": b.count,
 				"body_first": _bodies[b.id].first}
-	# Erasing is the only way a body loses members: read the live counts back afterwards
-	# to free the ids and member ranges of bodies erased completely.
-	if brush.op == BRUSH_ERASE and body_count > 0:
+	elif not clear and not _pending_split.is_empty():
+		# A split shares body_spawn with a body spawn, so it waits for a frame without one. The
+		# eraser runs after it in this frame and marks what it cuts again itself.
+		spawn = _pending_split.entries
+		split_count = _pending_split.count
+		spawn.encode_u32(0, split_count)
+		spawn.encode_u32(4, 1 if _last_erase_frame > _pending_split.read_frame else 0)
+		for id in _pending_split.new_ids:
+			_bodies[id].made = _frame
+		_pending_split = {}
+		# Check again: bodies the eraser cut meanwhile are split next, empty ones freed.
 		_body_check_wanted = true
+	# Erasing is the only way a body loses members: read the records back afterwards to free
+	# the ids and member ranges of bodies erased completely and split the ones left in pieces.
+	if brush.op == BRUSH_ERASE:
+		_last_erase_frame = _frame
+		if body_count > 0:
+			_body_check_wanted = true
 	var check_bytes := 0
-	if _body_check_wanted and not _body_check_in_flight:
+	if _body_check_wanted and not _body_check_in_flight and not _split_in_flight and _split_ids.is_empty():
 		_body_check_wanted = false
 		_body_check_in_flight = true
 		check_bytes = (_body_max_id() + 1) * BODY_BYTES
+	# The members of the bodies to split, once no planned split is waiting to be sent.
+	var split_range := Vector2i.ZERO
+	if not _split_ids.is_empty() and not _split_in_flight and _pending_split.is_empty() and not clear:
+		var ids := PackedInt32Array()
+		split_range = Vector2i(cap, 0)
+		for id in _split_ids:
+			if _bodies[id].count > 0:
+				ids.append(id)
+				split_range = Vector2i(mini(split_range.x, _bodies[id].first), maxi(split_range.y, _bodies[id].first + _bodies[id].count))
+		_split_ids = PackedInt32Array()
+		if not ids.is_empty():
+			_split_in_flight = true
+			_split_data = {"ids": ids, "first": split_range.x, "frame": _frame, "clears": _clears}
 	var freed := _freed_ids
 	_freed_ids = PackedInt32Array()
 	RenderingServer.call_on_render_thread(_frame_rt.bind(_push(brush, view_flags), int(brush.op), int(brush.count),
-			float(brush.get("radius", SimParams.BRUSH_RADIUS)), clear, spawn, freed, _body_max_id(), check_bytes, _frame))
+			float(brush.get("radius", SimParams.BRUSH_RADIUS)), clear, spawn, split_count, freed, _body_max_id(),
+			check_bytes, split_range, _frame))
 
 
 ## Empties the pool at the start of the next frame. Bodies are forgotten now, so bodies
 ## made after this call spawn after the clear.
 func request_clear() -> void:
 	_clear_pending = true
+	_clears += 1
 	_reset_bodies()
 
 
@@ -360,6 +412,7 @@ func make_body(positions: PackedVector2Array, material: int, rest_shape := Packe
 	for q in rest_shape:
 		shape.append(q - rest_mean)
 	var out: PackedVector2Array = ParticleStep.rest_outline(shape)
+	_bodies[id].rest = shape
 	var spawn := PackedFloat32Array()
 	spawn.resize(count * 8)
 	for k in count:
@@ -381,6 +434,8 @@ func _reset_bodies() -> void:
 	_bodies = [{"first": 0, "count": 0, "made": 0}]
 	_pending_bodies.clear()
 	_freed_ids = PackedInt32Array()
+	_split_ids = PackedInt32Array()
+	_pending_split = {}
 	body_count = 0
 
 
@@ -392,8 +447,9 @@ func _body_max_id() -> int:
 	return 0
 
 
-func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear: bool,
-		spawn: PackedByteArray, freed: PackedInt32Array, body_groups: int, check_bytes: int, frame_number: int) -> void:
+func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear: bool, spawn: PackedByteArray,
+		split_count: int, freed: PackedInt32Array, body_groups: int, check_bytes: int, split_range: Vector2i,
+		frame_number: int) -> void:
 	if not _gpu_ready:
 		return
 	if clear:
@@ -410,9 +466,10 @@ func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear:
 		_ctx.update_buffer_rt("body_spawn", 0, spawn)
 	# Circle: one thread per lattice spot (brush_spawn.glsl).
 	var spawn_threads := brush_lattice_spots(radius) if op == BRUSH_CIRCLE else count if op == BRUSH_BLOCK or op == BRUSH_BODY else 0
-	_ctx.set_groups_rt("brush", 0, ComputeContext.groups_for(spawn_threads) if spawn_threads > 0 else 0)
-	_ctx.set_groups_rt("brush", 1, ComputeContext.groups_for(cap) if op == BRUSH_ERASE else 0)
-	_ctx.set_groups_rt("brush", 2, 1 if op != BRUSH_NONE else 0)
+	_ctx.set_groups_rt("brush", 0, ComputeContext.groups_for(split_count) if split_count > 0 else 0)
+	_ctx.set_groups_rt("brush", 1, ComputeContext.groups_for(spawn_threads) if spawn_threads > 0 else 0)
+	_ctx.set_groups_rt("brush", 2, ComputeContext.groups_for(cap) if op == BRUSH_ERASE else 0)
+	_ctx.set_groups_rt("brush", 3, 1 if op != BRUSH_NONE else 0)
 	_ctx.set_groups_rt("bodies", 0, body_groups)  # one workgroup per body id
 	_ctx.set_push_all_rt(push)
 	_ctx.record_frame_rt()
@@ -423,23 +480,164 @@ func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear:
 		var err: Error = _ctx.readback_async_rt("bodies", _on_body_records_rt.bind(frame_number), 0, check_bytes)
 		if err != OK:
 			_on_body_records_rt(PackedByteArray(), frame_number)
+	if split_range.y > split_range.x:
+		var e1: Error = _ctx.readback_async_rt("body_members", _on_split_data_rt.bind("members"),
+				split_range.x * 4, (split_range.y - split_range.x) * 4)
+		var e2: Error = _ctx.readback_async_rt("mat_flags", _on_split_data_rt.bind("flags"))
+		if e1 != OK or e2 != OK:
+			_on_split_data_rt(PackedByteArray(), "failed")
 
 
 func _on_body_records_rt(data: PackedByteArray, frame_number: int) -> void:
-	_free_empty_bodies.call_deferred(data, frame_number)
+	_on_body_records.call_deferred(data, frame_number)
 
 
-## Frees the ids and member ranges of bodies whose live count read back 0. The data is
-## from the end of frame frame_number, so a body spawned after that is left alone.
-func _free_empty_bodies(data: PackedByteArray, frame_number: int) -> void:
+## Frees the ids and member ranges of bodies whose live count read back 0, and queues the
+## bodies the eraser cut (BODY_STALE) for a split check. The data is from the end of frame
+## frame_number, so a body spawned after that is left alone.
+func _on_body_records(data: PackedByteArray, frame_number: int) -> void:
 	_body_check_in_flight = false
 	for id in range(1, _bodies.size()):
 		var b: Dictionary = _bodies[id]
-		var at := id * BODY_BYTES + BODY_LIVE_OFFSET
-		if b.count > 0 and b.made <= frame_number and at + 4 <= data.size() and data.decode_u32(at) == 0:
+		var at := id * BODY_BYTES
+		if b.count == 0 or b.made > frame_number or at + BODY_BYTES > data.size():
+			continue
+		if data.decode_u32(at + BODY_LIVE_OFFSET) == 0:
 			b.count = 0
 			_freed_ids.append(id)
 			body_count -= 1
+		elif data.decode_u32(at + BODY_FLAGS_OFFSET) & BODY_STALE and not _split_ids.has(id):
+			_split_ids.append(id)
+
+
+func _on_split_data_rt(data: PackedByteArray, what: String) -> void:
+	_on_split_data.call_deferred(data, what)
+
+
+## Plans the split of the bodies in _split_data once both readbacks are in: one entry per
+## member still live (its slot alive with the body's id), at most cap - 1 (body_spawn holds a
+## header and 2 x cap - 2 entry rows); a body that doesn't fit waits for the next check.
+func _on_split_data(data: PackedByteArray, what: String) -> void:
+	if _split_data.is_empty():
+		return
+	_split_data[what] = data
+	if what != "failed" and not (_split_data.has("members") and _split_data.has("flags")):
+		return
+	var job := _split_data
+	_split_data = {}
+	_split_in_flight = false
+	if what == "failed" or job.clears != _clears or job.flags.size() < cap * 4:
+		return
+	var entries := PackedByteArray()
+	entries.resize(16)  # the header row, filled in when the split is sent
+	var n := 0
+	var new_ids := PackedInt32Array()
+	for id in job.ids:
+		var b: Dictionary = _bodies[id]
+		if b.count == 0:
+			continue
+		var slots := PackedInt32Array()
+		var live := PackedByteArray()
+		var n_live := 0
+		for k in b.count:
+			var at: int = (b.first - job.first + k) * 4
+			var slot: int = job.members.decode_u32(at) if at + 4 <= job.members.size() else cap
+			var flags: int = job.flags.decode_u32(slot * 4) if slot < cap else 0
+			var alive: bool = slot < cap and flags & 0x100 != 0 and flags >> 16 == id
+			slots.append(slot)
+			live.append(1 if alive else 0)
+			n_live += 1 if alive else 0
+		if n_live == 0:
+			continue  # erased whole: the next records check frees it
+		if n + n_live > cap - 1:
+			_split_ids.append(id)
+			continue
+		var plan: Dictionary = plan_split(_bodies, id, slots, live, body_cap, cap)
+		entries.append_array(plan.entries)
+		n += plan.count
+		new_ids.append_array(plan.new_ids)
+		body_count += plan.new_ids.size()
+	if n > 0:
+		_pending_split = {"entries": entries, "count": n, "new_ids": new_ids, "read_frame": job.frame}
+
+
+## Plans one body's split after an erase (ADR 0004), as ParticleStep.split_body does in the CPU
+## reference. slots is its member range as read back, live[k] 1 where slot k still carries the
+## body. The pieces are the live members connected on the rest lattice (ParticleStep.body_pieces).
+## The largest keeps the id and moves to the front of the range; each other piece takes the
+## lowest free id and a member range by first fit, or stays on the old id (and in its range)
+## when none is free. Every piece's outline is worked out again (ParticleStep.rest_outline).
+## Updates bodies (the new ids' "made" is NOT_MADE until the split is sent) and returns
+## { "entries": bytes for body_split.glsl, two vec4 rows per live member, "count", "new_ids" }.
+static func plan_split(bodies: Array, id: int, slots: PackedInt32Array, live: PackedByteArray,
+		max_id: int, member_cap: int) -> Dictionary:
+	var b: Dictionary = bodies[id]
+	var shape := PackedVector2Array()
+	var live_k := PackedInt32Array()
+	for k in slots.size():
+		if live[k] != 0:
+			live_k.append(k)
+			shape.append(b.rest[k])
+	var pieces: Array = ParticleStep.body_pieces(shape)
+	# While the other pieces get their ranges, the old body holds as many members as are live.
+	b.count = live_k.size()
+	var kept := PackedInt32Array()  # indices into live_k, kept piece first
+	var placed := []  # [new id, first, piece] per piece with its own body
+	for p in pieces.size():
+		var piece: PackedInt32Array = pieces[p]
+		if p > 0:
+			var new_id := 1
+			while new_id < bodies.size() and bodies[new_id].count > 0:
+				new_id += 1
+			var first: int = ParticleStep._first_fit(bodies, piece.size())
+			if new_id <= max_id and first + piece.size() <= member_cap:
+				if new_id == bodies.size():
+					bodies.append({})
+				var rest := PackedVector2Array()
+				for k in piece:
+					rest.append(shape[k])
+				bodies[new_id] = {"first": first, "count": piece.size(), "made": NOT_MADE, "rest": rest}
+				placed.append([new_id, first, piece])
+				continue
+		kept.append_array(piece)
+	var kept_rest := PackedVector2Array()
+	for k in kept:
+		kept_rest.append(shape[k])
+	b.count = kept.size()
+	b.rest = kept_rest
+	# Outlines per piece, also for a piece left on the old id.
+	var outline := PackedVector2Array()
+	outline.resize(shape.size())
+	for piece in pieces:
+		var piece_rest := PackedVector2Array()
+		for k in piece:
+			piece_rest.append(shape[k])
+		var out: PackedVector2Array = ParticleStep.rest_outline(piece_rest)
+		for j in piece.size():
+			outline[piece[j]] = out[j]
+	var rows := PackedByteArray()
+	rows.resize(live_k.size() * 32)
+	var count := 0
+	var new_ids := PackedInt32Array()
+	var groups := [[id, b.first, kept]]
+	groups.append_array(placed)
+	for g in groups:
+		var piece: PackedInt32Array = g[2]
+		if g[0] != id:
+			new_ids.append(g[0])
+		for j in piece.size():
+			var k: int = piece[j]
+			var at := count * 32
+			rows.encode_u32(at, slots[live_k[k]])
+			rows.encode_u32(at + 4, id)
+			rows.encode_u32(at + 8, g[0])
+			rows.encode_u32(at + 12, g[1] + j)
+			rows.encode_float(at + 16, outline[k].x)
+			rows.encode_float(at + 20, outline[k].y)
+			rows.encode_u32(at + 24, piece.size())
+			rows.encode_u32(at + 28, SPLIT_FIRST if j == 0 else 0)
+			count += 1
+	return {"entries": rows, "count": count, "new_ids": new_ids}
 
 
 ## Circle brush threads: the rest-spacing lattice over the brush's bounding square

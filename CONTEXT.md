@@ -94,6 +94,10 @@ _Avoid_: Hull, boundary (for the shape)
 The part of a body's outline that liquid touches. The liquid's pressure presses on it, which floats light bodies and lets heavy ones sink slower; a body with no wet surface feels no pressure.
 _Avoid_: Submerged part
 
+**Piece**:
+A group of a body's particles that still touch each other in its rest shape (neighbours within 1.5 spacings, diagonals included) after the eraser took some. A body left in two or more pieces is split: each piece becomes its own body, the largest keeping the id (ADR 0004).
+_Avoid_: Fragment, island, shard
+
 **Body cap**:
 The most bodies at once (`body_cap` in `config.json`). When every body id is in use, the body brush makes nothing.
 
@@ -110,7 +114,7 @@ The in-game panel of sliders for the selected material's parameters, with copy t
 _Avoid_: Material editor, inspector
 
 **Eraser**:
-The brush's remove mode; the only thing that deletes particles besides gas lifetime. A body it leaves in pieces becomes one body per piece (ADR 0004; not built yet).
+The brush's remove mode; the only thing that deletes particles besides gas lifetime. A body it leaves in pieces becomes one body per piece (ADR 0004).
 
 **Block fill**:
 A benchmark button that adds a 10k-particle rectangle of one material.

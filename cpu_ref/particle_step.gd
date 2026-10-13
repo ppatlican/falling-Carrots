@@ -598,26 +598,11 @@ static func _new_body(first: int, count: int, centroid: Vector2) -> Dictionary:
 ## calls this.
 static func rest_outline(rest: PackedVector2Array) -> PackedVector2Array:
 	var sp := SimParams.SPACING
-	var reach := 1.5 * sp
 	var n := rest.size()
-	var cells := {}
-	for k in n:
-		var key := Vector2i((rest[k] / reach).floor())
-		if not cells.has(key):
-			cells[key] = PackedInt32Array()
-		cells[key].append(k)
-	var nbs := []
+	var nbs := _rest_neighbours(rest)
 	var mean := Vector2.ZERO
 	for k in n:
 		mean += rest[k]
-		var list := PackedInt32Array()
-		var c := Vector2i((rest[k] / reach).floor())
-		for dy in range(-1, 2):
-			for dx in range(-1, 2):
-				for m in cells.get(c + Vector2i(dx, dy), PackedInt32Array()):
-					if m != k and rest[k].distance_squared_to(rest[m]) < reach * reach:
-						list.append(m)
-		nbs.append(list)
 	mean /= maxi(n, 1)
 	# Outline point of each boundary member; -1 marks an inner member.
 	var point := PackedVector2Array()
@@ -656,10 +641,123 @@ static func rest_outline(rest: PackedVector2Array) -> PackedVector2Array:
 	return out
 
 
+## Per member of a rest shape, the members within 1.5 spacings of it: its neighbours on the
+## rest lattice, diagonals included. A member with all 8 is inside the shape.
+static func _rest_neighbours(rest: PackedVector2Array) -> Array:
+	var reach := 1.5 * SimParams.SPACING
+	var n := rest.size()
+	var cells := {}
+	for k in n:
+		var key := Vector2i((rest[k] / reach).floor())
+		if not cells.has(key):
+			cells[key] = PackedInt32Array()
+		cells[key].append(k)
+	var nbs := []
+	for k in n:
+		var list := PackedInt32Array()
+		var c := Vector2i((rest[k] / reach).floor())
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				for m in cells.get(c + Vector2i(dx, dy), PackedInt32Array()):
+					if m != k and rest[k].distance_squared_to(rest[m]) < reach * reach:
+						list.append(m)
+		nbs.append(list)
+	return nbs
+
+
+## The pieces of a rest shape (ADR 0004): groups of members connected through neighbours on
+## the rest lattice (within 1.5 spacings, diagonals included, as rest_outline counts them).
+## Returns one PackedInt32Array of indices into rest per piece, the largest first (ties: the
+## piece holding the lower index first).
+static func body_pieces(rest: PackedVector2Array) -> Array:
+	var nbs := _rest_neighbours(rest)
+	var piece_of := PackedInt32Array()
+	piece_of.resize(rest.size())
+	piece_of.fill(-1)
+	var pieces := []
+	for k in rest.size():
+		if piece_of[k] >= 0:
+			continue
+		var piece := PackedInt32Array([k])
+		piece_of[k] = pieces.size()
+		var head := 0
+		while head < piece.size():
+			for m in nbs[piece[head]]:
+				if piece_of[m] < 0:
+					piece_of[m] = pieces.size()
+					piece.append(m)
+			head += 1
+		piece.sort()
+		pieces.append(piece)
+	pieces.sort_custom(func(a: PackedInt32Array, b: PackedInt32Array) -> bool:
+		return a.size() > b.size() or (a.size() == b.size() and a[0] < b[0]))
+	return pieces
+
+
+## Splits a body into one body per piece (ADR 0004; the eraser calls it on every body it cut).
+## The largest piece keeps the id; each other piece takes the lowest free id and a member range
+## by first fit, and the body's frame, reference pressure and wet flag, so it moves on as it
+## was. Rest offsets stay as they are (the rest centroid is the live members', ADR 0002 item
+## 5); every piece's outline is worked out again (rest_outline), which clears the stale flag.
+## Returns the ids of the new bodies (empty when the body is in one piece).
+static func split_body(state: Dictionary, id: int) -> PackedInt32Array:
+	var body: PackedInt32Array = state.body
+	var rest: PackedVector2Array = state.rest
+	var edge: PackedVector2Array = state.edge
+	var bodies: Array = state.bodies
+	var members: PackedInt32Array = state.members
+	var b: Dictionary = bodies[id]
+	var live := PackedInt32Array()
+	var shape := PackedVector2Array()
+	for k in range(b.first, b.first + b.count):
+		if body[members[k]] == id:
+			live.append(members[k])
+			shape.append(rest[members[k]])
+	var pieces := body_pieces(shape)
+	var made := PackedInt32Array()
+	for p in pieces.size():
+		var piece: PackedInt32Array = pieces[p]
+		var piece_rest := PackedVector2Array()
+		for k in piece:
+			piece_rest.append(shape[k])
+		var out := rest_outline(piece_rest)
+		for j in piece.size():
+			edge[live[piece[j]]] = out[j]
+		if p == 0:
+			# The largest piece keeps the id and the front of the range; the rest of the range is
+			# free for the new pieces.
+			for j in piece.size():
+				members[b.first + j] = live[piece[j]]
+			b.count = piece.size()
+			b.live = b.count
+			b.stale = false
+			continue
+		var new_id := 1
+		while new_id < bodies.size() and bodies[new_id].count > 0:
+			new_id += 1
+		var first := _first_fit(bodies, piece.size())
+		if new_id == bodies.size():
+			bodies.append({})
+		if members.size() < first + piece.size():
+			members.resize(first + piece.size())
+		for j in piece.size():
+			var m := live[piece[j]]
+			members[first + j] = m
+			body[m] = new_id
+		var nb := _new_body(first, piece.size(), b.centroid)
+		for key in ["rot", "rest_centroid", "p_ref", "wet"]:
+			nb[key] = b[key]
+		bodies[new_id] = nb
+		made.append(new_id)
+	state.members = members
+	return made
+
+
 ## Removes particles (the eraser) and remaps the member lists and ranges, so what is left of
 ## a body keeps matching its own shape. A body left with no members frees its id and range.
-## A body that loses members has a stale outline (ADR 0003 item 10): the push-out skips it, as
-## brush_erase.glsl marks it on the GPU.
+## A body that loses members is split into one body per piece left (split_body, ADR 0004),
+## which also works its outline out again. (On the GPU the eraser marks the outline stale and
+## the split follows a few frames later, ParticleSim._split_bodies.)
 static func erase_particles(state: Dictionary, indices: PackedInt32Array) -> void:
 	_ensure_body_keys(state)
 	var n: int = state.pos.size()
@@ -695,6 +793,9 @@ static func erase_particles(state: Dictionary, indices: PackedInt32Array) -> voi
 		b.count = members.size() - first
 		b.live = b.count
 	state.members = members
+	for id in range(1, bodies.size()):
+		if bodies[id].stale and bodies[id].count > 0:
+			split_body(state, id)
 
 
 static func _ensure_body_keys(state: Dictionary) -> void:

@@ -72,6 +72,19 @@
 ##   boxstack as boxhigh onto a stack of three 16x10 carrots: the top one stays on, the stack
 ##            stays standing (lower boxes under 0.05 rad at the end)
 ##            All box scenarios print the largest |rotation| any box reached (the impact tilt).
+##   erasemid a 16x10 carrot at rest on the floor, at frame 61 a 10 px eraser at its centroid
+##            (it takes a lens of 4 to 10 columns), 240 frames: the two parts left become two
+##            bodies (ADR 0004; how many frames that takes), each with its record's live count,
+##            a fresh outline (no BODY_STALE), its shape, and no kick (largest speed after the
+##            erase, at rest at the end)
+##   erasejelly the same with a 16x10 jelly (stiffness 0.3; shape within 2 px, its sag is ~1 px)
+##   erasebridge a 30x5 carrot plank laid on two 4x12 pillars under its ends, its middle erased
+##            at frame 61 (8 px eraser), 300 frames: each half, now held at its outer end only,
+##            tips into the gap (|rotation| over 0.3 rad, centroid down over 5 px). Held as one
+##            body, the plank stayed level on the pillars
+##   erasedrag the 16x10 carrot, an eraser of 6 px dragged down through its middle from frame 61,
+##            3 px a frame for 20 frames (a split while the stroke goes on): two bodies at the
+##            end, fresh outlines, shapes, at rest
 ##   reuse    two 8x6 boxes; the first erased whole at frame 60, a new box made at frame 90:
 ##            the erased body's id and member range are freed and the new box gets them
 ##            (ParticleSim frees a body when its live count reads back 0), 200 frames
@@ -265,6 +278,20 @@ func _start(name: String) -> void:
 		"erase":
 			sc.hold = 120
 			_body(_box(Vector2(X, FLOOR - 6.0), 10, 6), carrot)
+		"erasemid", "erasejelly", "erasedrag":
+			sc.hold = 60
+			sc.target = _body(_box(Vector2(X, FLOOR), 16, 10), jelly if name == "erasejelly" else carrot)
+			sc.split_at = -1
+			sc.max_after = 0.0
+		"erasebridge":
+			sc.frames = 300
+			sc.hold = 60
+			sc.split_at = -1
+			# Pillars under the plank's ends; the plank's bottom row a spacing above their tops.
+			var sp := SimParams.SPACING
+			_body(_box(Vector2(X - 26.0, FLOOR), 4, 12), carrot)
+			_body(_box(Vector2(X + 26.0, FLOOR), 4, 12), carrot)
+			sc.target = _body(_box(Vector2(X, FLOOR - 12.0 * sp), 30, 5), carrot)
 		"spawnin":
 			sc.frames = 120
 			sc.peak_up = 0.0
@@ -429,6 +456,11 @@ func _scenario_brush(brush: Dictionary) -> void:
 		elif frame_i == 90:
 			sc.new_id = _body(_box(Vector2(X - 40.0, FLOOR), 8, 6), carrot)  # spawns in this frame
 			sc.new_first = sim._bodies[sc.new_id].first
+	elif sc.name in ["erasemid", "erasejelly", "erasebridge"] and frame_i == sc.hold + 1:
+		brush.merge({"op": ParticleSim.BRUSH_ERASE, "pos": sc.erase_at, "radius": 8.0 if sc.name == "erasebridge" else 10.0}, true)
+	elif sc.name == "erasedrag" and frame_i > sc.hold and frame_i <= sc.hold + 20:
+		var k: int = frame_i - sc.hold - 1
+		brush.merge({"op": ParticleSim.BRUSH_ERASE, "pos": sc.erase_at + Vector2(0.0, -30.0 + 3.0 * k), "radius": 6.0}, true)
 	elif sc.name == "erase" and frame_i == sc.hold + 1:
 		# The eraser's edge runs through the centroid: it takes the columns left of it.
 		var r := 200.0
@@ -492,6 +524,8 @@ func _sample(f: int, b: Dictionary) -> void:
 				_result("half-erased box: %d live members (record %d), 120 frames after: shape error %.5f px, sideways drift %.4f px, rotation %.5f rad"
 						% [bodies[1].pos.size(), live, fit.err, sc.max_drift, fit.theta],
 						live == 30 and bodies[1].pos.size() == 30 and fit.err < 0.1 and sc.max_drift < 0.5 and absf(fit.theta) < 0.01)
+		"erasemid", "erasejelly", "erasebridge", "erasedrag":
+			_sample_split(f, b, bodies)
 		"spawnin":
 			var v := _mean_vel(bodies[1])
 			sc.peak_up = maxf(sc.peak_up, -v.y)
@@ -694,6 +728,56 @@ func _sample(f: int, b: Dictionary) -> void:
 						% [sc.name, bodies.size(), max_err, max_speed], bodies.size() == sc.ids.size() and max_err < 0.1)
 	if f == sc.frames:
 		_finish()
+
+
+## The erase-split scenarios: the target body's pieces are the ids other than the ones made
+## at the start besides it (the bridge's pillars).
+func _sample_split(f: int, b: Dictionary, bodies: Dictionary) -> void:
+	var pieces := []
+	for id in bodies:
+		if id == sc.target or not sc.ids.has(id):
+			pieces.append(id)
+	if f == sc.hold:
+		sc.erase_at = _fit(bodies[sc.target]).c
+		sc.start_y = sc.erase_at.y
+		waiting = false
+		return
+	if f <= sc.hold:
+		return
+	if sc.split_at < 0 and pieces.size() >= 2:
+		sc.split_at = f - sc.hold - 1
+	if sc.name != "erasebridge":
+		for id in pieces:
+			sc.max_after = maxf(sc.max_after, _mean_vel(bodies[id]).length())
+	if f != sc.frames:
+		return
+	var stale := 0
+	var records_ok := true
+	var err := 0.0
+	var speed := 0.0
+	var sizes := []
+	var turns := []
+	var drops := []
+	for id in pieces:
+		var at: int = id * ParticleSim.BODY_BYTES
+		var live: int = b.bodies.decode_u32(at + ParticleSim.BODY_LIVE_OFFSET)
+		stale += 1 if b.bodies.decode_u32(at + ParticleSim.BODY_FLAGS_OFFSET) & ParticleSim.BODY_STALE else 0
+		records_ok = records_ok and live == bodies[id].pos.size()
+		var fit := _fit(bodies[id])
+		err = maxf(err, fit.err)
+		speed = maxf(speed, _mean_vel(bodies[id]).length())
+		sizes.append(bodies[id].pos.size())
+		turns.append(snappedf(fit.theta, 0.001))
+		drops.append(snappedf(fit.c.y - sc.start_y, 0.01))
+	var line := "%s: %d bodies left of the erased one (ids %s, members %s), split seen %d frames after the erase; records' live counts match %s, stale outlines %d; max shape error %.4f px, rotations %s rad, centroids down %s px, speed at the end %.3f px/s" % [
+			sc.name, pieces.size(), str(pieces), str(sizes), sc.split_at, records_ok, stale, err, str(turns), str(drops), speed]
+	var ok: bool = pieces.size() == 2 and records_ok and stale == 0
+	if sc.name == "erasebridge":
+		ok = ok and absf(turns[0]) > 0.3 and absf(turns[1]) > 0.3 and drops[0] > 5.0 and drops[1] > 5.0 and err < 0.1
+	else:
+		line += ", largest piece speed after the erase %.3f px/s" % sc.max_after
+		ok = ok and err < (2.0 if sc.name == "erasejelly" else 0.1) and speed < REST_SPEED
+	_result(line, ok)
 
 
 func _result(line: String, ok: bool) -> void:
