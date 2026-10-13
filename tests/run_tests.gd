@@ -1,6 +1,9 @@
 ## Minimal headless test runner (no framework).
 ## Runs every test_*() method in every res://tests/test_*.gd file.
-## Usage: godot --headless --path <project> --script res://tests/run_tests.gd
+## Usage: godot --headless --path <project> --script res://tests/run_tests.gd [-- names...]
+## With names after --, runs only the files (test_bodies.gd) and methods
+## (test_cork_pressed_into_wet_sand_rises) named: the full suite takes 10+ min, mostly the
+## water-body tests, so after a narrow change run only the tests it can affect.
 ## Exit code 0 when all pass, 1 otherwise.
 extends SceneTree
 
@@ -10,6 +13,7 @@ const TEST_DIR := "res://tests/"
 func _initialize() -> void:
 	var passed := 0
 	var failed := 0
+	var only := OS.get_cmdline_user_args()
 	for file in _test_files():
 		var script: GDScript = load(TEST_DIR + file)
 		if script == null or not script.can_instantiate():
@@ -19,6 +23,8 @@ func _initialize() -> void:
 		for method in script.get_script_method_list():
 			var name: String = method.name
 			if not name.begins_with("test_"):
+				continue
+			if not only.is_empty() and not only.has(name) and not only.has(file):
 				continue
 			var test = script.new()
 			test.call(name)

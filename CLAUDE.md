@@ -45,6 +45,10 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
   What passes: one literal Godot call per command (chained with `;` or `&&`); `cp -r` over an explicit list of top-level entries; the Write tool for new or rewritten files; one `python3 - <<'EOF'` per command for multi-file edits; `until <check>; do sleep 5; done` to wait. To read a file from another branch, use `git show <ref>:<path> > <tmp file>` from the worktree.
 
+### Running tests
+- CPU tests: `--headless --script res://tests/run_tests.gd -- <files or test methods>` runs only those. The full suite takes 10+ min (the CPU reference is GDScript); run it once before the final commit if the change is broad, otherwise only the affected tests. How long each kind of run takes, and how to keep it short: `docs/agents/gpu-probe.md`, "How long runs take".
+- GPU probes: pass `--disable-vsync` (a third faster, same results).
+
 ### GDScript pitfalls seen here
 - `var x := untyped_call()` fails to parse when the value has no static type. Write `var x: float = ...`.
 - Overriding `_process` on a `SceneTree` script must match the parent signature, `-> bool`.

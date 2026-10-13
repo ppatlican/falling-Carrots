@@ -1039,6 +1039,20 @@ static func body_wet_face(d: Vector2, h: float, spacing: float) -> Vector2:
 	return d / r * w / (1.0 + sqrt(2.0))
 
 
+## Liquid in the grid at x, over rest: bilinear over the cells' liquid channel
+## (body_liquid_fill in solve_pressure.glsl).
+func _body_liquid_fill(x: Vector2, phi: PackedVector4Array) -> float:
+	var size := hydro_size(world_size)
+	var gc := x / hydro_cell_size() - Vector2(0.5, 0.5)
+	var c0 := Vector2i(gc.floor())
+	var f := gc - Vector2(c0)
+	var v := PackedFloat32Array()
+	for k in 4:
+		var c := (c0 + Vector2i(k & 1, k >> 1)).clamp(Vector2i.ZERO, size - Vector2i.ONE)
+		v.append(phi[c.y * size.x + c.x].x)
+	return lerpf(lerpf(v[0], v[1], f.x), lerpf(v[2], v[3], f.x), f.y)
+
+
 ## Grid pressure at x for a body's surface (body_p_sample): the bilinear sample, continued
 ## hydrostatically below the last row of cell centres, where the sample alone stops growing.
 func _body_p_sample(x: Vector2, phi: PackedVector4Array, p: PackedFloat32Array) -> float:
@@ -1050,9 +1064,16 @@ func _body_p_sample(x: Vector2, phi: PackedVector4Array, p: PackedFloat32Array) 
 ## Position change this step of body particle i from the liquid's pressure on its wet surface
 ## (ADR 0003 item 4): p at the body's outline on the liquid side, over the body's reference
 ## pressure, pressing on its wet face (body_wet_face), over the body's mass per particle
-## (density x spacing^2, water being 1). Within 1.5 spacings of the floor, a particle of a body
-## that was wet last substep also counts the floor below it as a face of liquid (water seeps
-## under it), so a light body on the floor of a pool rises.
+## (density x spacing^2, water being 1). Within 1.5 spacings of the floor or a side wall, a
+## particle of a body that was wet last substep also counts the floor or wall as a face of
+## liquid (water seeps between them), so a light body on the floor of a pool rises, and one
+## against a wall isn't pushed into it, where the wall's friction holds it.
+## Under water the whole face is wet, whatever touches it: a boundary member of a body that was
+## wet last substep, not touching another body, takes its outline face (its way out turned by
+## the body's rotation, over half a spacing: 1 on a flat face, sqrt(2) at a corner) as wet where
+## the grid holds liquid at its outline point (BODY_PORE_WET) and a pressure over 0, if that is
+## larger than its liquid neighbours' face. So a cork pressed into a sand bed under water, with
+## grains under it, not water particles, rises (ADR 0003 item 15). Such a face keeps the body wet.
 ## Also gives the body's reference pressure for the next substep (p_min, which the body pass
 ## moves to p_ref): the lowest p over its wet particles (INF if none) and over its bare
 ## boundary members (nothing but its own body within 1.5 spacings, away from the walls), each
@@ -1071,30 +1092,49 @@ func _body_pressure_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Arra
 	var sp := SimParams.SPACING
 	var g := Vector2.ZERO
 	var touching := false
+	var on_body := false
 	for j in nb:
 		if body[j] == body[i]:
 			continue
 		if pred[i].distance_squared_to(pred[j]) < 2.25 * sp * sp:
 			touching = true
+			on_body = on_body or body[j] != 0
 		if _class(mat[j]) == LIQUID:
 			g += body_wet_face(pred[j] - pred[i], SimParams.H, sp)
 	var x := pred[i]
+	var was_wet: bool = b.get("wet", false)
+	var r: Vector2 = b.rot
+	var e := Vector2(r.x * edge[i].x - r.y * edge[i].y, r.y * edge[i].x + r.x * edge[i].y)
+	var boundary := edge[i].length() < 0.75 * sp
 	var wet := g.length() > 1e-6
-	var pw := 0.0
+	var pw := _body_p_sample(x + 0.5 * sp * g.normalized(), phi, p) if wet else 0.0
+	# Under water the whole face is wet, whatever touches it (between grains, or a void).
+	var face := e / (0.5 * sp)
+	if was_wet and boundary and not on_body and g.length() < face.length() \
+			and _body_liquid_fill(x + e, phi) >= SimParams.BODY_PORE_WET:
+		var pf := _body_p_sample(x + 0.5 * sp * face.normalized(), phi, p)
+		if pf > 0.0:
+			g = face
+			pw = pf
+			wet = true
 	if wet:
-		pw = _body_p_sample(x + 0.5 * sp * g.normalized(), phi, p)
 		b.wet_now = true
 	var ref := pw if wet else INF
 	var at_wall := x.x < 1.5 * sp or x.y < 1.5 * sp or x.x > world_size.x - 1.5 * sp or x.y > world_size.y - 1.5 * sp
-	if not touching and not at_wall and edge[i].length() < 0.75 * sp:
+	if not touching and not at_wall and boundary:
 		# A bare boundary member: the grid's p at its outline point, 0 out of the water.
-		var r: Vector2 = b.rot
-		var e := Vector2(r.x * edge[i].x - r.y * edge[i].y, r.y * edge[i].x + r.x * edge[i].y)
 		ref = minf(ref, _body_p_sample(x + e, phi, p))
 	b.p_min = minf(b.p_min if b.get("p_min") != null else INF, ref)
-	if x.y >= world_size.y - 1.5 * sp and b.get("wet", false):
-		g.y = maxf(g.y, 1.0)
-		pw = maxf(pw, _body_p_sample(Vector2(x.x, world_size.y), phi, p))
+	if was_wet:
+		if x.y >= world_size.y - 1.5 * sp:
+			g.y = maxf(g.y, 1.0)
+			pw = maxf(pw, _body_p_sample(Vector2(x.x, world_size.y), phi, p))
+		if x.x <= 1.5 * sp:
+			g.x = minf(g.x, -1.0)
+			pw = maxf(pw, _body_p_sample(Vector2(0.0, x.y), phi, p))
+		if x.x >= world_size.x - 1.5 * sp:
+			g.x = maxf(g.x, 1.0)
+			pw = maxf(pw, _body_p_sample(Vector2(world_size.x, x.y), phi, p))
 	if g.length() <= 1e-6:
 		return Vector2.ZERO
 	return -maxf(pw - b.get("p_ref", 0.0), 0.0) * g * dt * dt / (materials[mat[i]].density * sp)

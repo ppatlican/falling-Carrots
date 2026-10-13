@@ -316,9 +316,47 @@ func test_submerged_body_keeps_its_reference_pressure() -> void:
 			frames += 1
 	_report("cork box rising from the floor of a 36 px pool, 90 frames: lowest p_ref %.0f over %d frames well under water (floor value %.0f)"
 			% [lowest, frames, SimParams.GRAVITY * SimParams.BODY_SURFACE_DROP])
-	expect(frames > 30, "the cork stays well under water for over 30 frames: %d" % frames)
+	# Enough frames under water to see p_ref (30 since its whole bottom face is wet, item 15,
+	# which lifts it faster; 31+ before).
+	expect(frames >= 20, "the cork stays well under water for at least 20 frames: %d" % frames)
 	expect(lowest > 1.5 * SimParams.GRAVITY * SimParams.BODY_SURFACE_DROP,
 			"under water, p_ref stays the pressure at the cork's top, over 1.5 x the floor value: %.0f" % lowest)
+
+
+## ADR 0003 item 15: a cork pressed into a sand bed under water rises. Its bottom and lower
+## sides touch grains, not water particles; counting only liquid neighbours as its wet face it
+## had no lift and stayed in the bed (the owner's report: 10k sand, 10 corks, 20k water, and
+## some corks never came up; body_probe sandcorks, 7 of 10 stayed down).
+func test_cork_pressed_into_wet_sand_rises() -> void:
+	var world := Vector2(64, 60)
+	var sim = _sim(world)
+	var sp := SimParams.SPACING
+	var cols := 31
+	var mid := 0.5 * (cols - 1)
+	var x0 := 0.5 * (world.x - (cols - 1) * sp)
+	var bed_rows := 8
+	var sunk := 3  # rows of the bed the cork sits in
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	for r in 18:
+		for c in cols:
+			var in_cork := absf(c - mid) < 4.0 and r >= bed_rows - sunk and r < bed_rows - sunk + 6
+			if in_cork:
+				continue
+			state.pos.append(Vector2(x0 + c * sp, _floor_y(world) - r * sp))
+			state.vel.append(Vector2.ZERO)
+			state.material.append(_sand if r < bed_rows else _water)
+	var bottom := _floor_y(world) - (bed_rows - sunk) * sp
+	var id: int = ParticleStep.make_body(state, _box(Vector2(world.x * 0.5, bottom), 8, 6), _cork)
+	var start := _lowest(state, id)
+	# Small and short (~80 s; 47 columns, 24 rows and 300 frames took ~150 s): the CPU
+	# reference runs in GDScript. Before item 15: -0.7 px, draft 2.05; after: 8.6 px, 0.97.
+	for f in 180:
+		_frame(sim, state)
+	var risen := start - _lowest(state, id)
+	_report("8x6 cork pressed 3 rows into a sand bed under 14 px of water, 180 frames: risen %.1f px, draft %.2f"
+			% [risen, _draft(state, id)])
+	expect(risen > 5.0, "the cork leaves the bed and rises: %.1f px" % risen)
+	expect(_draft(state, id) < 1.2, "the cork reaches the surface: draft %.2f" % _draft(state, id))
 
 
 ## ADR 0003 known limit: water's pressure pushes act on a body's wet particles only, relative to

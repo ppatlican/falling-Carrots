@@ -27,15 +27,39 @@ vec2 body_wet_face(vec2 d) {
 	return d / r * w / (1.0 + sqrt(2.0));
 }
 
+// Liquid in the density projection grid at x, over rest (bilinear over the cells' liquid
+// channel, as hydro_powder_fill reads the powder one).
+float body_liquid_fill(vec2 x) {
+	ivec2 size = hydro_size();
+	vec2 gc = x / hydro_cell_size() - 0.5;
+	ivec2 c0 = ivec2(floor(gc));
+	vec2 f = gc - vec2(c0);
+	float v[4];
+	for (int k = 0; k < 4; k++) {
+		ivec2 c = clamp(c0 + ivec2(k & 1, k >> 1), ivec2(0), size - ivec2(1));
+		v[k] = hydro_phi[hydro_index(c)].x;
+	}
+	return mix(mix(v[0], v[1], f.x), mix(v[2], v[3], f.x), f.y);
+}
+
+// Liquid fill (body_liquid_fill) at a wet body's outline point from which that face is under
+// water, between grains or in a void, even with no water particle on it. A dry bed reads 0;
+// the saturated bed under a pool 0.02-0.26 of a cell, since the grains take up most of the
+// pores. Mirror: SimParams.BODY_PORE_WET.
+const float BODY_PORE_WET = 0.02;
+
 // Position change of body particle t from the liquid's pressure on its wet surface (ADR 0003
 // item 4): p at the body's outline on the liquid side, over the body's reference pressure,
 // pressing on its wet face g (body_wet_face summed over its liquid neighbours), over the
 // body's mass per particle (density x spacing^2, water being 1). Summed over a body this is
 // the pressure over its wet surface: a submerged body is pushed up by the weight of the water
 // it displaces, a dry one by nothing, a floating one only below its waterline. Pressure under
-// p_ref pushes nothing. Within 1.5 spacings of the floor, a particle of a body that was wet last
-// substep also counts the floor below it as a face of liquid (water seeps under it), so a light
-// body on the floor of a pool rises.
+// p_ref pushes nothing. Within 1.5 spacings of the floor or a side wall, a particle of a body
+// that was wet last substep also counts the floor or wall as a face of liquid (water seeps
+// between them), so a light body on the floor of a pool rises, and one against a wall isn't
+// pushed into it by the water on its other side: the wall's friction (solve_apply) then held
+// it, and two corks on the floor by the walls of a sand-and-water tank stayed there (body_probe
+// sandcorks).
 // It also gives the body its reference pressure for the next substep (atomicMin of the float's
 // bits into p_min, which body_match moves to p_ref): the lowest p over its wet particles and
 // over its bare boundary members (its way out, rest_offset.zw, half a spacing long; nothing but
@@ -49,44 +73,77 @@ vec2 body_wet_face(vec2 d) {
 // grid, not 0: poured water is full of small voids, and a 16 x 10 cork on the floor of a 270 px
 // pool had one beside some member nearly every substep; p_ref went to 0, the pushes on every
 // face hit the cap and cancelled, and it stayed on the floor (body_probe pourfloor, pourdrop).
+// Under water the whole face is wet, whatever touches it: a boundary member of a body that was
+// wet last substep, not touching another body, takes its outline face as wet where the grid
+// holds liquid at its outline point (BODY_PORE_WET) and a pressure over 0, if that face is
+// larger than the one its liquid neighbours give. The face is its way out of the rest shape,
+// turned by the body's rotation, over half a spacing: 1 on a flat face and sqrt(2) along a
+// corner's diagonal, as body_wet_face reads them. Counting only liquid neighbours, ten corks
+// dropped onto 10k sand and covered by 20k water had grains, not water, under their bottoms,
+// no lift, and six to eight stayed on the bed (body_probe sandcorks); counting the grains
+// touching them as well, the push was 0.45-0.6 of their buoyancy, since grains and the water
+// between them leave gaps, and a cork lifted off the grains lost its bottom's push. Such a face
+// also keeps the body wet. A dry bed, which the grid gives a hydrostatic pressure but no pore
+// water, pushes nothing; a face reading 0 (the grid's air) is left dry, or it took p_ref to 0.
 // Mirror: ParticleStep._body_pressure_delta.
 vec2 body_pressure_delta(uint t, uint body) {
 	float sp = params.spacing;
 	vec2 x = s_pred[t];
 	vec2 g = vec2(0.0);
 	bool touching = false;
+	bool on_body = false;
 	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
 		if (j == t || s_body(j) == body) continue;
 		vec2 rv = x - s_pred[j];
 		if (dot(rv, rv) < 2.25 * sp * sp) {
 			touching = true;
+			on_body = on_body || s_body(j) != 0u;
 		}
 		if (s_class(j) == CLASS_LIQUID) {
 			g += body_wet_face(-rv);
 		}
 	} END_NEIGHBOURS
+	bool was_wet = (bodies[body].info.w & BODY_WET) != 0u;
+	vec2 e_rest = rest_offset[sorted_ids[t]].zw;
+	vec2 r = bodies[body].frame.zw;
+	vec2 e = vec2(r.x * e_rest.x - r.y * e_rest.y, r.y * e_rest.x + r.x * e_rest.y);
+	bool boundary = length(e_rest) < 0.75 * sp;
 	bool wet = length(g) > 1e-6;
-	float pw = 0.0;
-	uint ref = BODY_P_INF;
+	float pw = wet ? body_p_sample(x + 0.5 * sp * normalize(g)) : 0.0;
+	vec2 face = e / (0.5 * sp);
+	if (was_wet && boundary && !on_body && length(g) < length(face) && body_liquid_fill(x + e) >= BODY_PORE_WET) {
+		float pf = body_p_sample(x + 0.5 * sp * normalize(face));
+		if (pf > 0.0) {
+			g = face;
+			pw = pf;
+			wet = true;
+		}
+	}
 	if (wet) {
-		pw = body_p_sample(x + 0.5 * sp * normalize(g));
-		ref = floatBitsToUint(pw);
 		atomicOr(bodies[body].info.w, BODY_WET_NOW);
 	}
+	uint ref = wet ? floatBitsToUint(pw) : BODY_P_INF;
 	bool at_wall = x.x < 1.5 * sp || x.y < 1.5 * sp || x.x > params.world_size.x - 1.5 * sp
 			|| x.y > params.world_size.y - 1.5 * sp;
-	vec2 e_rest = rest_offset[sorted_ids[t]].zw;
-	if (!touching && !at_wall && length(e_rest) < 0.75 * sp) {
+	if (!touching && !at_wall && boundary) {
 		// A bare boundary member: the grid's p at its outline point, 0 out of the water.
-		vec2 r = bodies[body].frame.zw;
-		vec2 e = vec2(r.x * e_rest.x - r.y * e_rest.y, r.y * e_rest.x + r.x * e_rest.y);
 		ref = min(ref, floatBitsToUint(body_p_sample(x + e)));
 	}
 	atomicMin(bodies[body].p_min, ref);
-	if (x.y >= params.world_size.y - 1.5 * sp && (bodies[body].info.w & BODY_WET) != 0u) {
-		g.y = max(g.y, 1.0);
-		pw = max(pw, body_p_sample(vec2(x.x, params.world_size.y)));
+	if (was_wet) {
+		if (x.y >= params.world_size.y - 1.5 * sp) {
+			g.y = max(g.y, 1.0);
+			pw = max(pw, body_p_sample(vec2(x.x, params.world_size.y)));
+		}
+		if (x.x <= 1.5 * sp) {
+			g.x = min(g.x, -1.0);
+			pw = max(pw, body_p_sample(vec2(0.0, x.y)));
+		}
+		if (x.x >= params.world_size.x - 1.5 * sp) {
+			g.x = max(g.x, 1.0);
+			pw = max(pw, body_p_sample(vec2(params.world_size.x, x.y)));
+		}
 	}
 	if (length(g) <= 1e-6) {
 		return vec2(0.0);

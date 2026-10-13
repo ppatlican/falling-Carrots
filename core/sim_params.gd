@@ -53,6 +53,11 @@ const BODY_LIQUID_DRAG := 20.0
 ## floating body (its p_min is 0) floats level with the water it shows (ADR 0003 item 4).
 ## Mirror: BODY_SURFACE_DROP in body_match.glsl.
 const BODY_SURFACE_DROP := 2.5
+## Liquid fill of the grid at a wet body's outline point from which that face is under water,
+## between grains or in a void, even with no water particle on it (ADR 0003 item 15). A dry
+## sand bed reads 0, a saturated one under a pool 0.02-0.26.
+## Mirror: BODY_PORE_WET in solve_pressure.glsl.
+const BODY_PORE_WET := 0.02
 ## Fastest a powder grain may move away from a contact because of the push-out alone
 ## (px/s). 0 makes sand inelastic: overlap is still resolved, but a push-out never adds
 ## velocity away from a contact. At 15 the impacts of falling grains rebounded them

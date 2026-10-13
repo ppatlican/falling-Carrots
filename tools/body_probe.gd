@@ -54,6 +54,14 @@
 ##            water and floats, as waterfloat. Before a bare member read the grid (ADR 0003 item 4),
 ##            the pour's voids beside it took its buoyancy and it stayed on the floor
 ##   pourdrop   the same pour, the cork dropped turned 30 deg at frame 75, while it pours
+##   sandcorks  as the owner reported, 2026-10-13: "+10k sand" at frame 1, ten 16x10 corks dropped
+##            as main.tscn's Drop cork (y 12) along the world from frame 240, then 2 x "+10k water"
+##            at frames 600 and 630, 2400 frames: every cork rises off the sand and floats (mean
+##            draft under RISEN over the last 60 frames). Corks wedged in a wall corner under the
+##            sand slope often stay down (ADR 0003 item 15, Known limits), so it fails now and
+##            then. Prints each cork's centre, speed, draft, p_ref, wet flag, its bottom's height
+##            over the sand beside it and the grains over its top; with "grid", the grid's columns
+##            and each cork's pressure push by row against its weight
 ##   boxdrop  a 16x10 carrot resting on the floor, a second dropped 150 px straight onto it (frame
 ##            60), 600 frames: no member of either inside the other's rest lattice at the end,
 ##            both keep their shape and come to rest (body-body push-out). At ~270 px/s a box
@@ -124,6 +132,9 @@ const POOL_ROWS := 40
 const DEEP_ROWS := 135
 ## Blocks of "+10k water" the pour scenarios drop, 30 frames apart.
 const POURS := 4
+## Mean draft (share of its height under the water) under which a sandcorks cork has risen: ten
+## 16x10 corks crowd half the surface and press each other a little under it (draft up to ~1.1).
+const RISEN := 1.5
 
 var ctx
 var sim
@@ -333,6 +344,13 @@ func _start(name: String) -> void:
 					_body(_box(Vector2(X, FLOOR), 16, 10), cork)  # read the water's top, then make the body at 120
 			sc.most_inside = 0
 			sc.late = []
+		"sandcorks":
+			sc.frames = 2400
+			sc.every = 10
+			sc.from = 1200
+			sc.slots = 3 * SimParams.BENCH_BLOCK
+			sc.late = {}
+			sc.risen = {}
 		"boxdrop", "boxtilt", "boxhigh", "plank", "boxside", "boxstack":
 			sc.frames = 600
 			sc.every = 5
@@ -401,13 +419,26 @@ func _body(points: PackedVector2Array, material: int, rest := PackedVector2Array
 
 
 func _scenario_brush(brush: Dictionary) -> void:
-	if sc.name.begins_with("sand"):
+	if sc.name in ["sand", "sandlow", "sandrow"]:
 		if frame_i == 1:
 			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": sand, "count": BED_COLS * BED_ROWS, "cols": BED_COLS,
 					"pos": Vector2(1.0, FLOOR - (BED_ROWS - 1) * SimParams.SPACING)}, true)
 		elif frame_i == sc.hold + 1:
 			for k in sc.xs.size():  # the first spawns in this frame, the others one per frame
 				_body(_box(Vector2(sc.xs[k], sc.bed_tops[k] - sc.fall), 8, 6), carrot)
+	elif sc.name == "sandcorks":
+		var cols := SimParams.BENCH_COLS
+		var block := {"op": ParticleSim.BRUSH_BLOCK, "count": SimParams.BENCH_BLOCK, "cols": cols,
+				"pos": Vector2((SimParams.WORLD_SIZE.x - cols * SimParams.SPACING) * 0.5, 8.0)}
+		if frame_i == 1:
+			brush.merge(block, true)
+			brush.material = sand
+		elif frame_i == 240:
+			for k in 10:  # the first spawns in this frame, the others one per frame
+				_body(_box(Vector2(55.0 + k * 58.0, 30.0), 16, 10), cork)
+		elif frame_i == 600 or frame_i == 630:
+			brush.merge(block, true)
+			brush.material = water
 	elif sc.name.begins_with("pour"):
 		if frame_i % 30 == 0 and frame_i <= 30 * POURS:
 			var cols := SimParams.BENCH_COLS
@@ -641,6 +672,8 @@ func _sample(f: int, b: Dictionary) -> void:
 					_result("%s: cork, last 60 frames: mean draft %.2f of its height, mean speed %.2f px/s, max tilt %.3f rad; water inside %d at the end (most %d at a sample), shape error %.4f px"
 							% [sc.name, draft, speed, tilt, inside, sc.most_inside, fit.err],
 							draft > 0.25 and draft < 0.7 and speed < 3.0 and tilt < 0.35 and inside == 0 and fit.err < 0.1)
+		"sandcorks":
+			_sample_sandcorks(f, b, bodies)
 		"boxdrop", "boxtilt", "boxhigh", "plank", "boxside", "boxstack":
 			if bodies.size() < sc.ids.size() or sc.ids.size() < 2:
 				return
@@ -732,6 +765,70 @@ func _sample(f: int, b: Dictionary) -> void:
 
 ## The erase-split scenarios: the target body's pieces are the ids other than the ones made
 ## at the start besides it (the bridge's pillars).
+func _sample_sandcorks(f: int, b: Dictionary, bodies: Dictionary) -> void:
+	if f % 60 != 0 and f <= sc.frames - 60:
+		return
+	var ids: Array = bodies.keys()
+	ids.sort()
+	var line := "  f=%d" % f
+	for id in ids:
+		var top := INF
+		var bottom := -INF
+		var left := INF
+		var right := -INF
+		for q in bodies[id].pos:
+			top = minf(top, q.y)
+			bottom = maxf(bottom, q.y)
+			left = minf(left, q.x)
+			right = maxf(right, q.x)
+		var over := 0
+		for i in b.mat_flags.size() / 4:
+			var mf: int = b.mat_flags.decode_u32(i * 4)
+			if (mf & 0x100) == 0 or (mf & 0xFF) != sand or (mf >> 16) != 0:
+				continue
+			var q := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+			if q.x > left and q.x < right and q.y < top:
+				over += 1
+		var c := 0.5 * Vector2(left + right, top + bottom)
+		var base: int = id * ParticleSim.BODY_BYTES
+		var draft := _draft(b, bodies[id]) if f > 630 else 0.0
+		if f > sc.frames - 60:
+			sc.late[id] = sc.late.get(id, []) + [draft]
+		if f > 630 and draft < RISEN and not sc.risen.has(id):
+			sc.risen[id] = f
+		if f % 60 == 0:
+			var beside := minf(_sand_top(b, left - 12.0, 8.0), _sand_top(b, right + 12.0, 8.0))
+			var low_fill := INF  # the grid's least liquid fill at the bottom row (BODY_PORE_WET)
+			for q in bodies[id].pos:
+				if q.y > bottom - 0.5 * SimParams.SPACING:
+					low_fill = minf(low_fill, _grid_liquid(b, q))
+			line += " | %d (%.0f,%.0f) v%.0f d%.2f pr%.0f w%d bed%.0f over%d lq%.2f" % [id, c.x, c.y, _mean_vel(bodies[id]).length(), draft,
+					b.bodies.decode_float(base + 40), (b.bodies.decode_u32(base + 12) >> 2) & 1, beside - bottom, over, low_fill]
+	if f % 60 == 0:
+		print(line)
+	if (f == 540 or f == 1800) and OS.get_cmdline_user_args().has("grid"):
+		_print_grid_columns(b, [284.0, 100.0])
+	if f >= 900 and f % 300 == 0 and OS.get_cmdline_user_args().has("grid"):
+		_print_grid_columns(b, [8.0, 24.0, 616.0, 632.0])
+	if (f == 900 or f == 1200 or f == sc.frames) and OS.get_cmdline_user_args().has("grid"):
+		for id in ids:
+			_print_cork_push(b, id, bodies[id])
+	if f == sc.frames:
+		var stuck := []
+		for id in sc.late:
+			var mean := 0.0
+			for v in sc.late[id]:
+				mean += v / sc.late[id].size()
+			if mean >= RISEN:
+				stuck.append("%d (draft %.2f)" % [id, mean])
+		var times := []
+		for id in ids:
+			times.append("%.1f" % ((sc.risen[id] - 630) / 60.0) if sc.risen.has(id) else "-")
+		_result("sandcorks: %d of %d corks float; under water: %s; seconds from the second pour to the surface: %s"
+				% [ids.size() - stuck.size(), ids.size(), ", ".join(stuck), " ".join(times)],
+				ids.size() == 10 and stuck.is_empty())
+
+
 func _sample_split(f: int, b: Dictionary, bodies: Dictionary) -> void:
 	var pieces := []
 	for id in bodies:
@@ -841,10 +938,11 @@ func _bodies_of(b: Dictionary) -> Dictionary:
 		if (f & 0x100) == 0 or id == 0:
 			continue
 		if not out.has(id):
-			out[id] = {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "rest": PackedVector2Array()}
+			out[id] = {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "rest": PackedVector2Array(), "e": PackedVector2Array()}
 		out[id].pos.append(Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4)))
 		out[id].vel.append(Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4)))
 		out[id].rest.append(Vector2(b.rest_offset.decode_float(i * 16), b.rest_offset.decode_float(i * 16 + 4)))
+		out[id].e.append(Vector2(b.rest_offset.decode_float(i * 16 + 8), b.rest_offset.decode_float(i * 16 + 12)))
 	return out
 
 
@@ -1021,6 +1119,87 @@ func _print_pressure_push(b: Dictionary, body: Dictionary) -> void:
 	print("  nearest water below the bottom row (px, floor): %s" % str(hist))
 
 
+## Debug (sandcorks): the wet-surface push on a cork as solve_pressure.glsl gives it, water and
+## grains in pore water (BODY_PORE_WET 0.02) both, against p_ref, beside its weight, in px per
+## substep summed over the members; and its grain contacts by side (within 1.5 spacings).
+func _print_cork_push(b: Dictionary, id: int, body: Dictionary) -> void:
+	var sp := SimParams.SPACING
+	var h := SimParams.H
+	var dt := SimParams.DT / 2.0
+	var ParticleStep = load("res://cpu_ref/particle_step.gd")
+	var p_ref: float = b.bodies.decode_float(id * ParticleSim.BODY_BYTES + 40)
+	var cells := {}
+	for i in b.mat_flags.size() / 4:
+		var mf: int = b.mat_flags.decode_u32(i * 4)
+		if (mf & 0x100) == 0 or (mf >> 16) != 0:
+			continue
+		var q := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		var key := Vector2i((q / h).floor())
+		if not cells.has(key):
+			cells[key] = []
+		cells[key].append([q, mf & 0xFF])
+	var c := Vector2.ZERO
+	for x in body.pos:
+		c += x / body.pos.size()
+	var theta: float = _fit(body).theta
+	var push := Vector2.ZERO
+	var faces := 0  # members whose outline face is wet through the pores
+	var rows := {}  # rest row -> (push y, sum of p, wet members)
+	var below := 0
+	var beside := 0
+	var above := 0
+	for m in body.pos.size():
+		var x: Vector2 = body.pos[m]
+		var g := Vector2.ZERO
+		var k := Vector2i((x / h).floor())
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				for e in cells.get(k + Vector2i(dx, dy), []):
+					var q: Vector2 = e[0]
+					if e[1] == water:
+						g += ParticleStep.body_wet_face(q - x, h, sp)
+					if e[1] == sand and q.distance_to(x) < 1.5 * sp:
+						var d: Vector2 = q - x
+						if absf(d.y) > absf(d.x):
+							if d.y > 0.0:
+								below += 1
+							else:
+								above += 1
+						else:
+							beside += 1
+		var e_rest: Vector2 = body.e[m]
+		var face: Vector2 = e_rest.rotated(theta) / (0.5 * sp)
+		if g.length() < face.length() and e_rest.length() < 0.75 * sp and _grid_liquid(b, x + e_rest.rotated(theta)) >= 0.02 \
+				and _grid_p(b, x + 0.5 * sp * face.normalized()) > 0.0:
+			g = face
+			faces += 1
+		var pw := _grid_p(b, x + 0.5 * sp * g.normalized()) if g.length() > 1e-6 else 0.0
+		if x.y >= SimParams.WORLD_SIZE.y - 1.5 * sp:
+			g.y = maxf(g.y, 1.0)
+			pw = maxf(pw, _grid_p(b, Vector2(x.x, SimParams.WORLD_SIZE.y)))
+		if x.x <= 1.5 * sp:
+			g.x = minf(g.x, -1.0)
+			pw = maxf(pw, _grid_p(b, Vector2(0.0, x.y)))
+		if x.x >= SimParams.WORLD_SIZE.x - 1.5 * sp:
+			g.x = maxf(g.x, 1.0)
+			pw = maxf(pw, _grid_p(b, Vector2(SimParams.WORLD_SIZE.x, x.y)))
+		if g.length() < 1e-6:
+			continue
+		var d: Vector2 = -maxf(pw - p_ref, 0.0) * g * dt * dt / (0.5 * sp)
+		push += d.limit_length(0.5 * sp)
+		var row := int(roundf(body.rest[m].y / sp))
+		rows[row] = rows.get(row, Vector3.ZERO) + Vector3(d.limit_length(0.5 * sp).y, pw, 1.0)
+	print("  cork %d at (%.0f, %.0f) rot %.2f: push (%.2f, %.2f) px/substep, weight %.2f; p_ref %.0f; %d faces wet through the pores; grain contacts below %d beside %d above %d"
+			% [id, c.x, c.y, theta, push.x, push.y, body.pos.size() * SimParams.GRAVITY * dt * dt, p_ref, faces, below, beside, above])
+	if faces > 0:
+		var keys := rows.keys()
+		keys.sort()
+		var line := "    rows (push y, mean p, wet):"
+		for r in keys:
+			line += " [%d %.2f %.0f %d]" % [r, rows[r].x, rows[r].y / rows[r].z, rows[r].z]
+		print(line)
+
+
 ## Bilinear grid pressure at x, clamped to >= 0 (hydro_p_sample).
 func _grid_p(b: Dictionary, x: Vector2) -> float:
 	var cell := SimParams.H * SimParams.HYDRO_CELL
@@ -1034,6 +1213,21 @@ func _grid_p(b: Dictionary, x: Vector2) -> float:
 		var c := (c0 + Vector2i(k & 1, k >> 1)).clamp(Vector2i.ZERO, size - Vector2i.ONE)
 		v.append(b.hydro_p.decode_float((c.y * size.x + c.x) * 4))
 	return maxf(lerpf(lerpf(v[0], v[1], f.x), lerpf(v[2], v[3], f.x), f.y), 0.0)
+
+
+## The grid's liquid fill at x, bilinear (body_liquid_fill in solve_pressure.glsl).
+func _grid_liquid(b: Dictionary, x: Vector2) -> float:
+	var cell := SimParams.H * SimParams.HYDRO_CELL
+	var size := Vector2i((ceili(SimParams.WORLD_SIZE.x / SimParams.H) + SimParams.HYDRO_CELL - 1) / SimParams.HYDRO_CELL,
+			(ceili(SimParams.WORLD_SIZE.y / SimParams.H) + SimParams.HYDRO_CELL - 1) / SimParams.HYDRO_CELL)
+	var g := x / cell - Vector2(0.5, 0.5)
+	var c0 := Vector2i(g.floor())
+	var f := g - Vector2(c0)
+	var v := []
+	for k in 4:
+		var c := (c0 + Vector2i(k & 1, k >> 1)).clamp(Vector2i.ZERO, size - Vector2i.ONE)
+		v.append(b.hydro_phi.decode_float((c.y * size.x + c.x) * 16))
+	return lerpf(lerpf(v[0], v[1], f.x), lerpf(v[2], v[3], f.x), f.y)
 
 
 ## Highest particle of `material` (in no body) within half_width of x.
