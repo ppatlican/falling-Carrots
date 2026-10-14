@@ -23,7 +23,7 @@ Read only the section for the problem at hand. Fetch one paper section at a time
 - **Multi-species simulation of porous sand and water mixtures** (Tampubolon et al. 2017): https://math.ucdavis.edu/~jteran/papers/PGKFTJM17.pdf
   Two-grid momentum exchange, wetness-dependent cohesion. Reference for water-over-sand drift.
 
-## MPM (only if switching water from PBF; see gpu/mpm_water.gd spike)
+## MPM (only if switching water from PBF; a WorkBuddy MLS-MPM spike was judged not justified, 2026-10-10, and deleted)
 - **nialltl MPM guide**: https://nialltl.neocities.org/articles/mpm_guide and repo https://github.com/nialltl/incremental_mpm
   Practical real-time 2D MLS-MPM (~40k particles): volume re-estimation, Tait EOS, wall handling. **Read first if going MPM.**
 - **MLS-MPM** (Hu et al. 2018): https://yzhu.io/publication/mpmmls2018siggraph/paper.pdf

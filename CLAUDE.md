@@ -20,11 +20,11 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 - `docs/STATUS.md`: what works, what's verified, open bugs with everything already tried, and what's next. Read Known issues before tuning the solver.
 - `docs/papers.md`: reference papers and code, grouped by symptom. Before changing solver, boundary, sand, MPM or fluid-rendering behaviour, read only the matching section; cite what you used.
 - `docs/agents/gpu-probe.md`: read before running or reading the GPU probe, comparing variants, timing passes, or taking screenshots.
-- `.workbuddy-ai/memory/` (untracked, main checkout only): notes from another AI tool the owner uses, with decisions made there (for example, an MPM rewrite was judged not justified). Read them before solver or architecture decisions. Its uncommitted experiments may also sit in the main checkout; treat them as read-only.
+- `.workbuddy-ai/memory/` (untracked, main checkout only): notes from another AI tool the owner used, with decisions made there (for example, an MPM rewrite was judged not justified). Read them before solver or architecture decisions. WorkBuddy no longer works on this codebase (owner, 2026-10-14), and its spikes were deleted.
 
 ## Finishing a task
 - Before saying a task is done, bring the main checkout (`/mnt/c/Users/nosed/documents/falling-carrots`) up to date with the finished work, so the owner can open it in Godot. Commit the work on its branch and push it. Then merge that branch into `main` (fast-forward when possible), push `main`, and check out `main` in the main checkout.
-- The main checkout holds uncommitted files from the owner and WorkBuddy (`.workbuddy-ai/`, spikes, `project.godot` edits). Never stash, reset, clean or overwrite them. If the checkout would touch one of them, stop and ask the owner.
+- The main checkout holds uncommitted files from the owner (`.workbuddy-ai/`, `project.godot` edits). Never stash, reset, clean or overwrite them. If the checkout would touch one of them, stop and ask the owner.
 - In the final report, give the main checkout's branch and commit.
 
 ## Working on the sim
