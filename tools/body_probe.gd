@@ -46,6 +46,8 @@
 ##            ~10 s (still 2.6-4 px/s at 900 frames)
 ##   waterbox   a 16x10 cork (the size main.tscn's Drop buttons make) set on the water, as
 ##            waterfloat
+##   waterstrip a 180x10 cork (a brush stroke across the screen) set on the water, 1500 frames, as
+##            waterfloat
 ##   waterdeep  a 270 px deep pool from wall to wall (320 x 135 water), a 16x10 cork let go at y 12
 ##            at frame 120 (main.tscn's Drop cork): it plunges and floats, as waterfloat
 ##   waterdeeptilt  the same, the cork turned 30 deg
@@ -62,6 +64,26 @@
 ##            stopped the shaking), so it may still fail now and then. Prints each cork's centre, speed, draft, p_ref, wet flag, its bottom's height
 ##            over the sand beside it and the grains over its top; with "grid", the grid's columns
 ##            and each cork's pressure push by row against its weight
+##   corkstrip  as the owner reported, 2026-10-14: "add a long horizontal strip of cork, then add 20k
+##            water": a 180x10 cork (STRIP_COLS x STRIP_ROWS, about one body-brush stroke across the
+##            screen) let go at y 30, on the floor by frame ~120, then 2 x "+10k water" at frames 240
+##            and 270, 2400 frames: it rises off the floor and floats (mean draft over the last 60
+##            frames under 1). It stayed on the floor while each member's pressure push was clamped on
+##            its own (body_project.glsl). Takes ~15 s to come up. "trace" prints its bottom's height,
+##            speed and p_ref every sample, with "refs" what set a low p_ref; "bare" the bare members
+##            and the grid's p at their outline points every 60 frames
+##   sandjelly  as the owner reported, 2026-10-14: "+10k sand" at frame 1, then at frame 240 a level
+##            stroke of the body brush (a capsule, as main.tscn paints it) of jelly at y 60 across the
+##            pile, 1200 frames: members still moving (over 5 px/s) and members under the sand's top
+##            beside them. Rests at the shipped stiffness 0.95 (and 0.5, 0.8); at stiff=0.3 members
+##            jitter at 11-15 px/s for good and ~140 sink under the sand's top (STATUS Known issues)
+##   sandstroke the same pile; at frame 300 a jelly stroke painted level across its top, depth= px into it
+##            (default STROKE_DEPTH) and span= px each side of the middle (default 170), with the
+##            brush's own rules (core/body_brush.gd: occupied spots left out, pieces), so it can
+##            leave pieces of any size: every piece and whether it keeps moving. "trace" prints the
+##            fastest member of each piece every sample
+##   sandbits   the same pile; at frame 240 ten small jellies (2x2 to 5x3, as a stroke painted over
+##            grains leaves them) dropped from y 200 along it, read as sandstroke
 ##   boxdrop  a 16x10 carrot resting on the floor, a second dropped 150 px straight onto it (frame
 ##            60), 600 frames: no member of either inside the other's rest lattice at the end,
 ##            both keep their shape and come to rest (body-body push-out). At ~270 px/s a box
@@ -149,6 +171,7 @@ const GameConfig = preload("res://core/game_config.gd")
 const MaterialTable = preload("res://cpu_ref/material_table.gd")
 const SimParams = preload("res://core/sim_params.gd")
 const ProbeParams = preload("res://tools/probe_params.gd")
+const BodyBrush = preload("res://core/body_brush.gd")
 
 const TESTS := ["floor", "jelly", "stack3", "stack5", "erase", "spawnin", "corner"]
 ## Scenarios of bodies on bodies that also get the soft verdict (_sample_soft_stack) when their
@@ -174,6 +197,12 @@ const POURS := 4
 ## Mean draft (share of its height under the water) under which a sandcorks cork has risen: ten
 ## 16x10 corks crowd half the surface and press each other a little under it (draft up to ~1.1).
 const RISEN := 1.5
+## The long strip of sandjelly and corkstrip: about what one stroke of the body brush (radius 10)
+## across the screen makes.
+const STRIP_COLS := 180
+const STRIP_ROWS := 10
+## How far into the sand pile's top the sandstroke stroke's centre line runs (px).
+const STROKE_DEPTH := 4.0
 
 var ctx
 var sim
@@ -197,6 +226,8 @@ var ready := false
 var failed := 0
 var param_sets: Array = []  # from "set=" (tools/probe_params.gd)
 var param_frame := 0  # from "setat=N"
+var stroke_depth := STROKE_DEPTH  # from "depth=D" (sandstroke)
+var stroke_span := 170.0  # from "span=S" (sandstroke): half the stroke's length, px
 
 
 func _initialize() -> void:
@@ -217,7 +248,11 @@ func _initialize() -> void:
 			jelly_region = float(a.substr(7))
 		elif a.begins_with("frames="):
 			run_frames = int(a.substr(7))
-		elif a == "grid":
+		elif a.begins_with("depth="):
+			stroke_depth = float(a.substr(6))
+		elif a.begins_with("span="):
+			stroke_span = float(a.substr(5))
+		elif a in ["grid", "bare", "trace", "refs"]:
 			pass  # debug: water scenarios print grid columns
 		else:
 			names = a
@@ -374,8 +409,8 @@ func _start(name: String) -> void:
 			sc.fall = 100.0 if name == "sand" else 2.0
 			sc.xs = [80.0, 160.0, 240.0, 320.0, 400.0, 480.0, 560.0] if name == "sandrow" else [X]
 			sc.late_speed = 0.0
-		"watersink", "waterjelly", "waterfloat", "waterdrop", "waterbig", "waterbox", "waterdeep", "waterdeeptilt", "pourfloor", "pourdrop":
-			sc.frames = {"watersink": 600, "waterjelly": 600, "waterbig": 1500}.get(name, 900)
+		"watersink", "waterjelly", "waterfloat", "waterdrop", "waterbig", "waterbox", "waterstrip", "waterdeep", "waterdeeptilt", "pourfloor", "pourdrop":
+			sc.frames = {"watersink": 600, "waterjelly": 600, "waterbig": 1500, "waterstrip": 1500}.get(name, 900)
 			sc.every = 10
 			sc.from = 600
 			sc.rows = DEEP_ROWS if name.begins_with("waterdeep") else POOL_ROWS
@@ -398,6 +433,35 @@ func _start(name: String) -> void:
 			sc.slots = 3 * SimParams.BENCH_BLOCK
 			sc.late = {}
 			sc.risen = {}
+		"sandjelly":
+			sc.frames = 1200
+			sc.every = 10
+			sc.from = 600
+			sc.slots = SimParams.BENCH_BLOCK
+			sc.late = []
+		"sandstroke":
+			sc.frames = 1200
+			sc.every = 10
+			sc.from = 600
+			sc.slots = SimParams.BENCH_BLOCK
+			sc.hold = 299  # read the pile, then paint the stroke over its top
+			sc.pieces = []
+			sc.late = {}
+		"sandbits":
+			sc.frames = 1200
+			sc.every = 10
+			sc.from = 600
+			sc.slots = SimParams.BENCH_BLOCK
+			sc.hold = -2
+			sc.pieces = []
+			sc.late = {}
+		"corkstrip":
+			sc.frames = 2400
+			sc.every = 10
+			sc.from = 600
+			sc.slots = 2 * SimParams.BENCH_BLOCK
+			sc.late = []
+			_body(_box(Vector2(X, 30.0), STRIP_COLS, STRIP_ROWS), cork)
 		"boxdrop", "boxtilt", "boxhigh", "plank", "boxside", "boxstack":
 			sc.frames = 600
 			sc.every = 5
@@ -549,6 +613,41 @@ func _scenario_brush(brush: Dictionary) -> void:
 		elif frame_i == 600 or frame_i == 630:
 			brush.merge(block, true)
 			brush.material = water
+	elif sc.name == "sandjelly":
+		var cols := SimParams.BENCH_COLS
+		if frame_i == 1:
+			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": sand, "count": SimParams.BENCH_BLOCK, "cols": cols,
+					"pos": Vector2((SimParams.WORLD_SIZE.x - cols * SimParams.SPACING) * 0.5, 8.0)}, true)
+		elif frame_i == 240:
+			# A level stroke of the body brush in the air (a capsule with rounded ends), as main.tscn paints it.
+			var stroke := {}
+			BodyBrush.paint(stroke, Vector2(X - 170.0, 60.0), Vector2(X + 170.0, 60.0), SimParams.BRUSH_RADIUS)
+			for piece in BodyBrush.bodies(stroke, {}):
+				sc.target = _body(piece, jelly)
+	elif sc.name == "sandbits":
+		var cols := SimParams.BENCH_COLS
+		if frame_i == 1:
+			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": sand, "count": SimParams.BENCH_BLOCK, "cols": cols,
+					"pos": Vector2((SimParams.WORLD_SIZE.x - cols * SimParams.SPACING) * 0.5, 8.0)}, true)
+		elif frame_i == 240:
+			# Small jelly pieces, as a stroke painted over grains leaves them, dropped along the pile.
+			var sizes := [Vector2i(2, 2), Vector2i(3, 2), Vector2i(2, 3), Vector2i(3, 3), Vector2i(4, 2), Vector2i(2, 4),
+					Vector2i(6, 2), Vector2i(2, 6), Vector2i(4, 4), Vector2i(5, 3)]
+			for k in sizes.size():
+				_body(_box(Vector2(150.0 + 38.0 * k, 200.0), sizes[k].x, sizes[k].y), jelly)
+	elif sc.name == "sandstroke":
+		var cols := SimParams.BENCH_COLS
+		if frame_i == 1:
+			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": sand, "count": SimParams.BENCH_BLOCK, "cols": cols,
+					"pos": Vector2((SimParams.WORLD_SIZE.x - cols * SimParams.SPACING) * 0.5, 8.0)}, true)
+		elif frame_i == sc.hold + 1:
+			for piece in sc.pieces:
+				_body(piece, jelly)
+	elif sc.name == "corkstrip":
+		if frame_i == 240 or frame_i == 270:
+			var cols := SimParams.BENCH_COLS
+			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": water, "count": SimParams.BENCH_BLOCK, "cols": cols,
+					"pos": Vector2((SimParams.WORLD_SIZE.x - cols * SimParams.SPACING) * 0.5, 8.0)}, true)
 	elif sc.name.begins_with("pour"):
 		if frame_i % 30 == 0 and frame_i <= 30 * POURS:
 			var cols := SimParams.BENCH_COLS
@@ -576,6 +675,8 @@ func _scenario_brush(brush: Dictionary) -> void:
 					_body(_box(Vector2(X, top - 1.0), 40, 20), cork)
 				"waterbox":
 					_body(_box(Vector2(X, top - 1.0), 16, 10), cork)
+				"waterstrip":
+					_body(_box(Vector2(X, top - 1.0), STRIP_COLS, STRIP_ROWS), cork)
 				"waterdeep", "waterdeeptilt":
 					# As main.tscn's Drop cork: a 16x10 cork let go at y 12 (bottom row at 30).
 					var tilt := deg_to_rad(30.0) if sc.name == "waterdeeptilt" else 0.0
@@ -731,7 +832,7 @@ func _sample(f: int, b: Dictionary) -> void:
 				var rests: bool = fit.err < 0.1 and sc.late_speed < REST_SPEED \
 						and (sc.name == "sand" or bottom - sc.bed_tops[0] < SimParams.SPACING)
 				_result(line, rests and inside == 0)
-		"watersink", "waterjelly", "waterfloat", "waterdrop", "waterbig", "waterbox", "waterdeep", "waterdeeptilt", "pourfloor", "pourdrop":
+		"watersink", "waterjelly", "waterfloat", "waterdrop", "waterbig", "waterbox", "waterstrip", "waterdeep", "waterdeeptilt", "pourfloor", "pourdrop":
 			if f == sc.hold:
 				sc.water_top = _top_of(b, water, X, 40.0)
 				waiting = false
@@ -791,6 +892,12 @@ func _sample(f: int, b: Dictionary) -> void:
 							draft > 0.25 and draft < 0.7 and speed < 3.0 and tilt < 0.35 and inside == 0 and fit.err < 0.1)
 		"sandcorks":
 			_sample_sandcorks(f, b, bodies)
+		"sandjelly":
+			_sample_sandjelly(f, b, bodies)
+		"sandstroke", "sandbits":
+			_sample_sandstroke(f, b, bodies)
+		"corkstrip":
+			_sample_corkstrip(f, b, bodies)
 		"boxdrop", "boxtilt", "boxhigh", "plank", "boxside", "boxstack":
 			if bodies.size() < sc.ids.size() or sc.ids.size() < 2:
 				return
@@ -1192,6 +1299,229 @@ func _sample_sandcorks(f: int, b: Dictionary, bodies: Dictionary) -> void:
 		_result("sandcorks: %d of %d corks float; under water: %s; seconds from the second pour to the surface: %s"
 				% [ids.size() - stuck.size(), ids.size(), ", ".join(stuck), " ".join(times)],
 				ids.size() == 10 and stuck.is_empty())
+
+
+## sandjelly: the jelly strip on the sand pile. Members that keep moving (jitter) or end below the
+## sand's top beside them (digging in).
+func _sample_sandjelly(f: int, b: Dictionary, bodies: Dictionary) -> void:
+	if not bodies.has(1):
+		return
+	var body: Dictionary = bodies[1]
+	var fast := 0
+	var top_speed := 0.0
+	var worst := -1
+	for k in body.vel.size():
+		var v: float = body.vel[k].length()
+		if v > 5.0:
+			fast += 1
+		if v > top_speed:
+			top_speed = v
+			worst = k
+	var under := 0
+	var grains_in := 0
+	if f % 60 == 0 or f == sc.frames:
+		var tops := {}
+		for q in body.pos:
+			var col := int(q.x / 4.0)
+			if not tops.has(col):
+				tops[col] = _sand_top(b, q.x, 2.0)
+			if q.y > tops[col] + 1.0:
+				under += 1
+		grains_in = _grains_inside(b, body, _fit(body))
+		var fit := _fit(body)
+		print("  f=%d jelly c=(%.1f, %.1f) err %.2f; members over 5 px/s %d, fastest %.0f px/s at rest (%.0f, %.0f) now (%.0f, %.0f); under the sand top %d; grains inside %d"
+				% [f, fit.c.x, fit.c.y, fit.err, fast, top_speed, body.rest[worst].x, body.rest[worst].y, body.pos[worst].x, body.pos[worst].y, under, grains_in])
+	if f > sc.frames - 60:
+		sc.late.append([fast, top_speed])
+	if f == sc.frames:
+		var most_fast := 0
+		var fastest := 0.0
+		for v in sc.late:
+			most_fast = maxi(most_fast, v[0])
+			fastest = maxf(fastest, v[1])
+		_result("sandjelly: last 60 frames: members over 5 px/s at most %d, fastest member %.1f px/s; at the end %d members under the sand's top, %d grains inside"
+				% [most_fast, fastest, under, grains_in], most_fast == 0 and fastest < 5.0)
+
+
+## sandstroke: a body-brush stroke of jelly (core/body_brush.gd, as main.tscn paints it) drawn
+## level across the top of the sand pile, STROKE_DEPTH px into it at the middle, so it crosses
+## the slopes. Every piece the brush makes, and how much each keeps moving.
+func _sample_sandstroke(f: int, b: Dictionary, bodies: Dictionary) -> void:
+	if f == sc.hold:
+		var top := _sand_top(b, X, 8.0)
+		var stroke := {}
+		BodyBrush.paint(stroke, Vector2(X - stroke_span, top + stroke_depth), Vector2(X + stroke_span, top + stroke_depth),
+				SimParams.BRUSH_RADIUS)
+		sc.pieces = BodyBrush.bodies(stroke, BodyBrush.occupied_spots(b.pos, b.mat_flags))
+		var sizes := []
+		for piece in sc.pieces:
+			sizes.append(piece.size())
+		print("  sand top at x %.0f: %.1f; stroke %d spots -> pieces %s" % [X, top, stroke.size(), str(sizes)])
+		waiting = false
+		return
+	if f % 60 != 0 and f <= sc.frames - 60 and not OS.get_cmdline_user_args().has("trace"):
+		return
+	var ids: Array = bodies.keys()
+	ids.sort()
+	var line := "  f=%d" % f
+	var worst := 0.0
+	for id in ids:
+		var body: Dictionary = bodies[id]
+		var fastest := _max_speed(body)
+		var c := Vector2.ZERO
+		for q in body.pos:
+			c += q / body.pos.size()
+		var low := 0  # members under the sand's top beside them (small pieces only: it is slow)
+		if body.pos.size() < 200 and f % 60 == 0:
+			for q in body.pos:
+				if q.y > _sand_top(b, q.x, 1.5) + 1.0:
+					low += 1
+		if f > sc.frames - 60:
+			sc.late[id] = maxf(sc.late.get(id, 0.0), fastest)
+		if OS.get_cmdline_user_args().has("trace") and f > sc.hold + 200:
+			var k_max := 0
+			var fast := 0
+			for k in body.vel.size():
+				if body.vel[k].length() > body.vel[k_max].length():
+					k_max = k
+				if body.vel[k].length() > 5.0:
+					fast += 1
+			print("    t f=%d id %d: %d over 5 px/s, fastest %.1f px/s v(%.1f, %.1f) member rest (%.0f, %.0f) at (%.1f, %.1f) err %.2f"
+					% [f, id, fast, fastest, body.vel[k_max].x, body.vel[k_max].y, body.rest[k_max].x, body.rest[k_max].y,
+					body.pos[k_max].x, body.pos[k_max].y, _fit(body).err])
+		if f % 60 == 0 and (body.pos.size() < 200 or fastest > 2.0):
+			line += " | %d n%d (%.0f,%.0f) vmax%.0f low%d" % [id, body.pos.size(), c.x, c.y, fastest, low]
+		worst = maxf(worst, fastest)
+	if f % 60 == 0:
+		print(line)
+	if f == sc.frames:
+		var moving := []
+		for id in sc.late:
+			if sc.late[id] > 5.0:
+				moving.append("%d (n%d, %.0f px/s)" % [id, bodies[id].pos.size(), sc.late[id]])
+		_result("sandstroke: %d pieces; still moving over 5 px/s in the last 60 frames: %s" % [ids.size(), ", ".join(moving)],
+				moving.is_empty())
+
+
+## corkstrip: the cork strip on the floor under 20k poured water must rise and float.
+func _sample_corkstrip(f: int, b: Dictionary, bodies: Dictionary) -> void:
+	if not bodies.has(1):
+		return
+	var body: Dictionary = bodies[1]
+	var fit := _fit(body)
+	var draft := _draft(b, body) if f > 300 else 0.0
+	if f % 60 == 0:
+		var base: int = 1 * ParticleSim.BODY_BYTES
+		var bottom := -INF
+		for q in body.pos:
+			bottom = maxf(bottom, q.y)
+		print("  f=%d cork c=(%.1f, %.1f) rot %.3f v=%s bottom %.1f above floor; draft %.2f; water top %.1f; p_ref %.1f flags %d"
+				% [f, fit.c.x, fit.c.y, fit.theta, _mean_vel(body), FLOOR - bottom, draft, _top_of(b, water, 40.0, 17.0),
+				b.bodies.decode_float(base + 40), b.bodies.decode_u32(base + 12)])
+	if f % 300 == 0 and OS.get_cmdline_user_args().has("grid"):
+		_print_grid_columns(b, [fit.c.x, fit.c.x + 200.0])
+		_print_pressure_push(b, body)
+	if f % 60 == 0 and OS.get_cmdline_user_args().has("bare"):
+		_print_bare(b, body, fit.theta)
+	elif f > 300 and OS.get_cmdline_user_args().has("trace"):
+		var low := -INF
+		for q in body.pos:
+			low = maxf(low, q.y)
+		var p_ref: float = b.bodies.decode_float(ParticleSim.BODY_BYTES + 40)
+		print("    t f=%d bottom %.1f vy %.1f p_ref %.0f" % [f, FLOOR - low, _mean_vel(body).y, p_ref])
+		if p_ref < 20000.0 and OS.get_cmdline_user_args().has("refs"):
+			_print_refs(b, body, fit.theta)
+	if f > sc.frames - 60:
+		sc.late.append(draft)
+	if f == sc.frames:
+		var mean := 0.0
+		for v in sc.late:
+			mean += v / sc.late.size()
+		_result("corkstrip: 180x10 cork on the floor under 20k water: mean draft over the last 60 frames %.2f (floats under 1)" % mean,
+				mean < 1.0)
+
+
+## Debug ("bare", corkstrip): the boundary members with nothing but their own body within 1.5
+## spacings, the grid's p at their outline point (what solve_pressure gives p_min), lowest first.
+func _print_bare(b: Dictionary, body: Dictionary, theta: float) -> void:
+	var sp := SimParams.SPACING
+	var h := SimParams.H
+	var cells := {}
+	for i in b.mat_flags.size() / 4:
+		var mf: int = b.mat_flags.decode_u32(i * 4)
+		if (mf & 0x100) == 0 or (mf >> 16) == 1:
+			continue
+		var q := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		var key := Vector2i((q / h).floor())
+		if not cells.has(key):
+			cells[key] = PackedVector2Array()
+		cells[key].append(q)
+	var bare := []
+	for m in body.pos.size():
+		var x: Vector2 = body.pos[m]
+		var e: Vector2 = body.e[m].rotated(theta)
+		if body.e[m].length() >= 0.75 * sp:
+			continue
+		if x.x < 1.5 * sp or x.y < 1.5 * sp or x.x > SimParams.WORLD_SIZE.x - 1.5 * sp or x.y > SimParams.WORLD_SIZE.y - 1.5 * sp:
+			continue
+		var touching := false
+		var k := Vector2i((x / h).floor())
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				for q in cells.get(k + Vector2i(dx, dy), PackedVector2Array()):
+					if q.distance_squared_to(x) < 2.25 * sp * sp:
+						touching = true
+		if not touching:
+			bare.append([_grid_p(b, x + e), x, e])
+	bare.sort_custom(func(u, v): return u[0] < v[0])
+	var line := "    bare %d:" % bare.size()
+	for u in bare.slice(0, 6):
+		line += " [p%.0f at (%.0f,%.0f) e(%.1f,%.1f)]" % [u[0], u[1].x, u[1].y, u[2].x, u[2].y]
+	print(line)
+
+
+## Debug ("trace" and "refs", corkstrip): what each member gives the body's p_min as solve_pressure
+## picks it (wet: p on its liquid side; bare boundary: p at its outline point), lowest first.
+func _print_refs(b: Dictionary, body: Dictionary, theta: float) -> void:
+	var sp := SimParams.SPACING
+	var h := SimParams.H
+	var ParticleStep = load("res://cpu_ref/particle_step.gd")
+	var cells := {}
+	for i in b.mat_flags.size() / 4:
+		var mf: int = b.mat_flags.decode_u32(i * 4)
+		if (mf & 0x100) == 0 or (mf >> 16) == 1:
+			continue
+		var q := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		var key := Vector2i((q / h).floor())
+		if not cells.has(key):
+			cells[key] = []
+		cells[key].append([q, mf & 0xFF])
+	var refs := []
+	for m in body.pos.size():
+		var x: Vector2 = body.pos[m]
+		var g := Vector2.ZERO
+		var touching := false
+		var k := Vector2i((x / h).floor())
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				for e in cells.get(k + Vector2i(dx, dy), []):
+					var q: Vector2 = e[0]
+					if q.distance_squared_to(x) < 2.25 * sp * sp:
+						touching = true
+					if e[1] == water:
+						g += ParticleStep.body_wet_face(q - x, h, sp)
+		var e_m: Vector2 = body.e[m].rotated(theta)
+		if g.length() > 1e-6:
+			refs.append([_grid_p(b, x + 0.5 * sp * g.normalized()), "wet", x, g])
+		var at_wall := x.x < 1.5 * sp or x.y < 1.5 * sp or x.x > SimParams.WORLD_SIZE.x - 1.5 * sp or x.y > SimParams.WORLD_SIZE.y - 1.5 * sp
+		if not touching and not at_wall and body.e[m].length() < 0.75 * sp:
+			refs.append([_grid_p(b, x + e_m), "bare", x, e_m])
+	refs.sort_custom(func(u, v): return u[0] < v[0])
+	var line := "      refs:"
+	for u in refs.slice(0, 5):
+		var cell := Vector2i((u[2] / (h * SimParams.HYDRO_CELL)).floor())
+		line += " [%s p%.0f at (%.0f,%.0f) dir(%.1f,%.1f) cell %s]" % [u[1], u[0], u[2].x, u[2].y, u[3].x, u[3].y, cell]
+	print(line)
 
 
 func _sample_split(f: int, b: Dictionary, bodies: Dictionary) -> void:

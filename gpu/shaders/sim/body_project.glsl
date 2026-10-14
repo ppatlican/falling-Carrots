@@ -1,7 +1,7 @@
 #[compute]
 #version 450
 
-// Bodies, once per substep between solve_pressure and its solve_apply: a soft body's pressure
+// Bodies, once per substep between solve_pressure and its solve_apply: a body's pressure
 // pushes (in scratch) replaced by their rigid part (ADR 0003 item 12), and every body rewound
 // along its path to where it first touched another body this substep (body_sweep, ADR 0003
 // item 14). One workgroup per body id, as body_match.
@@ -13,9 +13,14 @@
 //      sweep's rewind, the largest share: the member that touched first sets it. The mean of
 //      the members' moves back was half that for a carrot landing flat, whose second row also
 //      ends just inside the outline, and it went on into a 2-row plank (CPU reference).
-//   3. Every live member of a soft body (stiffness < 1) gets the mean push plus theta x r,
-//      clamped like solve_pressure. A rigid body's pushes are left alone: matching at
-//      stiffness 1 takes out the rest. Every live member is then rewound by that share of its
+//   3. Every live member gets the mean push plus theta x r, clamped as solve_pressure clamps
+//      a liquid's push (it leaves a body's pushes whole). Clamped one member at a time, a
+//      body's pushes lost its buoyancy whenever its p_ref (the lowest p over its faces) read
+//      low: a 180 x 10 cork on the floor of a pool, whose p_ref swung between ~45k and 1-19k
+//      from frame to frame as the grid around it changed, had the pushes on its top and bottom
+//      both cut to the clamp, and stayed on the floor (body_probe corkstrip). A rigid body's
+//      pushes used to be left alone, as matching at stiffness 1 takes out the rest, but they
+//      were clamped the same way. Every live member is then rewound by that share of its
 //      move this substep (s_pred - s_pos), not clamped (a fast body moves 1.6 spacings in a
 //      substep), and keeps the rewind in vel as the start of its push from other bodies
 //      (velocity_update, ADR 0003 item 13).
@@ -111,17 +116,13 @@ void main() {
 		if (!live_member(slot, id)) continue;
 		uint t = sorted_of(slot);
 		vec2 back = -rewind * (s_pred[t] - s_pos[t]);
-		if (materials[mat_flags[slot] & MAT_MASK].extra.y < 1.0) {
-			vec2 r = s_pred[t] - c_last - p_mean;
-			vec2 d = push + turn * vec2(-r.y, r.x);
-			float len = length(d);
-			if (len > max_len) {
-				d *= max_len / len;
-			}
-			scratch[t] = d + back;
-		} else if (rewind > 0.0) {
-			scratch[t] += back;
+		vec2 r = s_pred[t] - c_last - p_mean;
+		vec2 d = push + turn * vec2(-r.y, r.x);
+		float len = length(d);
+		if (len > max_len) {
+			d *= max_len / len;
 		}
+		scratch[t] = d + back;
 		if (rewind > 0.0) {
 			vel[slot] = back;
 		}

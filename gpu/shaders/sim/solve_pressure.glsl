@@ -165,9 +165,10 @@ void main() {
 	} else if (s_class(t) == CLASS_LIQUID) {
 		d = hydro_delta(s_pred[t]);
 	}
+	// A body's pushes are capped after body_project has taken their rigid part, not here.
 	float len = length(d);
 	float max_len = 0.5 * params.spacing;
-	if (len > max_len) {
+	if (body == 0u && len > max_len) {
 		d *= max_len / len;
 	}
 	scratch[t] = d;

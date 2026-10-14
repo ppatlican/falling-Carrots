@@ -175,7 +175,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 			delta[i] = _body_pressure_delta(i, pred, mat, body, edge, bodies[body[i]], neighbours[i], phi, hydro_p, dt)
 		else:
 			delta[i] = Vector2.ZERO
-		delta[i] = delta[i].limit_length(0.5 * SimParams.SPACING)
+		if body[i] == 0:  # a body's pushes are clamped once their rigid part is taken
+			delta[i] = delta[i].limit_length(0.5 * SimParams.SPACING)
 	_project_body_pushes(delta, pred, mat, body, bodies, members)
 	for i in n:
 		pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i] + back[i], mat[i], body[i] != 0)
@@ -521,13 +522,15 @@ func _match_shapes(pred: PackedVector2Array, mat: PackedInt32Array, body: Packed
 			pred[m] += k * (goal - pred[m])
 
 
-## A soft body's pressure pushes (ADR 0003 item 12) replaced by their rigid part: every live
+## A body's pressure pushes (ADR 0003 item 12) replaced by their rigid part: every live
 ## member moves by the members' mean push plus the turn about their centroid whose torque the
 ## pushes give, θ = Σ r × δ / Σ |r|², linearised (θ is at most a few hundredths of a radian). The
 ## water moves and turns a jelly without squeezing it: relative to p_ref (its top) the pushes on
 ## its bottom and lower sides reach ~9 g, and a 16 x 10 jelly crumpled 4.4-5.0 px out of shape
-## with water inside (body_probe waterjelly). A rigid body is left alone: matching at stiffness 1
-## takes out the rest.
+## with water inside (body_probe waterjelly). The result is clamped as a liquid's push; the pushes
+## are not clamped one member at a time before it, or a body lost its buoyancy whenever its p_ref
+## read low: both its top and bottom pushes were cut to the clamp (body_probe corkstrip). Rigid
+## bodies are projected too: they were clamped the same way.
 ## Members of a body share a material, so their masses are equal. Mirror: body_project.glsl.
 func _project_body_pushes(delta: PackedVector2Array, pred: PackedVector2Array, mat: PackedInt32Array,
 		body: PackedInt32Array, bodies: Array, members: PackedInt32Array) -> void:
@@ -542,7 +545,7 @@ func _project_body_pushes(delta: PackedVector2Array, pred: PackedVector2Array, m
 				live.append(m)
 				c += pred[m]
 				push += delta[m]
-		if live.is_empty() or materials[mat[live[0]]].stiffness >= 1.0:
+		if live.is_empty():
 			continue
 		c /= live.size()
 		push /= live.size()
