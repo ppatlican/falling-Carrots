@@ -70,6 +70,12 @@ func _button(bar: Container, text: String) -> Button:
 	return b
 
 
+## Tints a material's button after the parameter panel changed its colour.
+func set_material_color(id: int, color: Color) -> void:
+	if _material_buttons.has(id):
+		_material_buttons[id].modulate = color.lightened(0.3)
+
+
 ## Updates the capacity meter. Turns red and says FULL at the cap.
 func set_capacity(live: int, cap: int) -> void:
 	_meter.max_value = cap

@@ -2,6 +2,8 @@
 ## ideal, so "floaty" and "thick" become numbers. Needs a real window (no --headless).
 ## Run it in a copy of the repo, not the repo itself:
 ##   Godot_console.exe --path <copy> --script res://tools/water_feel_probe.gd -- <scenario> [frames] [every=N]
+##   set=water.drag=60[,...] [setat=N] edits material parameters as the parameter panel does
+##   (tools/probe_params.gd), at frame N (default: before the first frame)
 ##   fall   a 40x40 px block of water dropped from the top: mean fall speed and drop
 ##          against free fall (v = g t), until it lands
 ##   dam    a 100 px wide, 240 px tall column of water released at the left wall: the
@@ -69,6 +71,7 @@ const ParticleSim = preload("res://gpu/particle_sim.gd")
 const GameConfig = preload("res://core/game_config.gd")
 const MaterialTable = preload("res://cpu_ref/material_table.gd")
 const SimParams = preload("res://core/sim_params.gd")
+const ProbeParams = preload("res://tools/probe_params.gd")
 
 const FALL_COLS := 20
 const FALL_COUNT := 400
@@ -80,6 +83,9 @@ var max_frames := 600
 var sample_every := 3
 var ctx
 var sim
+var table
+var param_sets: Array = []  # from "set=" (tools/probe_params.gd)
+var param_frame := 0  # from "setat=N"
 var water := -1
 var sand := -1
 var cap := 50000
@@ -147,9 +153,11 @@ func _initialize() -> void:
 	if scenario == "mounds":
 		scenario = "bowl"
 		mounds = true
+	param_sets = ProbeParams.parse(args)
+	param_frame = ProbeParams.frame(args)
 	var config = GameConfig.load_from_file()
 	cap = config.particle_cap
-	var table = MaterialTable.new()
+	table = MaterialTable.new()
 	var problems: PackedStringArray = table.load_file()
 	if problems.size() > 0:
 		print("MATERIAL PROBLEMS: ", problems)
@@ -177,6 +185,8 @@ func _process(_delta: float) -> bool:
 	if not ready:
 		return false
 	frame_i += 1
+	if frame_i == maxi(1, param_frame):
+		ProbeParams.apply(table, sim, param_sets)
 	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": 0.0,
 			"material": water, "count": 0, "cols": 1}
 	if frame_i == 1:

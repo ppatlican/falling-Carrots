@@ -7,6 +7,10 @@
 ##   var table = MaterialTable.new()
 ##   var problems = table.load_file()   # loads and validates; empty means OK
 ##   var bytes = table.pack_gpu()       # MAX_MATERIALS * GPU_STRIDE bytes
+##
+## The parameter panel (ADR 0007) edits rows while the sim runs: set_value() clamps a column
+## to its validator range (range_of), pack_row() packs the one row to upload, reset() puts back
+## the row as loaded.
 extends RefCounted
 
 const DEFAULT_PATH := "res://data/materials.json"
@@ -15,12 +19,19 @@ const MAX_MATERIALS := 64
 ## Class order defines the class number the shaders see (common.glslinc CLASS_*).
 const CLASSES := ["liquid", "powder", "cluster", "gas", "static"]
 
-## Required numeric columns. Each is [name, min, max].
+## Required numeric columns. Each is [name, min, max]. The ranges of the parameter panel's
+## columns are its sliders' ends; each end was checked on the GPU probe (ADR 0001 decision 4,
+## ADR 0007).
 const NUMBER_FIELDS := [
-	["density", 0.01, 100.0],
+	# A jelly at 0.01 under a carrot stayed squashed flat; at 100 a box sank through a sand bed
+	# to the floor. Steel, the densest v1 material, is ~8.
+	["density", 0.1, 10.0],
 	["friction", 0.0, 1.0],
 	["viscosity", 0.0, 1.0],
-	["drag", 0.0, 60.0],  # per second: v *= exp(-drag * dt)
+	# per second: v *= exp(-drag * dt). Falling stops at GRAVITY / drag: 80 px/s at 5. At 60
+	# water hung in the air at 7 px/s; at 10, 300 grains of a 50k sand fill still slid after
+	# 50 s, where at 5 they died down (ADR 0007).
+	["drag", 0.0, 5.0],
 	["wind_coupling", 0.0, 10.0],
 	["stiffness", 0.0, 1.0],
 	["conductivity", 0.0, 100.0],
@@ -36,6 +47,29 @@ const TEMP_FIELDS := ["ignition_temp", "boil_temp", "melt_temp"]
 const CLUSTER_FIELDS := [
 	["region", 1.5, 2.0],
 ]
+## Narrower ranges of NUMBER_FIELDS columns for one class: { class: [[name, min, max], ...] }.
+## Each end was checked on the GPU probe (ADR 0001 decision 4, ADR 0007).
+##   liquid drag: below 0.1 a pool never comes to rest (gpu_probe water: at 0, 11 px/s of
+##   churn after 40 s; at 0.05, still 3 px/s).
+##   cluster drag: a soft body with no friction and drag under 0.5 jiggles for good (body_probe
+##   wobble, fold: 7-22 px/s at the end at drag 0-0.3, 0.4 px/s at 0.5).
+##   cluster stiffness: same-body particles don't push on each other, so a body at stiffness 0
+##   collapses onto one point (ADR 0002); below 0.2 a jelly ends as a puddle that doesn't spring
+##   back (body_probe wobble, squash) and its members sink into a sand bed.
+const CLASS_RANGES := {
+	"liquid": [["drag", 0.1, 5.0]],
+	"cluster": [["drag", 0.5, 5.0], ["stiffness", 0.2, 1.0]],
+}
+## Columns the parameter panel shows, per class, in display order (ADR 0007). A liquid's
+## density does nothing yet (STATUS Known issues), and nothing reads the heat, wind and
+## lifetime columns, so they have no slider.
+const PANEL_FIELDS := {
+	"liquid": ["viscosity", "drag"],
+	"powder": ["density", "friction", "drag"],
+	"cluster": ["density", "friction", "drag", "stiffness", "region"],
+	"gas": [],
+	"static": [],
+}
 
 ## GPU layout: one std430 struct of 5 vec4s per material (see common.glslinc Material).
 ##   vec4  color                                        offset 0
@@ -48,6 +82,8 @@ const GPU_STRIDE := 80
 ## Rows keyed by material id (int). Each row is the Dictionary from the file.
 var materials := {}
 var _rows: Array = []
+## Rows as loaded, keyed by id, for reset().
+var _loaded := {}
 
 
 ## Loads and validates a table file. Returns a list of problems (empty means valid).
@@ -66,7 +102,11 @@ func load_file(path: String = DEFAULT_PATH) -> PackedStringArray:
 func load_rows(rows: Array) -> PackedStringArray:
 	_rows = rows
 	materials.clear()
-	return validate()
+	var problems := validate()
+	_loaded.clear()
+	for id in materials:
+		_loaded[id] = materials[id].duplicate(true)
+	return problems
 
 
 ## Checks table integrity. Returns a list of problems (empty means valid).
@@ -107,16 +147,13 @@ func _check_row(row: Dictionary, label: String) -> PackedStringArray:
 	var color = row.get("color")
 	if typeof(color) != TYPE_STRING or not Color.html_is_valid(color):
 		p.append("%s: 'color' must be an HTML color like \"#d9b26b\"" % label)
-	for f in NUMBER_FIELDS:
-		var v = row.get(f[0])
+	for nf in NUMBER_FIELDS:
+		var v = row.get(nf[0])
+		var f := [nf[0]] + range_of(nf[0], str(row.get("class")))
 		if not _is_number(v):
 			p.append("%s: '%s' must be a number" % [label, f[0]])
 		elif float(v) < f[1] or float(v) > f[2]:
 			p.append("%s: '%s'=%s out of range [%s, %s]" % [label, f[0], v, f[1], f[2]])
-	# Same-body particles don't push on each other, so a body at stiffness 0 collapses
-	# onto one point (ADR 0002).
-	if row.get("class") == "cluster" and _is_number(row.get("stiffness")) and float(row.stiffness) <= 0.0:
-		p.append("%s: 'stiffness' must be above 0 for a cluster material" % label)
 	if row.get("class") == "cluster":
 		for f in CLUSTER_FIELDS:
 			var v = row.get(f[0])
@@ -153,19 +190,66 @@ func class_of(id: int) -> int:
 	return CLASSES.find(materials[id]["class"])
 
 
+## The validator's [min, max] for a column on rows of a class ("liquid", "cluster", ...), as
+## 64-bit floats (a Vector2 would round 0.01 below the validator's minimum): CLASS_RANGES,
+## else CLUSTER_FIELDS, else NUMBER_FIELDS. Columns in none of them give [].
+static func range_of(column: String, cls: String) -> Array:
+	for f in CLASS_RANGES.get(cls, []):
+		if f[0] == column:
+			return [float(f[1]), float(f[2])]
+	if cls == "cluster":
+		for f in CLUSTER_FIELDS:
+			if f[0] == column:
+				return [float(f[1]), float(f[2])]
+	for f in NUMBER_FIELDS:
+		if f[0] == column:
+			return [float(f[1]), float(f[2])]
+	return []
+
+
+## Sets a numeric column of a loaded material, clamped to range_of. Returns the value stored.
+## The caller uploads the row (ParticleSim.update_material).
+func set_value(id: int, column: String, value: float) -> float:
+	var row: Dictionary = materials[id]
+	var r := range_of(column, row["class"])
+	assert(not r.is_empty(), "no range for column '%s'" % column)
+	var v := clampf(value, r[0], r[1])
+	row[column] = v
+	return v
+
+
+## Sets a loaded material's colour (the renderer ignores alpha, so it is dropped).
+func set_color(id: int, color: Color) -> void:
+	materials[id].color = "#" + color.to_html(false)
+
+
+## Puts a material's row back as it was loaded.
+func reset(id: int) -> void:
+	materials[id] = _loaded[id].duplicate(true)
+
+
+## Packs one material into its GPU_STRIDE bytes (the Material struct in common.glslinc).
+func pack_row(id: int) -> PackedByteArray:
+	var row: Dictionary = materials[id]
+	var b := PackedByteArray()
+	b.resize(GPU_STRIDE)
+	var c := Color.html(row.color)
+	var floats := [c.r, c.g, c.b, c.a,
+			row.density, row.friction, row.viscosity, row.drag,
+			row.wind_coupling, row.stiffness, row.conductivity, row.heat_capacity]
+	for k in floats.size():
+		b.encode_float(k * 4, floats[k])
+	b.encode_u32(48, class_of(id))
+	b.encode_float(64, float(row.get("region", 0.0)))
+	return b
+
+
 ## Packs every material into the GPU table (unused ids stay zero).
 func pack_gpu() -> PackedByteArray:
 	var b := PackedByteArray()
 	b.resize(MAX_MATERIALS * GPU_STRIDE)
 	for id in materials:
-		var row: Dictionary = materials[id]
-		var o: int = id * GPU_STRIDE
-		var c := Color.html(row.color)
-		var floats := [c.r, c.g, c.b, c.a,
-				row.density, row.friction, row.viscosity, row.drag,
-				row.wind_coupling, row.stiffness, row.conductivity, row.heat_capacity]
-		for k in floats.size():
-			b.encode_float(o + k * 4, floats[k])
-		b.encode_u32(o + 48, class_of(id))
-		b.encode_float(o + 64, float(row.get("region", 0.0)))
+		var row := pack_row(id)
+		for k in GPU_STRIDE:
+			b[id * GPU_STRIDE + k] = row[k]
 	return b

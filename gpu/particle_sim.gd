@@ -38,6 +38,7 @@ const ComputeContext = preload("res://gpu/compute_context.gd")
 const SimParams = preload("res://core/sim_params.gd")
 const ParticleStep = preload("res://cpu_ref/particle_step.gd")
 const ParticlePool = preload("res://cpu_ref/particle_pool.gd")
+const MaterialTable = preload("res://cpu_ref/material_table.gd")
 
 const SHADER_DIR := "res://gpu/shaders/sim/"
 const KERNELS := [
@@ -113,11 +114,12 @@ var _clear_pending := false
 var _check: Dictionary = {}
 ## Bodies as the CPU hands them out (ADR 0002): index = body id, 0 unused. Each
 ## { "first", "count" (0 = free id), "made" (frame it spawned, NOT_MADE until then),
-## "rest" (rest offset of each member of the range, for splitting it, ADR 0004), "soft" (its
-## material's stiffness is under 1: the regions pass runs while any such body exists, ADR 0005) }.
+## "rest" (rest offset of each member of the range, for splitting it, ADR 0004), "material" (the
+## regions pass runs while a body of a soft material exists, ADR 0005) }.
 ## ParticleStep._first_fit allocates member ranges from these, as in the CPU reference.
 var _bodies: Array = []
-## Material ids whose stiffness is under 1 (soft bodies, ADR 0005).
+## Material ids whose stiffness is under 1 (soft bodies, ADR 0005). The parameter panel can move
+## a material across 1 while its bodies exist (update_material, ADR 0007).
 var _soft_materials := {}
 ## Bodies waiting to spawn, one per frame: { "id", "material", "spawn" (bytes), "mean", "count" }.
 var _pending_bodies: Array = []
@@ -411,7 +413,7 @@ func make_body(positions: PackedVector2Array, material: int, rest_shape := Packe
 		return 0
 	if id == _bodies.size():
 		_bodies.append({})
-	_bodies[id] = {"first": first, "count": count, "made": NOT_MADE, "soft": _soft_materials.has(material)}
+	_bodies[id] = {"first": first, "count": count, "made": NOT_MADE, "material": material}
 	var mean := Vector2.ZERO
 	var rest_mean := Vector2.ZERO
 	for k in count:
@@ -439,6 +441,32 @@ func make_body(positions: PackedVector2Array, material: int, rest_shape := Packe
 	_pending_bodies.append({"id": id, "material": material, "spawn": spawn.to_byte_array(), "mean": mean, "count": count})
 	body_count += 1
 	return id
+
+
+## Uploads one material's row after the parameter panel changed it (ADR 0007): every particle
+## and body of that material uses it from the next frame on; nothing is rebuilt or reset. The
+## shaders read the row every substep; only which materials are soft is kept here, so a
+## stiffness that crosses 1 turns that material's bodies soft or rigid at once.
+func update_material(material_table, id: int) -> void:
+	var row: PackedByteArray = material_table.pack_row(id)
+	for k in row.size():
+		_material_bytes[id * MaterialTable.GPU_STRIDE + k] = row[k]
+	var became_soft := false
+	if float(material_table.materials[id].stiffness) < 1.0:
+		became_soft = not _soft_materials.has(id)
+		_soft_materials[id] = true
+	else:
+		_soft_materials.erase(id)
+	if _gpu_ready:
+		RenderingServer.call_on_render_thread(_update_material_rt.bind(id, row, became_soft))
+
+
+func _update_material_rt(id: int, row: PackedByteArray, became_soft: bool) -> void:
+	_ctx.update_buffer_rt("materials", id * MaterialTable.GPU_STRIDE, row)
+	# Region rotations left from earlier soft bodies in these slots would turn the new soft
+	# members' push-out until their first region fit; zero makes member_rot use the body's.
+	if became_soft:
+		_ctx.rd.buffer_clear(_ctx.buffer("region_frame"), 0, cap * 16)
 
 
 ## Reads every slot's position and flags back, a frame or two late, for the body brush to
@@ -475,7 +503,7 @@ func _reset_bodies() -> void:
 ## True while a soft body is in use (made or waiting to spawn): the regions pass runs then.
 func _any_soft() -> bool:
 	for id in range(1, _bodies.size()):
-		if _bodies[id].count > 0 and _bodies[id].get("soft", false):
+		if _bodies[id].count > 0 and _soft_materials.has(_bodies[id].get("material", -1)):
 			return true
 	return false
 
@@ -641,7 +669,7 @@ static func plan_split(bodies: Array, id: int, slots: PackedInt32Array, live: Pa
 				for k in piece:
 					rest.append(shape[k])
 				bodies[new_id] = {"first": first, "count": piece.size(), "made": NOT_MADE, "rest": rest,
-						"soft": b.get("soft", false)}
+						"material": b.get("material", -1)}
 				placed.append([new_id, first, piece])
 				continue
 		kept.append_array(piece)

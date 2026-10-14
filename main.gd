@@ -2,7 +2,8 @@
 ## the GPU particle sim, and routes brush input to it.
 ## Left mouse (draw) adds the selected material, or with a cluster material (carrot, jelly,
 ## cork) paints a stroke that becomes bodies on release (core/body_brush.gd); right mouse
-## (erase) removes any, and drops a stroke being painted.
+## (erase) removes any, and drops a stroke being painted. The parameter panel (ui/) edits the
+## selected material's row while the sim runs (ADR 0007).
 extends Node2D
 
 const GameConfig = preload("res://core/game_config.gd")
@@ -20,6 +21,7 @@ const NO_DEVICE_MESSAGE := "This game needs GPU compute (Vulkan, Mobile renderer
 @onready var _overlay = $DebugOverlay
 @onready var _error_screen = $ErrorScreen
 @onready var _toolbar = $Toolbar
+@onready var _panel = $ParameterPanel
 @onready var _view: Sprite2D = $SimView
 
 var _config
@@ -53,10 +55,14 @@ func _ready() -> void:
 		return
 	_material = _table.materials.keys().min()
 	_toolbar.build(_table.materials, _material, "+%dk" % (SimParams.BENCH_BLOCK / 1000))
-	_toolbar.material_selected.connect(func(id): _material = id)
+	_toolbar.material_selected.connect(_select)
 	_toolbar.fill_requested.connect(func(id): _pending_fill = id)
 	_toolbar.clear_requested.connect(_clear)
 	_toolbar.set_capacity(0, _config.particle_cap)
+	_panel.show_material(_material, _table.materials[_material])
+	_panel.value_changed.connect(_on_parameter)
+	_panel.color_changed.connect(_on_color)
+	_panel.reset_requested.connect(_on_reset)
 
 	if not ComputeContext.is_available():
 		_error_screen.show_error(NO_DEVICE_MESSAGE)
@@ -94,6 +100,35 @@ func _on_check_finished(ok: bool, message: String) -> void:
 func _on_view_toggled(view: String, enabled: bool) -> void:
 	if view == "hash_grid":
 		_view_flags = ParticleSim.VIEW_HASH if enabled else 0
+
+
+func _select(id: int) -> void:
+	_material = id
+	_panel.show_material(id, _table.materials[id])
+
+
+## Parameter panel edits (ADR 0007): change the row, then upload it; every particle and body of
+## the material follows from the next frame.
+func _on_parameter(id: int, column: String, value: float) -> void:
+	_table.set_value(id, column, value)
+	_upload(id)
+
+
+func _on_color(id: int, color: Color) -> void:
+	_table.set_color(id, color)
+	_upload(id)
+
+
+func _on_reset(id: int) -> void:
+	_table.reset(id)
+	_upload(id)
+	_panel.show_material(id, _table.materials[id])
+
+
+func _upload(id: int) -> void:
+	_toolbar.set_material_color(id, Color.html(_table.materials[id].color))
+	if _sim != null:
+		_sim.update_material(_table, id)
 
 
 func _clear() -> void:

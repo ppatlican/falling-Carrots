@@ -49,7 +49,7 @@ Material painted into the world grid instead of being particles (steel, wood). P
 _Avoid_: Wall, terrain
 
 **Parameter**:
-One adjustable column of a material's row (viscosity, stickiness, density, stiffness and so on). Parameters belong to the material, not to single particles, and each has a safe range.
+One adjustable column of a material's row (viscosity, stickiness, density, stiffness and so on). Parameters belong to the material, not to single particles, and each has a safe range: the validator's range for that column and class, where its slider stops.
 _Avoid_: Setting (config.json holds settings), property
 
 **Stickiness**:
@@ -114,7 +114,7 @@ The tool that adds the selected material in a circle; right-click with it is the
 The tool that draws a shape which becomes one rigid or soft body, by the material's stiffness. It paints on the rest lattice, leaves out spots that already hold particles and parts thinner than 2 particles, and makes one body per piece left. A stroke holds at most 2000 particles.
 
 **Parameter panel**:
-The in-game panel of sliders for the selected material's parameters, with copy to a free slot and reset.
+The in-game panel (top right) of sliders for the selected material's parameters, with its colour and reset (copy to a free slot comes later). An edit changes every particle and body of the material at once, while the sim runs (ADR 0007).
 _Avoid_: Material editor, inspector
 
 **Eraser**:

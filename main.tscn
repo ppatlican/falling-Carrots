@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://main.gd" id="1_main"]
 [ext_resource type="Script" path="res://debug/debug_overlay.gd" id="2_overlay"]
 [ext_resource type="Script" path="res://debug/error_screen.gd" id="3_error"]
 [ext_resource type="Script" path="res://ui/toolbar.gd" id="4_toolbar"]
+[ext_resource type="Script" path="res://ui/parameter_panel.gd" id="5_panel"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
@@ -13,6 +14,9 @@ centered = false
 
 [node name="Toolbar" type="CanvasLayer" parent="."]
 script = ExtResource("4_toolbar")
+
+[node name="ParameterPanel" type="CanvasLayer" parent="."]
+script = ExtResource("5_panel")
 
 [node name="DebugOverlay" type="CanvasLayer" parent="."]
 script = ExtResource("2_overlay")

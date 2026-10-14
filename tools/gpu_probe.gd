@@ -8,6 +8,9 @@
 ##   gap=N    drop the blocks N frames apart (30 is about the pace of clicking +10k)
 ##   every=N  sample every N frames (default 60; a bounce with a 1 s period hides at 60)
 ##   from=N   average pass times from frame N on (default 600; pick a settled frame)
+##   set=water.drag=60[,...] [setat=N]  edit material parameters as the parameter panel does
+##            (tools/probe_params.gd), at frame N (default: before the first frame); put them
+##            after the positional arguments
 ## At the end: mean GPU time per pass from frame `from` on (TIME lines, then their total).
 ## Every sample (60 frames): speed, wall and RMS-drift stats per material. Every 5th sample:
 ## a grid of 20 px cells (S speed, V mean vy, N count, M count of the last material) and
@@ -19,6 +22,7 @@ const ParticleSim = preload("res://gpu/particle_sim.gd")
 const GameConfig = preload("res://core/game_config.gd")
 const MaterialTable = preload("res://cpu_ref/material_table.gd")
 const SimParams = preload("res://core/sim_params.gd")
+const ProbeParams = preload("res://tools/probe_params.gd")
 
 var sample_every := 60  # from "every=N"; pick one coprime with 60 to catch periodic bounces
 const WALL_BAND := 8.0
@@ -44,6 +48,8 @@ var prev_vy := {}
 var prev_pos := {}
 var cap := 50000
 var ground_y := 0.0
+var param_sets: Array = []  # from "set=" (tools/probe_params.gd)
+var param_frame := 0  # from "setat=N"
 
 
 func _initialize() -> void:
@@ -63,6 +69,8 @@ func _initialize() -> void:
 			sample_every = maxi(1, int(a.substr(6)))
 		if a.begins_with("from="):
 			time_from = maxi(0, int(a.substr(5)))
+	param_sets = ProbeParams.parse(args)
+	param_frame = ProbeParams.frame(args)
 	var config = GameConfig.load_from_file()
 	cap = config.particle_cap
 	table = MaterialTable.new()
@@ -95,6 +103,8 @@ func _process(_delta: float) -> bool:
 	if not ready:
 		return false
 	frame_i += 1
+	if frame_i == maxi(1, param_frame):
+		ProbeParams.apply(table, sim, param_sets)
 	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": 0.0,
 			"material": mat_id, "count": 0, "cols": 1}
 	var mixed := seq.size() > 1

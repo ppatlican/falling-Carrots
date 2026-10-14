@@ -30,7 +30,7 @@ func test_validator_catches_bad_rows() -> void:
 		"'color' must be": [_with(good, {"color": "sandy"})],
 		"'boil_temp' must be": [_without(good, "boil_temp")],
 		"the cap is": _many_rows(MaterialTable.MAX_MATERIALS + 1),
-		"above 0 for a cluster": [_with(good, {"class": "cluster", "stiffness": 0.0, "region": 1.5})],
+		"'stiffness'=0.0 out of range": [_with(good, {"class": "cluster", "stiffness": 0.0, "region": 1.5})],
 		"'region' must be a number for a cluster": [_with(good, {"class": "cluster", "stiffness": 0.5})],
 		"'region'=1.2 out of range": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 1.2})],
 		"'region'=2.5 out of range": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 2.5})],
@@ -43,10 +43,29 @@ func test_validator_catches_bad_rows() -> void:
 		expect(found, "expected a problem containing \"%s\", got %s" % [expected, problems])
 
 
-func test_cluster_stiffness_above_zero_is_valid() -> void:
+func test_cluster_stiffness_floor() -> void:
 	var problems: PackedStringArray = MaterialTable.new().load_rows(
-			[_with(_sand_row(), {"class": "cluster", "stiffness": 0.01, "region": 1.5})])
-	expect(problems.is_empty(), "cluster at stiffness 0.01: %s" % "; ".join(problems))
+			[_with(_sand_row(), {"class": "cluster", "stiffness": 0.2, "region": 1.5})])
+	expect(problems.is_empty(), "cluster at stiffness 0.2: %s" % "; ".join(problems))
+	problems = MaterialTable.new().load_rows(
+			[_with(_sand_row(), {"class": "cluster", "stiffness": 0.1, "region": 1.5})])
+	expect(not problems.is_empty(), "a jelly at stiffness 0.1 doesn't spring back (ADR 0007)")
+
+
+func test_class_ranges() -> void:
+	var water := _with(_sand_row(), {"class": "liquid", "name": "w", "drag": 0.05})
+	var problems: PackedStringArray = MaterialTable.new().load_rows([water])
+	expect(not problems.is_empty() and problems[0].contains("'drag'=0.05 out of range"),
+			"a liquid below drag 0.1 churns (ADR 0007): %s" % "; ".join(problems))
+	problems = MaterialTable.new().load_rows([_with(_sand_row(), {"drag": 0.0})])
+	expect(problems.is_empty(), "a powder may have no drag: %s" % "; ".join(problems))
+	expect_eq(MaterialTable.range_of("drag", "liquid"), [0.1, 5.0], "liquid drag range")
+	expect_eq(MaterialTable.range_of("drag", "powder"), [0.0, 5.0], "powder drag range")
+	expect_eq(MaterialTable.range_of("drag", "cluster"), [0.5, 5.0], "cluster drag range")
+	expect_eq(MaterialTable.range_of("density", "cluster"), [0.1, 10.0], "density range")
+	expect_eq(MaterialTable.range_of("stiffness", "cluster"), [0.2, 1.0], "cluster stiffness range")
+	expect_eq(MaterialTable.range_of("region", "cluster"), [1.5, 2.0], "region range")
+	expect_eq(MaterialTable.range_of("region", "powder"), [], "no region outside clusters")
 
 
 func test_gpu_packing_layout() -> void:

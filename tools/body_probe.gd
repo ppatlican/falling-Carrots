@@ -125,6 +125,8 @@
 ##   softcap  one 50x40 jelly (2000 particles, as brushcap) dropped, 900 frames, timed from 300
 ##   softmany 256 8x6 jellies (as many), 1500 frames, timed from 900
 ## stiff=S region=W replace the jelly row's stiffness and region for this run (tuning).
+## set=cork.density=5[,...] [setat=N] edit material parameters as the parameter panel does
+## (tools/probe_params.gd), at frame N of every scenario (default: before its first frame).
 ## Bodies spawn one per frame from frame 1, so a stack's upper boxes start a few frames late.
 ## Thresholds are the CPU test's (tests/test_bodies.gd); each result line ends PASS or FAIL.
 ## TIME lines: mean GPU time per pass from frame `from` of each scenario (default: 120 for the
@@ -138,6 +140,7 @@ const ParticleSim = preload("res://gpu/particle_sim.gd")
 const GameConfig = preload("res://core/game_config.gd")
 const MaterialTable = preload("res://cpu_ref/material_table.gd")
 const SimParams = preload("res://core/sim_params.gd")
+const ProbeParams = preload("res://tools/probe_params.gd")
 
 const TESTS := ["floor", "jelly", "stack3", "stack5", "erase", "spawnin", "corner"]
 ## Lowest y a body particle's centre reaches: the fixed 0.5-spacing wall inset.
@@ -180,12 +183,18 @@ var jelly_region := -1.0  # from "region=W"
 var shots := PackedInt32Array()
 var ready := false
 var failed := 0
+var param_sets: Array = []  # from "set=" (tools/probe_params.gd)
+var param_frame := 0  # from "setat=N"
 
 
 func _initialize() -> void:
 	var names := "tests"
+	param_sets = ProbeParams.parse(OS.get_cmdline_user_args())
+	param_frame = ProbeParams.frame(OS.get_cmdline_user_args())
 	for a in OS.get_cmdline_user_args():
-		if a.begins_with("from="):
+		if ProbeParams.is_arg(a):
+			pass
+		elif a.begins_with("from="):
 			time_from = int(a.substr(5))
 		elif a.begins_with("shots="):
 			for v in a.substr(6).split(","):
@@ -258,6 +267,8 @@ func _process(_delta: float) -> bool:
 	if frame_i >= sc.frames:
 		return false  # waiting for the last samples
 	frame_i += 1
+	if frame_i == maxi(1, param_frame):
+		ProbeParams.apply(table, sim, param_sets)
 	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": 0.0, "material": 0, "count": 0, "cols": 1}
 	_scenario_brush(brush)
 	sim.frame(brush, 0)

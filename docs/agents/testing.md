@@ -39,6 +39,8 @@ The whole suite (55 tests) takes ~19 min in one process, ~13 min as two in paral
 | `core/body_brush.gd` | `@brush` | `main.tscn` screenshots of a stroke |
 | `core/game_config.gd`, `debug/`, `project.godot` | `@setup` | — |
 | `cpu_ref/material_table.gd`, `particle_pool.gd` | `@setup` | — |
+| … a range (`NUMBER_FIELDS`, `CLASS_RANGES`, `CLUSTER_FIELDS`) or `PANEL_FIELDS` | `@setup` | the scenarios of each class the column has a slider for, at the new end (`set=`, `gpu-probe.md`; the list ADR 0007 used is in its Results) |
+| `tools/probe_params.gd` | — | any one probe with `set=` |
 | `cpu_ref/reactions.gd`, `conduction.gd` | none exist yet | — |
 | `cpu_ref/particle_step.gd`, `_match_shapes`, `make_body`, `_member_rot` | `@rigid @soft @erase @bodies-water` | — |
 | … `_match_regions`, `_find_regions`, `_soft`, `_region_reach`, `_self_contact` | `@soft` | — |
