@@ -21,6 +21,9 @@
 ##             this substep (body_project) between pressure and its apply, and shape
 ##             matching (body_match) after each iteration's apply; its own passes so their
 ##             time shows separately
+##   regions   soft bodies bend (ADR 0005): after each body pass, every member of a soft body
+##             fits its region (body_region_fit) and moves toward its regions' goals
+##             (body_region_goal), one thread per particle; skipped while no soft body exists
 ##   velocity  update, XSPH, commit
 ##   render    clear image, draw liquid points, then powder points on top
 ##
@@ -41,7 +44,7 @@ const KERNELS := [
 	"body_split", "brush_spawn", "brush_erase", "brush_finalize", "predict",
 	"hash_clear", "hash_count", "scan_local", "scan_blocks", "scan_add", "hash_scatter",
 	"hydro_splat", "hydro_phi", "hydro_solve", "body_sweep", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
-	"body_project", "body_match",
+	"body_project", "body_match", "body_region_fit", "body_region_goal",
 	"velocity_update", "velocity_xsph", "velocity_commit",
 	"render_clear", "render_points", "render_gap", "render_powder",
 ]
@@ -110,9 +113,12 @@ var _clear_pending := false
 var _check: Dictionary = {}
 ## Bodies as the CPU hands them out (ADR 0002): index = body id, 0 unused. Each
 ## { "first", "count" (0 = free id), "made" (frame it spawned, NOT_MADE until then),
-## "rest" (rest offset of each member of the range, for splitting it, ADR 0004) }.
+## "rest" (rest offset of each member of the range, for splitting it, ADR 0004), "soft" (its
+## material's stiffness is under 1: the regions pass runs while any such body exists, ADR 0005) }.
 ## ParticleStep._first_fit allocates member ranges from these, as in the CPU reference.
 var _bodies: Array = []
+## Material ids whose stiffness is under 1 (soft bodies, ADR 0005).
+var _soft_materials := {}
 ## Bodies waiting to spawn, one per frame: { "id", "material", "spawn" (bytes), "mean", "count" }.
 var _pending_bodies: Array = []
 ## Ids found empty, whose GPU records are zeroed next frame.
@@ -142,6 +148,9 @@ func _init(ctx, particle_cap: int, solver_iterations: int, material_table, subst
 	_iterations = solver_iterations
 	_substeps = maxi(1, substeps)
 	_material_bytes = material_table.pack_gpu()
+	for id in material_table.materials:
+		if float(material_table.materials[id].stiffness) < 1.0:
+			_soft_materials[id] = true
 	_grid = SimParams.grid_size()
 	_n_cells = _grid.x * _grid.y
 	_rest_density = ParticleStep.rest_density_for(SimParams.H, SimParams.SPACING)
@@ -212,6 +221,7 @@ func _body_buffer_specs() -> Array:
 		[24, "body_members", cap * 4],
 		[25, "bodies", (body_cap + 1) * BODY_BYTES],
 		[26, "body_spawn", cap * 32],
+		[27, "region_frame", cap * 16],
 	]
 
 
@@ -281,6 +291,7 @@ func _build_passes_rt() -> void:
 			solve.append_array([d.call("solve_lambda", all), d.call("solve_delta", all), d.call("solve_apply", all)])
 			_ctx.add_pass("solve", solve)
 			_ctx.add_pass("bodies", [d.call("body_match", 0)])
+			_ctx.add_pass("regions", [d.call("body_region_fit", 0), d.call("body_region_goal", 0)])
 			solve = []
 		_ctx.add_pass("velocity", [d.call("velocity_update", all), d.call("velocity_xsph", all), d.call("velocity_commit", all)])
 	_ctx.add_pass("render", [d.call("render_clear", pixels), d.call("render_points", all), d.call("render_gap", all),
@@ -358,7 +369,7 @@ func frame(brush: Dictionary, view_flags: int) -> void:
 	_freed_ids = PackedInt32Array()
 	RenderingServer.call_on_render_thread(_frame_rt.bind(_push(brush, view_flags), int(brush.op), int(brush.count),
 			float(brush.get("radius", SimParams.BRUSH_RADIUS)), clear, spawn, split_count, freed, _body_max_id(),
-			check_bytes, split_range, _frame))
+			check_bytes, split_range, _frame, _any_soft()))
 
 
 ## Empties the pool at the start of the next frame. Bodies are forgotten now, so bodies
@@ -400,7 +411,7 @@ func make_body(positions: PackedVector2Array, material: int, rest_shape := Packe
 		return 0
 	if id == _bodies.size():
 		_bodies.append({})
-	_bodies[id] = {"first": first, "count": count, "made": NOT_MADE}
+	_bodies[id] = {"first": first, "count": count, "made": NOT_MADE, "soft": _soft_materials.has(material)}
 	var mean := Vector2.ZERO
 	var rest_mean := Vector2.ZERO
 	for k in count:
@@ -461,6 +472,14 @@ func _reset_bodies() -> void:
 	body_count = 0
 
 
+## True while a soft body is in use (made or waiting to spawn): the regions pass runs then.
+func _any_soft() -> bool:
+	for id in range(1, _bodies.size()):
+		if _bodies[id].count > 0 and _bodies[id].get("soft", false):
+			return true
+	return false
+
+
 ## Highest body id in use: the body pass runs one workgroup per id up to it.
 func _body_max_id() -> int:
 	for id in range(_bodies.size() - 1, 0, -1):
@@ -471,7 +490,7 @@ func _body_max_id() -> int:
 
 func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear: bool, spawn: PackedByteArray,
 		split_count: int, freed: PackedInt32Array, body_groups: int, check_bytes: int, split_range: Vector2i,
-		frame_number: int) -> void:
+		frame_number: int, soft: bool) -> void:
 	if not _gpu_ready:
 		return
 	if clear:
@@ -493,6 +512,9 @@ func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear:
 	_ctx.set_groups_rt("brush", 2, ComputeContext.groups_for(cap) if op == BRUSH_ERASE else 0)
 	_ctx.set_groups_rt("brush", 3, 1 if op != BRUSH_NONE else 0)
 	_ctx.set_groups_rt("bodies", 0, body_groups)  # one workgroup per body id
+	var region_groups := ComputeContext.groups_for(cap) if soft else 0
+	_ctx.set_groups_rt("regions", 0, region_groups)
+	_ctx.set_groups_rt("regions", 1, region_groups)
 	_ctx.set_push_all_rt(push)
 	_ctx.record_frame_rt()
 	if not _counter_in_flight:
@@ -618,7 +640,8 @@ static func plan_split(bodies: Array, id: int, slots: PackedInt32Array, live: Pa
 				var rest := PackedVector2Array()
 				for k in piece:
 					rest.append(shape[k])
-				bodies[new_id] = {"first": first, "count": piece.size(), "made": NOT_MADE, "rest": rest}
+				bodies[new_id] = {"first": first, "count": piece.size(), "made": NOT_MADE, "rest": rest,
+						"soft": b.get("soft", false)}
 				placed.append([new_id, first, piece])
 				continue
 		kept.append_array(piece)

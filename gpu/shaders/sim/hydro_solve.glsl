@@ -21,7 +21,7 @@
 // no difference: what is left is the 64 barriers on one compute unit.
 
 #define LOCAL_SIZE_X 128
-// common.glslinc stamp: Params 124 B, v17. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v18. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
 

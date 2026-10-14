@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://d0gl25w72stf8"
+path="res://.godot/imported/body_region_fit.glsl-d51a3bed4c4a2b8a9122d964944fdd51.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/body_region_fit.glsl"
+dest_files=["res://.godot/imported/body_region_fit.glsl-d51a3bed4c4a2b8a9122d964944fdd51.res"]
+
+[params]
+

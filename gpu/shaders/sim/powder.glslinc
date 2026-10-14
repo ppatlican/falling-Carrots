@@ -18,7 +18,8 @@
 // Friction is cut for grains surrounded by liquid (wet_slip), see the end of contact_delta.
 // Body particles (cluster solids, ADR 0002) follow the powder rule against grains and against
 // particles of other bodies. Same-body pairs are skipped (shape matching holds a body
-// together, body_match.glsl). In a contact with a body, the lower side is heavier by STACK_K
+// together, body_match.glsl), except in a soft body, where members further apart in the rest
+// shape than the region radius collide (self_contact, ADR 0005). In a contact with a body, the lower side is heavier by STACK_K
 // over the height between the body centroids (a grain counts at its own height), on the
 // friction as well as the push-out: with mass-weighted friction a 3-box stack swayed for good
 // (CPU reference, ADR 0002). Body-liquid pairs (ADR 0003) touch at a full spacing and share
@@ -48,7 +49,8 @@ float stack_weight(float m_t, float m_j, float rv_y) {
 
 // Push-out from inside a body (ADR 0003 items 8 and 11). x is a particle, j (sorted) its
 // nearest particle of another body and body j's body. j's way out of the rest shape (rest_offset.zw),
-// turned by the body's rotation from the last body pass, gives the outward normal N and the
+// turned by j's rotation (member_rot: its body's from the last body pass, or in a soft body its
+// region's, ADR 0005), gives the outward normal N and the
 // outline's distance along it; x is inside by d = |e| - N.(x - x_j), and if so is moved d
 // along N, to the outline. Nothing for a body whose outline is stale (part of it erased).
 // A grain or water particle pushed into a lattice square sits at 0.7 spacing from four body
@@ -60,7 +62,7 @@ vec2 push_out(vec2 x, uint j, uint body) {
 		return vec2(0.0);
 	}
 	vec2 e_rest = rest_offset[sorted_ids[j]].zw;
-	vec2 r = bodies[body].frame.zw;
+	vec2 r = member_rot(j, body);
 	vec2 e = vec2(r.x * e_rest.x - r.y * e_rest.y, r.y * e_rest.x + r.x * e_rest.y);
 	float len = length(e);
 	if (len < 1e-6) {
@@ -69,6 +71,29 @@ vec2 push_out(vec2 x, uint j, uint body) {
 	vec2 normal = e / len;
 	float d = len - dot(normal, x - s_pred[j]);
 	return d > 0.0 ? d * normal : vec2(0.0);
+}
+
+// stack_weight for a contact with a body (ADR 0002 item 11), except where either side is in a
+// soft body (ADR 0005): there the share is by density alone, so a carrot set on a jelly presses
+// it flat. With STACK_K the jelly under it, 20 px lower, acted e^6 times heavier and took almost
+// none of the contact: it stood as tall as an unloaded one (body_probe squash).
+// Mirror: ParticleStep.body_stack_weight.
+float body_stack_weight(float m_t, float m_j, float dy, bool soft) {
+	return soft ? m_j / (m_t + m_j) : stack_weight(m_t, m_j, dy);
+}
+
+// Same-body pair t, j (sorted) that collides (ADR 0005 item 4): in a soft body, members further
+// apart in the rest shape than the region radius, so a floppy body folded onto itself lies on
+// itself instead of passing through. Pairs within it are held by their regions, and a rigid
+// body's by its shape. Mirror: ParticleStep._self_contact.
+bool self_contact(uint t, uint j) {
+	uint m = s_material(t);
+	if (!soft_material(m)) {
+		return false;
+	}
+	vec2 d = rest_offset[sorted_ids[t]].xy - rest_offset[sorted_ids[j]].xy;
+	float reach = region_reach(m);
+	return dot(d, d) > reach * reach;
 }
 
 // Height used for STACK_K in a contact with a body: the body's centroid from the last body
@@ -85,6 +110,7 @@ vec2 contact_delta(uint t, out vec2 body_out) {
 	bool t_powder = mt.info.x == CLASS_POWDER;
 	bool t_liquid = mt.info.x == CLASS_LIQUID;
 	uint t_body = s_body(t);
+	bool t_soft = t_body != 0u && soft_material(s_material(t));
 	float t_height = stack_height(t, t_body);
 	vec2 pt = s_pred[t];
 	vec2 move_t = pt - s_pos[t];
@@ -108,14 +134,15 @@ vec2 contact_delta(uint t, out vec2 body_out) {
 		bool j_liquid = mj.info.x == CLASS_LIQUID;
 		uint j_body = flags_j >> BODY_SHIFT;
 		if (!t_powder && !j_powder && t_body == 0u && j_body == 0u) continue;  // liquid-liquid: the density constraint
-		if (t_body != 0u && t_body == j_body) continue;  // same body: shape matching
+		bool own = t_body != 0u && t_body == j_body;
+		if (own && !self_contact(t, j)) continue;  // same body: shape matching
 		vec2 rv = pt - s_pred[j];
 		float dist = length(rv);
 		if (dist < params.h) {
 			n_near += 1.0;
 			n_wet += j_liquid ? 1.0 : 0.0;
 		}
-		if (j_body != 0u && dist < nearest_d) {  // same-body pairs were skipped above
+		if (j_body != 0u && !own && dist < nearest_d) {
 			nearest = j;
 			nearest_body = j_body;
 			nearest_d = dist;
@@ -134,12 +161,14 @@ vec2 contact_delta(uint t, out vec2 body_out) {
 		if (t_powder && j_powder) {
 			w_push = stack_weight(mt.phys.x, mj.phys.x, rv.y);
 		} else if (!t_liquid && !j_liquid) {
-			// A body, or a grain against one: friction takes the push-out's share (see top).
-			w_push = stack_weight(mt.phys.x, mj.phys.x, t_height - stack_height(j, j_body));
+			// A body, or a grain against one: friction takes the push-out's share (see top). Not
+			// in a contact with a soft body: a load must reach it to squash it (body_stack_weight).
+			w_push = body_stack_weight(mt.phys.x, mj.phys.x, t_height - stack_height(j, j_body),
+					t_soft || (j_body != 0u && soft_material(flags_j & MAT_MASK)));
 			w = w_push;
 		}
 		sum += w_push * pen * normal;
-		if (t_body != 0u && j_body != 0u) {
+		if (t_body != 0u && j_body != 0u && !own) {
 			sum_bodies += w_push * pen * normal;
 		}
 		if (j == nearest) {
@@ -189,8 +218,8 @@ vec2 contact_delta(uint t, out vec2 body_out) {
 			// share of the contact, so the pair separates by the depth. Without it a carrot dropped
 			// 150 px onto another (~240 px/s, over a spacing per substep) ended inside it, the
 			// ordinary contacts balanced among the interleaved lattices (body_probe boxdrop).
-			out_push *= stack_weight(mt.phys.x, materials[s_material(nearest)].phys.x,
-					t_height - stack_height(nearest, nearest_body));
+			out_push *= body_stack_weight(mt.phys.x, materials[s_material(nearest)].phys.x,
+					t_height - stack_height(nearest, nearest_body), t_soft || soft_material(s_material(nearest)));
 			body_out = (sum_bodies + out_push) * params.contact_relax;
 		}
 	}

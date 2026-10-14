@@ -9,7 +9,8 @@
 ##               liquids: PBF density constraint (liquid.glslinc)
 ##               powders: frictional contacts   (powder.glslinc)
 ##               bodies: contacts as powders (powder.glslinc), then shape
-##               matching (body_match.glsl; ADR 0002)
+##               matching (body_match.glsl; ADR 0002), and for soft bodies over
+##               small regions (body_region_fit.glsl, body_region_goal.glsl; ADR 0005)
 ##   velocity -> v = (pred - pos) / dt, drag, XSPH, commit   (velocity_*.glsl)
 ## Kernels are the 2D poly6 (density) and spiky (gradient) kernels.
 ## Density is normalised: rho_hat = sum(W) / rest_density, so 1.0 is rest.
@@ -28,12 +29,18 @@ const BODY_ROT_EPS := 1e-4
 
 ## World box particles are kept inside.
 var world_size: Vector2
-## Per material id: { "class": int, "density", "friction", "viscosity", "drag", "stiffness" }.
+## Per material id: { "class": int, "density", "friction", "viscosity", "drag", "stiffness",
+## "region" (cluster materials; 0 for the rest) }.
 var materials: Dictionary
 var rest_density: float
 ## _contact_delta's part that pushes a body member away from other bodies (contacts and
 ## push-out), as powder.glslinc's body_out.
 var _body_out := Vector2.ZERO
+## This substep's soft-body regions (_find_regions), each particle's region rotation (state
+## "region_rot") and rest offset, for the contacts and the push-out (ADR 0005 items 4 and 6).
+var _regions: Array = []
+var _region_rot := PackedVector2Array()
+var _rest_now := PackedVector2Array()
 
 
 ## material_table: a loaded cpu_ref/material_table.gd.
@@ -49,6 +56,7 @@ func _init(world: Vector2, material_table) -> void:
 			"viscosity": float(row.viscosity),
 			"drag": float(row.drag),
 			"stiffness": float(row.stiffness),
+			"region": float(row.get("region", 0.0)),
 		}
 	rest_density = rest_density_for(SimParams.H, SimParams.SPACING)
 
@@ -122,6 +130,10 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	var bodies: Array = state.get("bodies", [])
 	var members: PackedInt32Array = state.get("members", PackedInt32Array())
 	var h := SimParams.H
+	var region_rot: PackedVector2Array = state.get("region_rot", PackedVector2Array())
+	region_rot.resize(n)
+	_region_rot = region_rot
+	_rest_now = rest
 	var hydro_p: PackedFloat32Array = state.get("hydro_p", PackedFloat32Array())
 	var hsize := hydro_size(world_size)
 	hydro_p.resize(hsize.x * hsize.y)
@@ -136,6 +148,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 
 	# Neighbour lists from the predicted positions (the GPU rebuilds its hash here too).
 	var neighbours := _find_neighbours(pred, h)
+	_regions = _find_regions(pred, mat, body, rest)
 
 	# Density projection grid, then its push on liquids and on bodies' wet surfaces
 	# (hydro_*.glsl, solve_pressure.glsl).
@@ -178,6 +191,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		for i in n:
 			pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i], body[i] != 0)
 		_match_shapes(pred, mat, body, rest, bodies, members, dt, iterations)
+		_match_regions(pred, mat, rest, dt, iterations)
 		_spread_body_pushes(pushed, body, bodies, members)
 
 	# Velocity update, drag, then XSPH viscosity from the raw velocities.
@@ -211,6 +225,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	state.pos = pos
 	state.vel = vel
 	state.hydro_p = hydro_p
+	state.region_rot = _region_rot
 
 
 ## Swept contacts between bodies (ADR 0003 item 14): each body is rewound along its path by the
@@ -270,12 +285,12 @@ func _sweep_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, mat
 	if near1 < 0:
 		return 0.0
 	# Ends inside the other body's outline: a member passing beside a corner doesn't count.
-	if _push_out(pred[i], pred[near1], edge[near1], bodies[body[near1]]) == Vector2.ZERO:
+	if _push_out(pred[i], pred[near1], edge[near1], bodies[body[near1]], _member_rot(near1, mat, body, bodies)) == Vector2.ZERO:
 		return 0.0
 	var b: Dictionary = bodies[body[near0]]
 	if b.stale or edge[near0].length() < 1e-6:
 		return 0.0
-	var r: Vector2 = b.rot
+	var r := _member_rot(near0, mat, body, bodies)
 	var e := Vector2(r.x * edge[near0].x - r.y * edge[near0].y, r.y * edge[near0].x + r.x * edge[near0].y)
 	var len := e.length()
 	var normal := e / len
@@ -440,8 +455,9 @@ func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lamb
 ## centroid c, the rest centroid c0 of their rest offsets, A_pq = sum (p - c)(q - c0)^T and
 ## the rotation from it (kept when live < 2 or |A_pq| is near 0); then every live member
 ## moves toward its goal c + R(q - c0) by k = 1 - (1 - stiffness)^(dt * 60 / iterations),
-## so stiffness is the share of the shape error removed per 1/60 s. Mirrored by the fused
-## body pass, body_match.glsl (one workgroup per body).
+## so stiffness is the share of the shape error removed per 1/60 s. A soft body (stiffness < 1)
+## gets its record here but no goals: _match_regions moves its members (ADR 0005 item 7).
+## Mirrored by the fused body pass, body_match.glsl (one workgroup per body).
 func _match_shapes(pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
 		rest: PackedVector2Array, bodies: Array, members: PackedInt32Array, dt: float, iterations: int) -> void:
 	for id in range(1, bodies.size()):
@@ -478,6 +494,8 @@ func _match_shapes(pred: PackedVector2Array, mat: PackedInt32Array, body: Packed
 		b.centroid = c
 		b.rest_centroid = c0
 		var s: float = materials[mat[live[0]]].stiffness
+		if s < 1.0:
+			continue  # a soft body is matched over its regions (_match_regions, ADR 0005)
 		var k := 1.0 - pow(1.0 - s, dt * 60.0 / iterations)
 		var rot: Vector2 = b.rot
 		for m in live:
@@ -523,6 +541,126 @@ func _project_body_pushes(delta: PackedVector2Array, pred: PackedVector2Array, m
 			delta[m] = (push + turn * Vector2(-r.y, r.x)).limit_length(0.5 * SimParams.SPACING)
 
 
+## Soft bodies bend (ADR 0005): shape matching over small overlapping regions (Rivers & James
+## 2007, FastLSM; Mueller & Chentanez 2011), after _match_shapes in every iteration. Each member
+## r of a soft body has a region, _regions[r]: itself and the members of its body whose rest
+## offsets lie within the material's region radius of its own (_find_regions).
+##   Fit (body_region_fit.glsl): per region, its centroid c, rest centroid c0 and rotation R, as
+##   _match_shapes fits a whole body (R kept from the last fit when the region has under 2
+##   members or |A_pq| is near 0), kept as R and t = c - R c0.
+##   Goal (body_region_goal.glsl): member i moves toward the mean, over the regions that hold it
+##   (the members of its own region: the relation is symmetric), of t_r + R_r q_i, by the
+##   stiffness formula of _match_shapes.
+## Each region is rigid but neighbouring ones turn by different amounts, so the body bends where
+## it is loaded and springs back to its rest shape. The rotations stay in state "region_rot"
+## (the push-out reads them, and the next fit keeps one when it can't find one).
+func _match_regions(pred: PackedVector2Array, mat: PackedInt32Array, rest: PackedVector2Array,
+		dt: float, iterations: int) -> void:
+	var n := pred.size()
+	var shift := PackedVector2Array()
+	shift.resize(n)
+	for r in n:
+		var list: PackedInt32Array = _regions[r]
+		if list.is_empty():
+			continue
+		var c := Vector2.ZERO
+		var c0 := Vector2.ZERO
+		for m in list:
+			c += pred[m]
+			c0 += rest[m]
+		c /= list.size()
+		c0 /= list.size()
+		var a := Vector2.ZERO
+		for m in list:
+			var p := pred[m] - c
+			var q := rest[m] - c0
+			a += Vector2(p.dot(q), q.cross(p))
+		var rot := _region_rot[r]
+		if rot.length_squared() < 0.25:
+			rot = Vector2(1.0, 0.0)  # a fresh slot (make_body writes (1, 0), as brush_spawn does)
+		if list.size() >= 2 and a.length() > BODY_ROT_EPS * list.size():
+			rot = a.normalized()
+		_region_rot[r] = rot
+		shift[r] = c - _rotate(rot, c0)
+	for i in n:
+		var list: PackedInt32Array = _regions[i]
+		if list.is_empty():
+			continue
+		var goal := Vector2.ZERO
+		for r in list:
+			goal += shift[r] + _rotate(_region_rot[r], rest[i])
+		goal /= list.size()
+		var k := 1.0 - pow(1.0 - materials[mat[i]].stiffness, dt * 60.0 / iterations)
+		pred[i] += k * (goal - pred[i])
+
+
+## Per particle, its region (ADR 0005 item 3): empty outside soft bodies; for a member of a soft
+## body (cluster, stiffness < 1), itself and every member of its body in the 3 x 3 hash cells
+## (of size H) around its own whose rest offset is within the material's region radius of its
+## rest offset. The GPU finds them the same way (FOR_EACH_NEIGHBOUR, from the cell each particle
+## was hashed into), so a member stretched out of those cells drops out until it comes back.
+## Worked out once per substep, from the positions the hash is built from.
+func _find_regions(pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
+		rest: PackedVector2Array) -> Array:
+	var h := SimParams.H
+	var n := pred.size()
+	var cells := {}
+	for i in n:
+		if _soft(i, mat, body):
+			var key := Vector2i((pred[i] / h).floor())
+			if not cells.has(key):
+				cells[key] = PackedInt32Array()
+			cells[key].append(i)
+	var out := []
+	out.resize(n)
+	for i in n:
+		var list := PackedInt32Array()
+		if _soft(i, mat, body):
+			var reach := _region_reach(mat[i])
+			var c := Vector2i((pred[i] / h).floor())
+			for dy in range(-1, 2):
+				for dx in range(-1, 2):
+					for j in cells.get(c + Vector2i(dx, dy), PackedInt32Array()):
+						if body[j] == body[i] and rest[i].distance_squared_to(rest[j]) <= reach * reach:
+							list.append(j)
+		out[i] = list
+	return out
+
+
+## True for a member of a soft body (stiffness < 1), which is matched over regions.
+func _soft(i: int, mat: PackedInt32Array, body: PackedInt32Array) -> bool:
+	return body[i] != 0 and materials[mat[i]].stiffness < 1.0
+
+
+## Region radius of a cluster material in px, with a little slack for rest offsets on the
+## lattice that differ by float rounding. Mirror: region_reach in common.glslinc.
+func _region_reach(m: int) -> float:
+	return materials[m].region * SimParams.SPACING + 1e-3
+
+
+## Same-body pair i, j that collides (ADR 0005 item 4): in a soft body, members further apart in
+## the rest shape than the region radius, so a floppy body folded onto itself lies on itself
+## instead of passing through. Pairs within it are held by their regions, and a rigid body's
+## by its shape. Mirror: self_contact in powder.glslinc.
+func _self_contact(i: int, j: int, mat: PackedInt32Array) -> bool:
+	if materials[mat[i]].stiffness >= 1.0:
+		return false
+	var reach := _region_reach(mat[i])
+	return _rest_now[i].distance_squared_to(_rest_now[j]) > reach * reach
+
+
+## The rotation a member's way out of the rest shape is turned by (ADR 0005 item 6): in a soft
+## body its region's from the last fit, so the outline bends with the body; else its body's.
+func _member_rot(j: int, mat: PackedInt32Array, body: PackedInt32Array, bodies: Array) -> Vector2:
+	if materials[mat[j]].stiffness < 1.0 and j < _region_rot.size() and _region_rot[j].length_squared() > 0.25:
+		return _region_rot[j]
+	return bodies[body[j]].rot
+
+
+static func _rotate(r: Vector2, v: Vector2) -> Vector2:
+	return Vector2(r.x * v.x - r.y * v.y, r.y * v.x + r.x * v.y)
+
+
 ## Makes one body of `material` from spawned positions (the body brush, Milestone 3 step 5;
 ## on the GPU, ParticleSim.make_body):
 ## appends its particles at rest, takes the lowest free body id, sets rest offsets from the
@@ -545,6 +683,8 @@ static func make_body(state: Dictionary, positions: PackedVector2Array, material
 	var body: PackedInt32Array = state.body
 	var rest: PackedVector2Array = state.rest
 	var edge: PackedVector2Array = state.edge
+	var region_rot: PackedVector2Array = state.region_rot
+	region_rot.resize(pos.size())
 	var bodies: Array = state.bodies
 	var members: PackedInt32Array = state.members
 	var id := 1
@@ -572,6 +712,7 @@ static func make_body(state: Dictionary, positions: PackedVector2Array, material
 		body.append(id)
 		rest.append(shape[k])
 		edge.append(out[k])
+		region_rot.append(Vector2(1.0, 0.0))
 	bodies[id] = _new_body(first, count, mean)
 	state.pos = pos
 	state.vel = vel
@@ -579,6 +720,7 @@ static func make_body(state: Dictionary, positions: PackedVector2Array, material
 	state.body = body
 	state.rest = rest
 	state.edge = edge
+	state.region_rot = region_rot
 	state.members = members
 	return id
 
@@ -770,8 +912,9 @@ static func erase_particles(state: Dictionary, indices: PackedInt32Array) -> voi
 	for i in n:
 		remap[i] = -1 if gone.has(i) else keep
 		keep += 0 if gone.has(i) else 1
-	for key in ["pos", "vel", "material", "body", "rest", "edge"]:
+	for key in ["pos", "vel", "material", "body", "rest", "edge", "region_rot"]:
 		var old = state[key]
+		old.resize(n)
 		var out = old.duplicate()
 		out.resize(keep)
 		for i in n:
@@ -812,6 +955,10 @@ static func _ensure_body_keys(state: Dictionary) -> void:
 		var edge := PackedVector2Array()
 		edge.resize(n)
 		state.edge = edge
+	if not state.has("region_rot"):
+		var region_rot := PackedVector2Array()
+		region_rot.resize(n)
+		state.region_rot = region_rot
 	if not state.has("bodies"):
 		state.bodies = [_new_body(0, 0, Vector2.ZERO)]
 	if not state.has("members"):
@@ -1194,6 +1341,14 @@ static func stack_weight(m_i: float, m_j: float, rv_y: float) -> float:
 	return m_j / (m_i * exp(clampf(SimParams.STACK_K * rv_y, -8.0, 8.0)) + m_j)
 
 
+## stack_weight for a contact with a body (ADR 0002 item 11), except where either side is in a
+## soft body (ADR 0005): there the share is by density alone, so a carrot set on a jelly presses
+## it flat. With STACK_K the jelly under it took almost none of the contact and stood as tall as
+## an unloaded one (body_probe squash). Mirror: body_stack_weight in powder.glslinc.
+static func body_stack_weight(m_i: float, m_j: float, rv_y: float, soft: bool) -> float:
+	return m_j / (m_i + m_j) if soft else stack_weight(m_i, m_j, rv_y)
+
+
 ## Contacts with any particle closer than SPACING (POWDER_LIQUID_REACH x SPACING for a
 ## powder-liquid pair), where at least one side is a powder or a body particle of another
 ## body: body particles follow the powder rule. Same-body pairs are left to shape matching.
@@ -1221,7 +1376,8 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 		var mj: Dictionary = materials[mat[j]]
 		if mi["class"] != POWDER and mj["class"] != POWDER and body[i] == 0 and body[j] == 0:
 			continue  # liquid-liquid: the density constraint
-		if body[i] != 0 and body[i] == body[j]:
+		var own := body[i] != 0 and body[i] == body[j]
+		if own and not _self_contact(i, j, mat):
 			continue  # same body: shape matching holds it together
 		var rv := pred[i] - pred[j]
 		var dist := rv.length()
@@ -1229,7 +1385,7 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			n_near += 1
 			if mj["class"] == LIQUID:
 				n_wet += 1
-		if body[j] != 0 and dist < nearest_d:  # same-body pairs were skipped above
+		if body[j] != 0 and not own and dist < nearest_d:
 			nearest = j
 			nearest_d = dist
 		var t_liquid: bool = mi["class"] == LIQUID
@@ -1256,10 +1412,10 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			# since a stack with mass-weighted friction swayed for good (ADR 0002).
 			var yi: float = bodies[body[i]].centroid.y if body[i] != 0 else pred[i].y
 			var yj: float = bodies[body[j]].centroid.y if body[j] != 0 else pred[j].y
-			w_push = stack_weight(mi.density, mj.density, yi - yj)
+			w_push = body_stack_weight(mi.density, mj.density, yi - yj, _soft(i, mat, body) or _soft(j, mat, body))
 			w = w_push
 		sum += w_push * pen * normal
-		if body[i] != 0 and body[j] != 0:
+		if body[i] != 0 and body[j] != 0 and not own:
 			sum_bodies += w_push * pen * normal
 		if j == nearest:
 			nearest_push = w_push * pen * normal
@@ -1284,7 +1440,7 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 		sum /= maxf(n_touch, 1.0)  # liquid: averaged over what it touches (powder.glslinc)
 	var out := Vector2.ZERO
 	if nearest >= 0:
-		out = _push_out(pred[i], pred[nearest], edge[nearest], bodies[body[nearest]])
+		out = _push_out(pred[i], pred[nearest], edge[nearest], bodies[body[nearest]], _member_rot(nearest, mat, body, bodies))
 		if body[i] != 0 and out.dot(pred[i] - pred[nearest]) < 0.0:
 			# Past the nearest member's edge row, that pair pushes inward: the outline decides
 			# (powder.glslinc contact_delta).
@@ -1294,20 +1450,20 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			# Body-body: each side takes its contact share, so the pair separates by the depth
 			# (powder.glslinc contact_delta).
 			var yj: float = bodies[body[nearest]].centroid.y
-			out *= stack_weight(mi.density, materials[mat[nearest]].density, bodies[body[i]].centroid.y - yj)
+			out *= body_stack_weight(mi.density, materials[mat[nearest]].density, bodies[body[i]].centroid.y - yj,
+					_soft(i, mat, body) or _soft(nearest, mat, body))
 	_body_out = (sum_bodies + out) * SimParams.CONTACT_RELAX if body[i] != 0 else Vector2.ZERO
 	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet) + out) * SimParams.CONTACT_RELAX
 
 
 ## Push-out from inside a body (ADR 0003 items 8 and 11): x is a particle, x_j its nearest
-## particle of another body, e_j that member's way out of the rest shape. Turned by the
-## body's rotation, e_j gives the outward normal N and the outline's distance along it; x is
+## particle of another body, e_j that member's way out of the rest shape. Turned by r, the
+## member's rotation (_member_rot: its body's, or in a soft body its region's), e_j gives the outward normal N and the outline's distance along it; x is
 ## inside by d = |e_j| - N.(x - x_j), and if so is moved d along N, to the outline. Nothing
 ## for a body whose outline is stale (part of it erased). Mirror: push_out in powder.glslinc.
-static func _push_out(x: Vector2, x_j: Vector2, e_j: Vector2, b: Dictionary) -> Vector2:
+static func _push_out(x: Vector2, x_j: Vector2, e_j: Vector2, b: Dictionary, r: Vector2) -> Vector2:
 	if b.stale or e_j.length() < 1e-6:
 		return Vector2.ZERO
-	var r: Vector2 = b.rot
 	var e := Vector2(r.x * e_j.x - r.y * e_j.y, r.y * e_j.x + r.x * e_j.y)
 	var len := e.length()
 	var normal := e / len

@@ -43,12 +43,13 @@ layout(set = 0, binding = 11, std430) buffer Sorted { uint sorted_ids[]; };  // 
 layout(set = 0, binding = 12, std430) buffer Lambda { float lambda[]; };
 layout(set = 0, binding = 13, std430) buffer Scratch { vec2 scratch[]; };  // position delta, new velocity
 
-// --- Material table (cpu_ref/material_table.gd pack_gpu, 64 bytes each) -------------
+// --- Material table (cpu_ref/material_table.gd pack_gpu, 80 bytes each) -------------
 struct Material {
 	vec4 color;
 	vec4 phys;   // density, friction, viscosity, drag
 	vec4 extra;  // wind_coupling, stiffness, conductivity, heat_capacity (later milestones)
 	uvec4 info;  // class, unused x3
+	vec4 more;   // region (cluster materials, in spacings; ADR 0005), unused x3
 };
 layout(set = 0, binding = 14, std430) buffer Materials { Material materials[]; };
 
@@ -84,6 +85,12 @@ layout(set = 0, binding = 25, std430) buffer Bodies { Body bodies[]; };
 // Body brush input (BRUSH_BODY): per particle two vec4s, [2k] spawn position (xy) and rest
 // offset (zw), [2k + 1] the way out of the rest shape (xy).
 layout(set = 0, binding = 26, std430) buffer BodySpawn { vec4 body_spawn[]; };
+// Soft bodies (stiffness < 1) bend: each member's region (ADR 0005) is fitted every solver
+// iteration. Per slot: xy t = c - R c0 (the region's centroid less its turned rest centroid),
+// zw R as (cos, sin), so the region's goal for a member with rest offset q is t + R q. Written by
+// body_region_fit, read by body_region_goal and, for the rotation, by the push-out and the
+// swept contacts (member_rot). brush_spawn starts a body's members at (0, 0, 1, 0).
+layout(set = 0, binding = 27, std430) buffer RegionFrame { vec4 region_frame[]; };
 
 // Body record flags (info.w). STALE: the eraser took members, so the outline (rest_offset.zw)
 // is out of date and the push-out skips the body. WET_NOW / WET: a member touched liquid this
@@ -162,6 +169,27 @@ uint body_of(uint i) { return mat_flags[i] >> BODY_SHIFT; }
 uint s_material(uint t) { return s_mat[t] & MAT_MASK; }
 uint s_class(uint t) { return materials[s_material(t)].info.x; }
 uint s_body(uint t) { return s_mat[t] >> BODY_SHIFT; }
+
+// Soft bodies (ADR 0005). A cluster material below stiffness 1 is matched over regions.
+bool soft_material(uint m) { return materials[m].extra.y < 1.0; }
+
+// Region radius of a cluster material in px, with a little slack for rest offsets on the
+// lattice that differ by float rounding. At most H (region 2.0), so a region lies in the 3 x 3
+// hash cells FOR_EACH_NEIGHBOUR reads. Mirror: ParticleStep._region_reach.
+float region_reach(uint m) { return materials[m].more.x * params.spacing + 1e-3; }
+
+// Rotation a body member's way out of the rest shape is turned by (ADR 0005 item 6): in a soft
+// body its region's from the last fit, so the outline bends with the body; else its body's.
+// j is a sorted index. Mirror: ParticleStep._member_rot.
+vec2 member_rot(uint j, uint body) {
+	if (soft_material(s_material(j))) {
+		vec2 r = region_frame[sorted_ids[j]].zw;
+		if (dot(r, r) > 0.25) {
+			return r;
+		}
+	}
+	return bodies[body].frame.zw;
+}
 
 ivec2 cell_coord(vec2 p) {
 	ivec2 c = ivec2(floor(p / params.h));

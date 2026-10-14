@@ -27,7 +27,7 @@
 // Only members of bodies take part; vel is zero from hash_scatter for everything else.
 // Mirror: cpu_ref/particle_step.gd _sweep_delta.
 
-// common.glslinc stamp: Params 124 B, v17. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v18. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "powder.glslinc"
 
@@ -85,7 +85,7 @@ void main() {
 		return;
 	}
 	vec2 e_rest = rest_offset[sorted_ids[near0]].zw;
-	vec2 r = bodies[j_body].frame.zw;
+	vec2 r = member_rot(near0, j_body);  // a soft body's face bends with it (ADR 0005)
 	vec2 e = vec2(r.x * e_rest.x - r.y * e_rest.y, r.y * e_rest.x + r.x * e_rest.y);
 	float len = length(e);
 	if (len < 1e-6) {

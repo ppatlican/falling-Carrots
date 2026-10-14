@@ -14,7 +14,7 @@
 //   Thread 0 also moves the reference pressure and wet flag solve_pressure found this substep
 //   into place for the next (ADR 0003 item 4).
 //   Every live member's push from other bodies so far (vel, solve_delta) becomes the body's mean.
-//   3. Every live member moves toward its goal c + R(q - c0) by
+//   3. Every live member of a rigid body moves toward its goal c + R(q - c0) by
 //      k = 1 - (1 - stiffness)^(dt * 60 / iterations), so stiffness is the share of the shape
 //      error removed per 1/60 s whatever the substep and iteration counts.
 // A body's members are read and written only by its own workgroup, so no atomics are needed.
@@ -26,7 +26,7 @@
 // Mirror: cpu_ref/particle_step.gd _match_shapes.
 
 #define LOCAL_SIZE_X 128
-// common.glslinc stamp: Params 124 B, v17. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v18. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Keeps the last rotation when |A_pq| is below this, per live member, in px^2.
@@ -140,11 +140,15 @@ void main() {
 		uint slot = body_members[m];
 		if (!live_member(slot, id)) continue;
 		float stiffness = materials[mat_flags[slot] & MAT_MASK].extra.y;
-		float k = 1.0 - pow(1.0 - stiffness, params.dt * 60.0 / float(params.iterations));
-		vec2 q = rest_offset[slot].xy - c0;
-		vec2 goal = c + vec2(rot.x * q.x - rot.y * q.y, rot.y * q.x + rot.x * q.y);
-		uint t = sorted_of(slot);
-		s_pred[t] += k * (goal - s_pred[t]);
+		// A soft body gets its record and pushes here but no goals: its regions move its members
+		// (body_region_fit, body_region_goal; ADR 0005 item 7).
+		if (stiffness >= 1.0) {
+			float k = 1.0 - pow(1.0 - stiffness, params.dt * 60.0 / float(params.iterations));
+			vec2 q = rest_offset[slot].xy - c0;
+			vec2 goal = c + vec2(rot.x * q.x - rot.y * q.y, rot.y * q.x + rot.x * q.y);
+			uint t = sorted_of(slot);
+			s_pred[t] += k * (goal - s_pred[t]);
+		}
 		// Shape matching spreads a push on a few members over the whole body, so each
 		// member keeps the body's mean (the mean of the last mean plus new pushes adds up
 		// the iterations; velocity_update takes it out).

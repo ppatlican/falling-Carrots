@@ -102,6 +102,23 @@
 ##   brushcap one 50x40 box (2000 particles, the body brush's cap SimParams.BODY_BRUSH_MAX)
 ##            dropped, 900 frames, timed from 300
 ##   huge     one 125x80 box (10000 particles) dropped, 900 frames, timed from 300
+## Soft bodies bend (ADR 0005), with the shipped jelly or stiff= / region= (below):
+##   droop    a 40x4 jelly plank laid on two 4x20 carrot pillars 60 px apart (centres), 300 frames:
+##            how far its middle sags, how far its ends slid in, the fastest member over the last
+##            60 frames (it rests, or creeps)
+##   wobble   a 16x10 jelly dropped 100 px onto the floor, 240 frames, every 3 frames: its height
+##            and shape error, the peak error at the impact, how many times the height swings
+##            more than 0.5 px across where it ends, the last frame it was more than 0.5 px off
+##            (settled), and the fastest member at the end (no flying members)
+##   squash   a 16x10 carrot set on a 16x10 jelly, 360 frames; at frame 180 the carrot is erased
+##            (5 eraser circles under 1 frame each, along its bottom row): the jelly's height under
+##            the carrot against an unloaded 16x10 jelly beside it, and how close it gets back
+##   fold     a 50x3 jelly strip dropped across a 6x12 carrot, 300 frames: its ends fold down; the
+##            closest pair of its members further apart in the rest shape than the region (no
+##            member passes through its own body), at the end and over the run
+##   softcap  one 50x40 jelly (2000 particles, as brushcap) dropped, 900 frames, timed from 300
+##   softmany 256 8x6 jellies (as many), 1500 frames, timed from 900
+## stiff=S region=W replace the jelly row's stiffness and region for this run (tuning).
 ## Bodies spawn one per frame from frame 1, so a stack's upper boxes start a few frames late.
 ## Thresholds are the CPU test's (tests/test_bodies.gd); each result line ends PASS or FAIL.
 ## TIME lines: mean GPU time per pass from frame `from` of each scenario (default: 120 for the
@@ -152,6 +169,8 @@ var frame_i := 0
 var waiting := false  # stepping held until a sample is analysed (erase)
 var got := {}  # frame -> { buffer name: bytes }
 var time_from := -1  # from "from=N"; -1 = the scenario's default
+var jelly_stiff := -1.0  # from "stiff=S"; -1 = the shipped table's
+var jelly_region := -1.0  # from "region=W"
 var shots := PackedInt32Array()
 var ready := false
 var failed := 0
@@ -165,6 +184,10 @@ func _initialize() -> void:
 		elif a.begins_with("shots="):
 			for v in a.substr(6).split(","):
 				shots.append(int(v))
+		elif a.begins_with("stiff="):
+			jelly_stiff = float(a.substr(6))
+		elif a.begins_with("region="):
+			jelly_region = float(a.substr(7))
 		elif a == "grid":
 			pass  # debug: water scenarios print grid columns
 		else:
@@ -207,6 +230,11 @@ func _table():
 	cork = t.id_of("cork")
 	sand = t.id_of("sand")
 	water = t.id_of("water")
+	if jelly_stiff > 0.0:
+		t.materials[jelly].stiffness = jelly_stiff
+	if jelly_region > 0.0:
+		t.materials[jelly].region = jelly_region
+	print("jelly: stiffness %.3f, region %.2f" % [t.materials[jelly].stiffness, t.materials[jelly].region])
 	return t
 
 
@@ -365,6 +393,45 @@ func _start(name: String) -> void:
 						_body(_box(Vector2(X, FLOOR - k * 10.0 * SimParams.SPACING), 16, 10), carrot)
 				_:
 					_body(_box(Vector2(X, FLOOR), 16, 10), carrot)
+		"droop":
+			sc.frames = 300
+			sc.every = 5
+			var sp := SimParams.SPACING
+			_body(_box(Vector2(X - 30.0, FLOOR), 4, 20), carrot)
+			_body(_box(Vector2(X + 30.0, FLOOR), 4, 20), carrot)
+			sc.target = _body(_box(Vector2(X, FLOOR - 20.0 * sp), 40, 4), jelly)
+			sc.late_speed = 0.0
+		"wobble":
+			sc.frames = 240
+			sc.every = 3
+			sc.target = _body(_box(Vector2(X, FLOOR - 100.0), 16, 10), jelly)
+			sc.trace = []
+		"squash":
+			sc.frames = 360
+			sc.every = 10
+			sc.hold = 179
+			sc.target = _body(_box(Vector2(X, FLOOR), 16, 10), jelly)
+			sc.control = _body(_box(Vector2(X - 120.0, FLOOR), 16, 10), jelly)
+			sc.load = _body(_box(Vector2(X, FLOOR - 10.0 * SimParams.SPACING - 0.5), 16, 10), carrot)
+			sc.trace = []
+		"fold":
+			sc.frames = 300
+			sc.every = 5
+			_body(_box(Vector2(X, FLOOR), 6, 12), carrot)
+			sc.target = _body(_box(Vector2(X, FLOOR - 12.0 * SimParams.SPACING - 6.0), 50, 3), jelly)
+			sc.run_min = INF
+		"softcap":
+			sc.frames = 900
+			sc.every = 60
+			sc.from = 300
+			sc.target = _body(_box(Vector2(X, 200.0), 50, 40), jelly)
+		"softmany":
+			sc.frames = 1500
+			sc.every = 60
+			sc.from = 900
+			for row in 8:
+				for col in 32:
+					_body(_box(Vector2(12.0 + 7.0 + col * 19.5, 30.0 + (7 - row) * 18.0), 8, 6), jelly)
 		"reuse":
 			sc.frames = 200
 			_body(_box(Vector2(X - 40.0, FLOOR), 8, 6), carrot)
@@ -467,6 +534,11 @@ func _scenario_brush(brush: Dictionary) -> void:
 		var at := Vector2(X + dx, FLOOR - under * SimParams.SPACING - fall)
 		# An upright rest shape, so _members_inside's box is the body's own.
 		_body(_box(at, 16, 10, tilt), carrot, _box(at, 16, 10))
+	elif sc.name == "squash" and frame_i > sc.hold and frame_i <= sc.hold + 5:
+		# Circles of radius 20 whose bottom is half a pixel under the carrot's bottom row, 8 px
+		# apart: together they take the carrot and none of the jelly under it.
+		var k: int = frame_i - sc.hold - 1
+		brush.merge({"op": ParticleSim.BRUSH_ERASE, "pos": Vector2(X - 16.0 + 8.0 * k, sc.load_bottom + 0.5 - 20.0), "radius": 20.0}, true)
 	elif sc.name == "reuse":
 		if frame_i == 60:
 			brush.merge({"op": ParticleSim.BRUSH_ERASE, "pos": Vector2(X - 40.0, FLOOR - 5.0), "radius": 20.0}, true)
@@ -733,7 +805,9 @@ func _sample(f: int, b: Dictionary) -> void:
 				_result("body erased whole: %d bodies in use after (was 2), new body got id %d, member range from %d; at the end ids %s, live %d and %d, max shape error %.4f px"
 						% [sc.count_after_erase, sc.new_id, sc.new_first, str(bodies.keys()), live1, live2, err],
 						sc.count_after_erase == 1 and sc.new_id == 1 and sc.new_first == 0 and live1 == 48 and live2 == 48 and err < 0.1)
-		"many", "big", "huge", "brushcap":
+		"droop", "wobble", "squash", "fold":
+			_sample_soft(f, bodies)
+		"many", "big", "huge", "brushcap", "softcap", "softmany":
 			var max_err := 0.0
 			var max_speed := 0.0
 			var sum_speed := 0.0
@@ -749,6 +823,138 @@ func _sample(f: int, b: Dictionary) -> void:
 						% [sc.name, bodies.size(), max_err, max_speed], bodies.size() == sc.ids.size() and max_err < 0.1)
 	if f == sc.frames:
 		_finish()
+
+
+## The soft body scenarios (ADR 0005).
+func _sample_soft(f: int, bodies: Dictionary) -> void:
+	if not bodies.has(sc.target):
+		if sc.name != "squash" or f != sc.hold:
+			return
+	var body: Dictionary = bodies.get(sc.target, {})
+	var w: float = table.materials[jelly].region
+	match sc.name:
+		"droop":
+			if f == sc.every:
+				sc.mid0 = _rows_y(body, 0.0)
+				sc.left0 = _left(body)
+			if f > sc.frames - 60:
+				sc.late_speed = maxf(sc.late_speed, _max_speed(body))
+			if f % 30 == 0:
+				print("  f=%d middle down %.2f px, ends slid in %.2f px, fastest member %.2f px/s"
+						% [f, _rows_y(body, 0.0) - sc.mid0, _left(body) - sc.left0, _max_speed(body)])
+			if f == sc.frames:
+				var sag: float = _rows_y(body, 0.0) - 0.5 * (_rows_y(body, -30.0) + _rows_y(body, 30.0))
+				_result("droop: 40x4 jelly plank on two pillars 60 px apart: middle %.2f px under the columns over the pillars (down %.2f px), ends slid in %.2f px, fastest member over the last 60 frames %.2f px/s"
+						% [sag, _rows_y(body, 0.0) - sc.mid0, _left(body) - sc.left0, sc.late_speed], sc.late_speed < 5.0)
+		"wobble":
+			var h := _height(body)
+			sc.trace.append([f, _fit(body).err, h])
+			if f == sc.frames:
+				var end_h := 0.0
+				var end_err := 0.0
+				for k in 10:
+					end_h += sc.trace[-1 - k][2] / 10.0
+					end_err += sc.trace[-1 - k][1] / 10.0
+				var peak := 0.0
+				var settled := 0
+				var swings := 0
+				var side := 0
+				for v in sc.trace:
+					peak = maxf(peak, v[1])
+					var off: float = v[2] - end_h
+					if absf(off) > 0.5:
+						settled = v[0]
+						var now := 1 if off > 0.0 else -1
+						if now != side:
+							swings += 1
+							side = now
+				var fastest := _max_speed(body)
+				_result("wobble: 16x10 jelly dropped 100 px: peak shape error %.2f px, %d swings over 0.5 px, within 0.5 px of its end height %.2f (rest 18) from frame %d, end shape error %.2f px, fastest member at the end %.2f px/s"
+						% [peak, swings, end_h, settled, end_err, fastest], settled < 180 and fastest < 5.0)
+		"squash":
+			if f == sc.hold:
+				var low := -INF
+				if bodies.has(sc.load):
+					for q in bodies[sc.load].pos:
+						low = maxf(low, q.y)
+				sc.load_bottom = low
+				waiting = false
+			if body.is_empty() or not bodies.has(sc.control):
+				return
+			var h := _height(body)
+			var h0 := _height(bodies[sc.control])
+			sc.trace.append([f, h, h0])
+			if f % 30 == 0:
+				print("  f=%d jelly height %.2f, unloaded %.2f, shape error %.2f px, fastest %.2f px/s" % [f, h, h0, _fit(body).err, _max_speed(body)])
+			if f == sc.hold:
+				sc.loaded = h
+				sc.loaded_ref = h0
+			if f == sc.frames:
+				_result("squash: 16x10 jelly under a 16x10 carrot: height %.2f px against %.2f unloaded (%.0f%% flatter); 180 frames after the carrot is erased %.2f px against %.2f (off %.2f px), fastest member %.2f px/s"
+						% [sc.loaded, sc.loaded_ref, 100.0 * (1.0 - sc.loaded / sc.loaded_ref), h, h0, absf(h - h0), _max_speed(body)],
+						sc.loaded < sc.loaded_ref - 1.0 and absf(h - h0) < 0.5)
+		"fold":
+			var gap := _self_gap(body, w)
+			sc.run_min = minf(sc.run_min, gap)
+			if f % 30 == 0:
+				var low := -INF
+				for q in body.pos:
+					low = maxf(low, q.y)
+				print("  f=%d lowest member y %.1f (floor %.1f), closest non-region pair %.2f px, fastest %.2f px/s" % [f, low, FLOOR, gap, _max_speed(body)])
+			if f == sc.frames:
+				_result("fold: 50x3 jelly strip dropped across a carrot: closest pair of its members further apart in the rest shape than the region %.2f px at the end (%.2f over the run), fastest member %.2f px/s"
+						% [gap, sc.run_min, _max_speed(body)], sc.run_min >= 0.5 * SimParams.SPACING and _max_speed(body) < 5.0)
+
+
+## Mean y of a body's members whose rest offset x is within a spacing of rest_x (from its rest centroid).
+func _rows_y(body: Dictionary, rest_x: float) -> float:
+	var c0 := Vector2.ZERO
+	for q in body.rest:
+		c0 += q
+	c0 /= body.rest.size()
+	var y := 0.0
+	var n := 0
+	for k in body.rest.size():
+		if absf(body.rest[k].x - c0.x - rest_x) < 0.75 * SimParams.SPACING:
+			y += body.pos[k].y
+			n += 1
+	return y / maxi(n, 1)
+
+
+func _left(body: Dictionary) -> float:
+	var x := INF
+	for q in body.pos:
+		x = minf(x, q.x)
+	return x
+
+
+func _height(body: Dictionary) -> float:
+	var top := INF
+	var bottom := -INF
+	for q in body.pos:
+		top = minf(top, q.y)
+		bottom = maxf(bottom, q.y)
+	return bottom - top
+
+
+func _max_speed(body: Dictionary) -> float:
+	var v := 0.0
+	for u in body.vel:
+		v = maxf(v, u.length())
+	return v
+
+
+## Closest pair of a body's members further apart in its rest shape than the region radius w
+## (in spacings): under 0.5 spacing, one has gone through its own body.
+func _self_gap(body: Dictionary, w: float) -> float:
+	var reach := w * SimParams.SPACING + 1e-3
+	var best := INF
+	var n: int = body.pos.size()
+	for a in n:
+		for b in range(a + 1, n):
+			if body.rest[a].distance_to(body.rest[b]) > reach:
+				best = minf(best, body.pos[a].distance_to(body.pos[b]))
+	return best
 
 
 ## The erase-split scenarios: the target body's pieces are the ids other than the ones made

@@ -6,7 +6,7 @@
 // clamped like solve_delta. solve_apply then applies it.
 // Body particles are pushed by the pressure on their wet surface (body_pressure_delta, ADR 0003).
 
-// common.glslinc stamp: Params 124 B, v17. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v18. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
 

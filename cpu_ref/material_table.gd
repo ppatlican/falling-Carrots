@@ -29,13 +29,21 @@ const NUMBER_FIELDS := [
 ]
 ## Required temperature columns: a number, or null for "never".
 const TEMP_FIELDS := ["ignition_temp", "boil_temp", "melt_temp"]
+## Cluster-only columns, required on cluster rows: [name, min, max].
+##   region: a soft body's region radius in spacings (ADR 0005): each member is shape-matched
+##   with the members whose rest offsets lie within it. 1.5 takes its 8 lattice neighbours (the
+##   floppiest), 2.0 (H) also the 4 two spacings out. Read only at stiffness < 1.
+const CLUSTER_FIELDS := [
+	["region", 1.5, 2.0],
+]
 
-## GPU layout: one std430 struct of 4 vec4s per material (see common.glslinc Material).
+## GPU layout: one std430 struct of 5 vec4s per material (see common.glslinc Material).
 ##   vec4  color                                        offset 0
 ##   vec4  density, friction, viscosity, drag           offset 16
 ##   vec4  wind_coupling, stiffness, conductivity, heat_capacity  offset 32
 ##   uvec4 class, 0, 0, 0                               offset 48
-const GPU_STRIDE := 64
+##   vec4  region (0 for non-clusters), 0, 0, 0 (cohesion, adhesion, plasticity later)  offset 64
+const GPU_STRIDE := 80
 
 ## Rows keyed by material id (int). Each row is the Dictionary from the file.
 var materials := {}
@@ -109,6 +117,13 @@ func _check_row(row: Dictionary, label: String) -> PackedStringArray:
 	# onto one point (ADR 0002).
 	if row.get("class") == "cluster" and _is_number(row.get("stiffness")) and float(row.stiffness) <= 0.0:
 		p.append("%s: 'stiffness' must be above 0 for a cluster material" % label)
+	if row.get("class") == "cluster":
+		for f in CLUSTER_FIELDS:
+			var v = row.get(f[0])
+			if not _is_number(v):
+				p.append("%s: '%s' must be a number for a cluster material" % [label, f[0]])
+			elif float(v) < f[1] or float(v) > f[2]:
+				p.append("%s: '%s'=%s out of range [%s, %s]" % [label, f[0], v, f[1], f[2]])
 	for f in TEMP_FIELDS:
 		if not row.has(f) or (row[f] != null and not _is_number(row[f])):
 			p.append("%s: '%s' must be a number or null" % [label, f])
@@ -152,4 +167,5 @@ func pack_gpu() -> PackedByteArray:
 		for k in floats.size():
 			b.encode_float(o + k * 4, floats[k])
 		b.encode_u32(o + 48, class_of(id))
+		b.encode_float(o + 64, float(row.get("region", 0.0)))
 	return b

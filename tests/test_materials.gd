@@ -27,7 +27,10 @@ func test_validator_catches_bad_rows() -> void:
 		"'color' must be": [_with(good, {"color": "sandy"})],
 		"'boil_temp' must be": [_without(good, "boil_temp")],
 		"the cap is": _many_rows(MaterialTable.MAX_MATERIALS + 1),
-		"above 0 for a cluster": [_with(good, {"class": "cluster", "stiffness": 0.0})],
+		"above 0 for a cluster": [_with(good, {"class": "cluster", "stiffness": 0.0, "region": 1.5})],
+		"'region' must be a number for a cluster": [_with(good, {"class": "cluster", "stiffness": 0.5})],
+		"'region'=1.2 out of range": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 1.2})],
+		"'region'=2.5 out of range": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 2.5})],
 	}
 	for expected in cases:
 		var problems: PackedStringArray = MaterialTable.new().load_rows(cases[expected])
@@ -39,7 +42,7 @@ func test_validator_catches_bad_rows() -> void:
 
 func test_cluster_stiffness_above_zero_is_valid() -> void:
 	var problems: PackedStringArray = MaterialTable.new().load_rows(
-			[_with(_sand_row(), {"class": "cluster", "stiffness": 0.01})])
+			[_with(_sand_row(), {"class": "cluster", "stiffness": 0.01, "region": 1.5})])
 	expect(problems.is_empty(), "cluster at stiffness 0.01: %s" % "; ".join(problems))
 
 
@@ -52,6 +55,9 @@ func test_gpu_packing_layout() -> void:
 	expect_eq(b.decode_float(o + 16), 2.5, "density at offset 16")
 	expect_eq(b.decode_float(o + 28), 0.25, "drag at offset 28")
 	expect_eq(b.decode_u32(o + 48), MaterialTable.CLASSES.find("powder"), "class at offset 48")
+	expect_eq(b.decode_float(o + 64), 0.0, "no region for a powder")
+	table.load_rows([_with(_sand_row(), {"id": 5, "class": "cluster", "stiffness": 0.3, "region": 1.75})])
+	expect_eq(table.pack_gpu().decode_float(5 * MaterialTable.GPU_STRIDE + 64), 1.75, "region at offset 64")
 	expect_eq(b.decode_float(0 + 16), 0.0, "unused id 0 stays zero")
 
 
