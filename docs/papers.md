@@ -43,6 +43,10 @@ Read only the section for the problem at hand. Fetch one paper section at a time
 ## Soft & rigid bodies, ropes (OE-CAKE-style features; ADR 0001)
 - **Meshless Deformations Based on Shape Matching** (Müller et al. 2005): https://graphics.stanford.edu/courses/cs468-05-fall/Papers/p471-muller.pdf
   Core of the cluster-solid class: rigid blocks (R only), jelly (linear/quadratic blend), overlapping clusters, plasticity for dough.
+- **FastLSM: Fast Lattice Shape Matching for Robust Real-Time Deformation** (Rivers & James, SIGGRAPH 2007): https://doi.org/10.1145/1275808.1276480
+  Shape matching over small overlapping regions of a lattice, one region per particle: bodies bend locally, region size sets how stiff. The basis of ADR 0005 (soft bodies bend).
+- **Solid Simulation with Oriented Particles** (Müller & Chentanez 2011): https://matthias-research.github.io/pages/publications/orientedParticles.pdf
+  Each particle matches its own neighbourhood and keeps an orientation; how OE-Cake's Elastic is described (joins keep distance and orientation). ADR 0005.
 - **Position Based Dynamics** (Müller et al. 2007): https://www.cs.toronto.edu/~jacobson/seminar/mueller-et-al-2007.pdf
   Distance/bending constraints for ropes and cloth, attachments for grabbing, collision projection; base for breaking/tearing by dropping overstretched constraints.
 - **A Survey on Position Based Dynamics** (Bender, Müller, Macklin 2017): https://animation.rwth-aachen.de/media/papers/2017-EG-CourseNotes.pdf
