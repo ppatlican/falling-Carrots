@@ -107,7 +107,7 @@ The most bodies at once (`body_cap` in `config.json`). When every body id is in 
 The tool that adds the selected material in a circle; right-click with it is the eraser. Every material goes only into free spots, so it never lands inside existing particles; held still, it adds only as fast as the last particles fall away.
 
 **Body brush**:
-The tool that draws a shape which becomes one rigid or soft body, by the material's stiffness.
+The tool that draws a shape which becomes one rigid or soft body, by the material's stiffness. It paints on the rest lattice, leaves out spots that already hold particles and parts thinner than 2 particles, and makes one body per piece left. A stroke holds at most 2000 particles.
 
 **Parameter panel**:
 The in-game panel of sliders for the selected material's parameters, with copy to a free slot and reset.

@@ -664,36 +664,18 @@ func test_split_plan_for_the_gpu() -> void:
 
 # --- Helpers -----------------------------------------------------------------------
 
-## A ParticleStep over the shipped table plus test-only rigid ("carrot", stiffness 1) and
-## jelly (stiffness 0.3) rows: materials.json gets no cluster rows until the GPU has bodies.
+## A ParticleStep over the shipped table: rigid "carrot" (stiffness 1), "jelly" (stiffness
+## 0.3) and "cork" (rigid, density 0.5: it floats).
 func _sim(world := WORLD):
-	var shipped = MaterialTable.new()
-	shipped.load_file()
-	var rows := []
-	for id in shipped.materials:
-		rows.append(shipped.materials[id].duplicate(true))
-	var sand: Dictionary = shipped.materials[shipped.id_of("sand")]
-	rows.append(_with(sand, {"id": 2, "name": "carrot", "class": "cluster", "color": "#e8792b",
-			"density": 1.2, "stiffness": 1.0, "tags": []}))
-	rows.append(_with(sand, {"id": 3, "name": "jelly", "class": "cluster", "color": "#d94f8a",
-			"density": 1.1, "stiffness": 0.3, "tags": []}))
-	rows.append(_with(sand, {"id": 4, "name": "cork", "class": "cluster", "color": "#c8a46e",
-			"density": 0.5, "stiffness": 1.0, "tags": []}))
 	var table = MaterialTable.new()
-	var problems: PackedStringArray = table.load_rows(rows)
-	expect(problems.is_empty(), "test material rows: %s" % "; ".join(problems))
+	var problems: PackedStringArray = table.load_file()
+	expect(problems.is_empty(), "materials.json: %s" % "; ".join(problems))
 	_carrot = table.id_of("carrot")
 	_jelly = table.id_of("jelly")
 	_cork = table.id_of("cork")
 	_water = table.id_of("water")
 	_sand = table.id_of("sand")
 	return ParticleStep.new(world, table)
-
-
-func _with(row: Dictionary, changes: Dictionary) -> Dictionary:
-	var r := row.duplicate(true)
-	r.merge(changes, true)
-	return r
 
 
 ## One frame at the config.json defaults.

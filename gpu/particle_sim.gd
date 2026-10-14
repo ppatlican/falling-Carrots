@@ -430,6 +430,28 @@ func make_body(positions: PackedVector2Array, material: int, rest_shape := Packe
 	return id
 
 
+## Reads every slot's position and flags back, a frame or two late, for the body brush to
+## refuse occupied spots. Calls callback(pos, flags) on the main thread with the pos (cap x 8
+## bytes) and mat_flags (cap x 4 bytes) buffers, both empty if a readback failed.
+func request_particles(callback: Callable) -> void:
+	RenderingServer.call_on_render_thread(_particles_rt.bind(callback))
+
+
+func _particles_rt(callback: Callable) -> void:
+	var got := {}
+	var done := func(data: PackedByteArray, what: String) -> void:
+		got[what] = data
+		if got.size() == 2:
+			callback.call_deferred(got.pos, got.flags)
+	if not _gpu_ready:
+		callback.call_deferred(PackedByteArray(), PackedByteArray())
+		return
+	var e1: Error = _ctx.readback_async_rt("pos", done.bind("pos"))
+	var e2: Error = _ctx.readback_async_rt("mat_flags", done.bind("flags"))
+	if e1 != OK or e2 != OK:
+		callback.call_deferred(PackedByteArray(), PackedByteArray())
+
+
 func _reset_bodies() -> void:
 	_bodies = [{"first": 0, "count": 0, "made": 0}]
 	_pending_bodies.clear()

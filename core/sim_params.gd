@@ -129,6 +129,10 @@ const HYDRO_SWEEPS := 32
 ## Brush: radius in px, and the fraction of the circle's empty capacity added per frame.
 const BRUSH_RADIUS := 10.0
 const BRUSH_FILL := 0.3
+## Body brush (core/body_brush.gd): the most members one stroke may paint. The body pass costs
+## ~0.09 µs a frame per member of the largest body (ADR 0002), so 2000 is ~180 µs, until the
+## pass is split so several workgroups share a body.
+const BODY_BRUSH_MAX := 2000
 ## Benchmark fill: one press adds a block of this many particles (BENCH_COLS wide).
 const BENCH_BLOCK := 10000
 const BENCH_COLS := 250

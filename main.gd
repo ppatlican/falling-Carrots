@@ -1,6 +1,8 @@
-## Game entry point (Milestone 2): loads config and the material table, checks for
-## compute support, runs the GPU particle sim, and routes brush input to it.
-## Left mouse (draw) adds the selected material; right mouse (erase) removes any.
+## Game entry point: loads config and the material table, checks for compute support, runs
+## the GPU particle sim, and routes brush input to it.
+## Left mouse (draw) adds the selected material, or with a cluster material (carrot, jelly,
+## cork) paints a stroke that becomes bodies on release (core/body_brush.gd); right mouse
+## (erase) removes any, and drops a stroke being painted.
 extends Node2D
 
 const GameConfig = preload("res://core/game_config.gd")
@@ -8,6 +10,8 @@ const SimParams = preload("res://core/sim_params.gd")
 const MaterialTable = preload("res://cpu_ref/material_table.gd")
 const ComputeContext = preload("res://gpu/compute_context.gd")
 const ParticleSim = preload("res://gpu/particle_sim.gd")
+const BodyBrush = preload("res://core/body_brush.gd")
+const StrokePreview = preload("res://ui/stroke_preview.gd")
 
 const NO_DEVICE_MESSAGE := "This game needs GPU compute (Vulkan, Mobile renderer).\n" \
 		+ "No RenderingDevice is available: the GPU or driver may not support Vulkan, " \
@@ -28,6 +32,12 @@ var _drawing := false
 var _erasing := false
 var _pending_fill := -1  # material id of a requested benchmark fill, or -1
 var _view_flags := 0
+## Body brush: the stroke being painted (lattice spot -> true), its material, the last mouse
+## position painted to, and the preview drawn over the sim.
+var _stroke := {}
+var _stroke_material := 0
+var _stroke_mouse := Vector2.ZERO
+var _preview
 
 
 func _ready() -> void:
@@ -41,13 +51,11 @@ func _ready() -> void:
 	if not problems.is_empty():
 		_error_screen.show_error("data/materials.json has problems:\n" + "\n".join(problems))
 		return
-	_add_test_bodies(_table)
 	_material = _table.materials.keys().min()
 	_toolbar.build(_table.materials, _material, "+%dk" % (SimParams.BENCH_BLOCK / 1000))
 	_toolbar.material_selected.connect(func(id): _material = id)
 	_toolbar.fill_requested.connect(func(id): _pending_fill = id)
 	_toolbar.clear_requested.connect(_clear)
-	_toolbar.body_requested.connect(_drop_test_body)
 	_toolbar.set_capacity(0, _config.particle_cap)
 
 	if not ComputeContext.is_available():
@@ -62,6 +70,8 @@ func _ready() -> void:
 	_sim.setup_finished.connect(_on_setup_finished)
 	_sim.check_finished.connect(_on_check_finished)
 	_view.texture = _sim.texture
+	_preview = StrokePreview.new()
+	add_child(_preview)
 	var err: String = _sim.start()
 	if err != "":
 		_error_screen.show_error(err)
@@ -86,45 +96,6 @@ func _on_view_toggled(view: String, enabled: bool) -> void:
 		_view_flags = ParticleSim.VIEW_HASH if enabled else 0
 
 
-## Debug until the body brush (M3 step 5): test-only rigid ("carrot", stiffness 1), jelly
-## (stiffness 0.3) and cork (rigid, density 0.5: it floats) rows, as tests/test_bodies.gd
-## _sim(). materials.json gets cluster rows in step 5.
-func _add_test_bodies(table) -> void:
-	var rows := []
-	for id in table.materials:
-		rows.append(table.materials[id].duplicate(true))
-	var sand: Dictionary = table.materials[table.id_of("sand")]
-	var next: int = table.materials.keys().max() + 1
-	for extra in [
-			{"name": "carrot", "class": "cluster", "color": "#e8792b", "density": 1.2, "stiffness": 1.0, "tags": []},
-			{"name": "jelly", "class": "cluster", "color": "#d94f8a", "density": 1.1, "stiffness": 0.3, "tags": []},
-			{"name": "cork", "class": "cluster", "color": "#c8a46e", "density": 0.5, "stiffness": 1.0, "tags": []}]:
-		var r: Dictionary = sand.duplicate(true)
-		r.merge(extra, true)
-		r.id = next
-		next += 1
-		rows.append(r)
-	var problems: PackedStringArray = table.load_rows(rows)
-	if not problems.is_empty():
-		push_warning("test body rows: " + "; ".join(problems))
-
-
-## Debug: drops a 16 x 10 box of a cluster material from the top, at a random x.
-func _drop_test_body(material: int) -> void:
-	if not _running:
-		return
-	var cols := 16
-	var rows := 10
-	var sp := SimParams.SPACING
-	var x0 := randf_range(40.0, SimParams.WORLD_SIZE.x - 40.0 - cols * sp)
-	var pts := PackedVector2Array()
-	for r in rows:
-		for c in cols:
-			pts.append(Vector2(x0 + c * sp, 12.0 + r * sp))
-	if _sim.make_body(pts, material) == 0:
-		push_warning("drop test body: no free body id, member range or pool room")
-
-
 func _clear() -> void:
 	if _sim != null:
 		_sim.request_clear()
@@ -144,12 +115,14 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _process(_delta: float) -> void:
+	var was_drawing := _drawing
 	_drawing = _drawing and Input.is_action_pressed("draw")
 	_erasing = _erasing and Input.is_action_pressed("erase")
 	if not _running:
 		return
 	_toolbar.set_capacity(_sim.live_count, _sim.cap)
 	_overlay.particle_count = _sim.live_count
+	_paint_body(was_drawing)
 	if _paused:
 		return
 	_sim.frame(_brush(), _view_flags)
@@ -169,11 +142,59 @@ func _brush() -> Dictionary:
 		brush.count = SimParams.BENCH_BLOCK
 		brush.cols = cols
 		brush.pos = Vector2((SimParams.WORLD_SIZE.x - cols * SimParams.SPACING) * 0.5, 8.0)
-	elif _drawing and not full:
+	elif _drawing and not full and not _is_cluster(_material):
 		brush.op = ParticleSim.BRUSH_CIRCLE
 		brush.count = SimParams.brush_rate()
 	_pending_fill = -1
 	return brush
+
+
+func _is_cluster(id: int) -> bool:
+	return _table.materials[id].get("class", "") == "cluster"
+
+
+## Body brush: while draw is held with a cluster material, paints the stroke (also while
+## paused); on release, reads the pool back so the bodies leave occupied spots out
+## (_make_stroke_bodies).
+func _paint_body(was_drawing: bool) -> void:
+	var mouse := get_global_mouse_position()
+	if _erasing and not _stroke.is_empty():
+		_stroke = {}
+		_show_stroke()
+	elif _drawing and (_is_cluster(_material) or not _stroke.is_empty()):
+		if _stroke.is_empty():
+			_stroke_material = _material
+			_stroke_mouse = mouse
+		BodyBrush.paint(_stroke, _stroke_mouse, mouse, SimParams.BRUSH_RADIUS)
+		_stroke_mouse = mouse
+		_show_stroke()
+	elif was_drawing and not _stroke.is_empty():
+		_sim.request_particles(_make_stroke_bodies.bind(_stroke, _stroke_material))
+		_stroke = {}
+
+
+## Makes the bodies of a finished stroke once the pool has been read back.
+func _make_stroke_bodies(pos: PackedByteArray, flags: PackedByteArray, stroke: Dictionary, material: int) -> void:
+	if not _running:
+		return
+	if pos.is_empty():
+		push_warning("body brush: the particle readback failed, no body made")
+	else:
+		var refused := 0
+		for positions in BodyBrush.bodies(stroke, BodyBrush.occupied_spots(pos, flags)):
+			if _sim.make_body(positions, material) == 0:
+				refused += 1
+		if refused > 0:
+			push_warning("body brush: %d bodies not made: no free body id, member range or pool room" % refused)
+	# The preview keeps showing the stroke until here, unless a new one has started.
+	if _stroke.is_empty():
+		_show_stroke()
+
+
+func _show_stroke() -> void:
+	_preview.show_stroke(_stroke, Color.html(_table.materials[_stroke_material].color))
+	_overlay.set_status("body", "" if _stroke.is_empty() else "%s %d / %d" % [
+			_table.materials[_stroke_material].name, _stroke.size(), SimParams.BODY_BRUSH_MAX])
 
 
 func _exit_tree() -> void:

@@ -99,6 +99,8 @@
 ##   many     256 8x6 boxes (one spawns per frame) dropped from a grid into a heap, 1500
 ##            frames, timed from frame 900: the body pass with every id in use
 ##   big      one 100x50 box (5000 particles) dropped, 900 frames, timed from 300
+##   brushcap one 50x40 box (2000 particles, the body brush's cap SimParams.BODY_BRUSH_MAX)
+##            dropped, 900 frames, timed from 300
 ##   huge     one 125x80 box (10000 particles) dropped, 900 frames, timed from 300
 ## Bodies spawn one per frame from frame 1, so a stack's upper boxes start a few frames late.
 ## Thresholds are the CPU test's (tests/test_bodies.gd); each result line ends PASS or FAIL.
@@ -193,27 +195,11 @@ func _on_setup(err: String) -> void:
 	ready = true
 
 
-## The shipped table plus test-only rigid ("carrot", stiffness 1), jelly (stiffness 0.3) and
-## cork (rigid, density 0.5) rows, as tests/test_bodies.gd _sim(): materials.json gets cluster
-## rows in step 5.
+## The shipped table: rigid "carrot" (stiffness 1), "jelly" (stiffness 0.3) and "cork" (rigid,
+## density 0.5), as tests/test_bodies.gd _sim().
 func _table():
-	var shipped = MaterialTable.new()
-	shipped.load_file()
-	var rows := []
-	for id in shipped.materials:
-		rows.append(shipped.materials[id].duplicate(true))
-	var sand_row: Dictionary = shipped.materials[shipped.id_of("sand")]
-	var c: Dictionary = sand_row.duplicate(true)
-	c.merge({"id": 2, "name": "carrot", "class": "cluster", "color": "#e8792b", "density": 1.2, "stiffness": 1.0, "tags": []}, true)
-	var j: Dictionary = sand_row.duplicate(true)
-	j.merge({"id": 3, "name": "jelly", "class": "cluster", "color": "#d94f8a", "density": 1.1, "stiffness": 0.3, "tags": []}, true)
-	var k: Dictionary = sand_row.duplicate(true)
-	k.merge({"id": 4, "name": "cork", "class": "cluster", "color": "#c8a46e", "density": 0.5, "stiffness": 1.0, "tags": []}, true)
-	rows.append(c)
-	rows.append(j)
-	rows.append(k)
 	var t = MaterialTable.new()
-	var problems: PackedStringArray = t.load_rows(rows)
+	var problems: PackedStringArray = t.load_file()
 	if not problems.is_empty():
 		print("MATERIAL PROBLEMS: ", problems)
 	carrot = t.id_of("carrot")
@@ -390,12 +376,14 @@ func _start(name: String) -> void:
 			for row in 8:
 				for col in 32:
 					_body(_box(Vector2(12.0 + 7.0 + col * 19.5, 30.0 + (7 - row) * 18.0), 8, 6), carrot)
-		"big", "huge":
+		"big", "huge", "brushcap":
 			sc.frames = 900
 			sc.every = 60
 			sc.from = 300
 			if name == "big":
 				_body(_box(Vector2(X, 150.0), 100, 50), carrot)
+			elif name == "brushcap":
+				_body(_box(Vector2(X, 200.0), 50, 40), carrot)
 			else:
 				_body(_box(Vector2(X, 200.0), 125, 80), carrot)
 		_:
@@ -745,7 +733,7 @@ func _sample(f: int, b: Dictionary) -> void:
 				_result("body erased whole: %d bodies in use after (was 2), new body got id %d, member range from %d; at the end ids %s, live %d and %d, max shape error %.4f px"
 						% [sc.count_after_erase, sc.new_id, sc.new_first, str(bodies.keys()), live1, live2, err],
 						sc.count_after_erase == 1 and sc.new_id == 1 and sc.new_first == 0 and live1 == 48 and live2 == 48 and err < 0.1)
-		"many", "big", "huge":
+		"many", "big", "huge", "brushcap":
 			var max_err := 0.0
 			var max_speed := 0.0
 			var sum_speed := 0.0

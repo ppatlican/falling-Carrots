@@ -1,4 +1,5 @@
-## Bottom toolbar: material buttons, benchmark fills, clear, and the capacity meter.
+## Bottom toolbar: material buttons (cluster materials paint bodies, main.gd), benchmark
+## fills, clear, and the capacity meter.
 ## Builds itself from the material table, so new materials get a button for free.
 ## Taps work on phones through the default mouse-from-touch emulation.
 extends CanvasLayer
@@ -7,8 +8,6 @@ signal material_selected(id: int)
 ## A benchmark fill: add SimParams.BENCH_BLOCK particles of this material at once.
 signal fill_requested(id: int)
 signal clear_requested
-## Debug: drop a test body of this cluster material (until the body brush, M3 step 5).
-signal body_requested(id: int)
 
 const FONT_SIZE := 8
 
@@ -36,7 +35,7 @@ func build(materials: Dictionary, selected: int, bench_label: String) -> void:
 		(clusters if materials[id].get("class", "") == "cluster" else ids).append(id)
 	ids.sort()
 	clusters.sort()
-	for id in ids:
+	for id in ids + clusters:
 		var b := _button(bar, materials[id].name)
 		b.toggle_mode = true
 		b.button_group = group
@@ -46,10 +45,6 @@ func build(materials: Dictionary, selected: int, bench_label: String) -> void:
 		_material_buttons[id] = b
 	for id in ids:
 		_button(bar, "%s %s" % [bench_label, materials[id].name]).pressed.connect(func(): fill_requested.emit(id))
-	for id in clusters:
-		var b := _button(bar, "Drop %s" % materials[id].name)
-		b.modulate = Color.html(materials[id].color).lightened(0.3)
-		b.pressed.connect(func(): body_requested.emit(id))
 	_button(bar, "Clear").pressed.connect(func(): clear_requested.emit())
 
 	var spacer := Control.new()
