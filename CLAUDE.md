@@ -12,6 +12,10 @@ Default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-huma
 
 Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+### Subagents
+
+When a task needs a subagent, delegate it through `/grok-cc:rescue` (the Grok CLI worker) instead of spawning a Claude subagent.
+
 ## Project docs
 
 - `CONTEXT.md`: the glossary. Use its terms (grain, pile, block fill, churn, slosh, squeezing, pudding, sleeping, density projection grid, rigid body, soft body, parameter, stickiness, CPU reference, GPU probe).
