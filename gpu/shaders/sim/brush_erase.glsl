@@ -5,7 +5,7 @@
 // removed and its slot pushed back onto the free stack. A body it takes members from is
 // marked BODY_STALE.
 
-// common.glslinc stamp: Params 124 B, v18. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v19. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

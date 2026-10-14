@@ -5,7 +5,7 @@
 // of the coarse cells around it (hydro_splat in hydro.glslinc); a body particle to its
 // volume and its weight in water.
 
-// common.glslinc stamp: Params 124 B, v18. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v19. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
 

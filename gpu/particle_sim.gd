@@ -216,7 +216,7 @@ func _buffer_specs() -> Array:
 	]
 
 
-## Cluster solid buffers, bindings 23 to 26 (common.glslinc). [binding, name, bytes]
+## Cluster solid buffers, bindings 23 to 28 (common.glslinc). [binding, name, bytes]
 func _body_buffer_specs() -> Array:
 	return [
 		[23, "rest_offset", cap * 16],
@@ -224,6 +224,7 @@ func _body_buffer_specs() -> Array:
 		[25, "bodies", (body_cap + 1) * BODY_BYTES],
 		[26, "body_spawn", cap * 32],
 		[27, "region_frame", cap * 16],
+		[28, "body_push", cap * 8],
 	]
 
 

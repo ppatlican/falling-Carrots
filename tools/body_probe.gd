@@ -122,9 +122,17 @@
 ##   fold     a 50x3 jelly strip dropped across a 6x12 carrot, 300 frames: its ends fold down; the
 ##            closest pair of its members further apart in the rest shape than the region (no
 ##            member passes through its own body), at the end and over the run
+##   jellystack two 16x10 jellies, the upper one just touching the lower (2 px over it), 300 frames
+##   jellydrop  a 16x10 jelly dropped 150 px onto another resting on the floor, 360 frames
+##            Both, and stack3, stack5 and boxstack with carrot set soft (set=carrot.stiffness=S),
+##            also print the soft verdict (ADR 0008): members inside another body's lattice by a
+##            local fit, how many bodies still stand on the one below, the fastest member over the
+##            last 60 frames; PASS with nothing inside at the end and every member under 1 px/s
 ##   softcap  one 50x40 jelly (2000 particles, as brushcap) dropped, 900 frames, timed from 300
 ##   softmany 256 8x6 jellies (as many), 1500 frames, timed from 900
 ## stiff=S region=W replace the jelly row's stiffness and region for this run (tuning).
+## frames=N runs every scenario for N frames instead of its own count (checks over "the last 60
+## frames" move with it), e.g. to see whether a soft stack that leans over comes to rest.
 ## set=cork.density=5[,...] [setat=N] edit material parameters as the parameter panel does
 ## (tools/probe_params.gd), at frame N of every scenario (default: before its first frame).
 ## Bodies spawn one per frame from frame 1, so a stack's upper boxes start a few frames late.
@@ -143,6 +151,9 @@ const SimParams = preload("res://core/sim_params.gd")
 const ProbeParams = preload("res://tools/probe_params.gd")
 
 const TESTS := ["floor", "jelly", "stack3", "stack5", "erase", "spawnin", "corner"]
+## Scenarios of bodies on bodies that also get the soft verdict (_sample_soft_stack) when their
+## material is soft: the stacks with carrot set soft (set=carrot.stiffness=), and the jelly ones.
+const SOFT_STACKS := ["stack3", "stack5", "boxstack", "jellystack", "jellydrop"]
 ## Lowest y a body particle's centre reaches: the fixed 0.5-spacing wall inset.
 const FLOOR := 360.0 - 0.5 * SimParams.SPACING
 const X := 320.0
@@ -180,6 +191,7 @@ var got := {}  # frame -> { buffer name: bytes }
 var time_from := -1  # from "from=N"; -1 = the scenario's default
 var jelly_stiff := -1.0  # from "stiff=S"; -1 = the shipped table's
 var jelly_region := -1.0  # from "region=W"
+var run_frames := 0  # from "frames=N"
 var shots := PackedInt32Array()
 var ready := false
 var failed := 0
@@ -203,6 +215,8 @@ func _initialize() -> void:
 			jelly_stiff = float(a.substr(6))
 		elif a.begins_with("region="):
 			jelly_region = float(a.substr(7))
+		elif a.begins_with("frames="):
+			run_frames = int(a.substr(7))
 		elif a == "grid":
 			pass  # debug: water scenarios print grid columns
 		else:
@@ -412,6 +426,16 @@ func _start(name: String) -> void:
 						_body(_box(Vector2(X, FLOOR - k * 10.0 * SimParams.SPACING), 16, 10), carrot)
 				_:
 					_body(_box(Vector2(X, FLOOR), 16, 10), carrot)
+		"jellystack":
+			sc.frames = 300
+			sc.every = 5
+			for k in 2:
+				_body(_box(Vector2(X, FLOOR - k * 10.0 * SimParams.SPACING), 16, 10), jelly)
+		"jellydrop":
+			sc.frames = 360
+			sc.every = 5
+			_body(_box(Vector2(X, FLOOR), 16, 10), jelly)
+			_body(_box(Vector2(X, FLOOR - 10.0 * SimParams.SPACING - 150.0), 16, 10), jelly)
 		"droop":
 			sc.frames = 300
 			sc.every = 5
@@ -488,6 +512,8 @@ func _start(name: String) -> void:
 			return
 	if time_from >= 0:
 		sc.from = time_from
+	if run_frames > 0:
+		sc.frames = run_frames
 	print("\n== %s: %d frames, %d bodies made at the start" % [name, sc.frames, sc.ids.size()])
 
 
@@ -589,6 +615,8 @@ func _scenario_brush(brush: Dictionary) -> void:
 
 func _sample(f: int, b: Dictionary) -> void:
 	var bodies := _bodies_of(b)
+	if sc.name in SOFT_STACKS:
+		_sample_soft_stack(f, bodies)
 	match sc.name:
 		"floor":
 			var fit := _fit(bodies[1])
@@ -855,6 +883,115 @@ func _sample(f: int, b: Dictionary) -> void:
 
 
 ## The soft body scenarios (ADR 0005).
+## The soft verdict for bodies stacked or dropped on soft bodies (ADR 0008), next to a scenario's
+## own checks, which are tuned to rigid boxes: members inside another body's lattice by a local
+## fit (_members_in_lattice; the whole-body fit of _members_inside reads a squashed jelly's own
+## dent as overlap), whether each body still stands on the one made before it (its centre above
+## that one's by a quarter of their rest heights, within half that one's width: squashed jellies
+## sit closer than rigid boxes) and the fastest member over the last 60 frames. Passes with
+## nothing inside at the end and every member under 1 px/s; standing is reported, not required
+## (below ~0.8 a stack of soft bodies may lean over, ADR 0008 Known limits).
+func _sample_soft_stack(f: int, bodies: Dictionary) -> void:
+	var m: int = jelly if sc.name.begins_with("jelly") else carrot
+	var n: int = {"stack3": 3, "stack5": 5, "boxstack": 4}.get(sc.name, 2)
+	if table.materials[m].stiffness >= 1.0 or bodies.size() < n:
+		return
+	if f > sc.frames - 60:
+		for id in bodies:
+			sc.soft_speed = maxf(sc.get("soft_speed", 0.0), _max_speed(bodies[id]))
+	if f % 30 != 0 and f != sc.frames:
+		return
+	var ids: Array = bodies.keys()
+	ids.sort()
+	var inside := 0
+	for a in ids:
+		for o in ids:
+			if a != o and _fit(bodies[a]).c.distance_to(_fit(bodies[o]).c) < 60.0:
+				inside += _members_in_lattice(bodies[a], bodies[o])
+	sc.soft_most = maxi(sc.get("soft_most", 0), inside)
+	if f != sc.frames:
+		return
+	var standing := 0
+	var tilt := 0.0
+	for k in ids.size():
+		var fit := _fit(bodies[ids[k]])
+		tilt = maxf(tilt, absf(fit.theta))
+		if k == 0:
+			continue
+		var under := _fit(bodies[ids[k - 1]])
+		var size_k := _rest_size(bodies[ids[k]])
+		var size_u := _rest_size(bodies[ids[k - 1]])
+		if fit.c.y < under.c.y - 0.25 * (size_k.y + size_u.y) and absf(fit.c.x - under.c.x) < 0.5 * size_u.x:
+			standing += 1
+	var speed: float = sc.get("soft_speed", 0.0)
+	_result("%s, soft (stiffness %.2f): members inside another's lattice %d at the end (most %d at a sample), %d of %d bodies standing on the one below, largest |rotation| %.3f rad, fastest member (last 60 frames) %.3f px/s"
+			% [sc.name, table.materials[m].stiffness, inside, sc.soft_most, standing, ids.size() - 1, tilt, speed],
+			inside == 0 and speed < 1.0)
+
+
+## Width and height of a body's rest lattice out to its outline (half a spacing past its boundary
+## members on each side).
+func _rest_size(body: Dictionary) -> Vector2:
+	var lo := Vector2(INF, INF)
+	var hi := -lo
+	for q in body.rest:
+		lo = lo.min(q)
+		hi = hi.max(q)
+	return hi - lo + Vector2.ONE * SimParams.SPACING
+
+
+## Members of body a inside body b's lattice, soft bodies included (as test_bodies.gd
+## _members_in_lattice): each member is taken into b's rest frame by a local fit (an affine map,
+## rest -> now, over b's members within 1.5 spacings on the rest lattice of its member nearest the
+## point) and counts if it lands inside the bounding box of b's rest lattice.
+func _members_in_lattice(a: Dictionary, b: Dictionary) -> int:
+	var lo := Vector2(INF, INF)
+	var hi := -lo
+	for q in b.rest:
+		lo = lo.min(q)
+		hi = hi.max(q)
+	var n := 0
+	for p in a.pos:
+		var j := -1
+		var best := INF
+		for k in b.pos.size():
+			var d2: float = p.distance_squared_to(b.pos[k])
+			if d2 < best:
+				best = d2
+				j = k
+		if best > 4.0 * SimParams.SPACING * SimParams.SPACING:
+			continue
+		var near := PackedInt32Array()
+		var qm := Vector2.ZERO
+		var xm := Vector2.ZERO
+		for k in b.rest.size():
+			if b.rest[k].distance_to(b.rest[j]) <= 1.5 * SimParams.SPACING:
+				near.append(k)
+				qm += b.rest[k]
+				xm += b.pos[k]
+		qm /= near.size()
+		xm /= near.size()
+		# x - xm = F (q - qm) with F = (sum x q^T)(sum q q^T)^-1, so q = qm + F^-1 (p - xm).
+		var qq := Transform2D(Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
+		var xq := Transform2D(Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
+		for k in near:
+			var q: Vector2 = b.rest[k] - qm
+			var x: Vector2 = b.pos[k] - xm
+			qq.x += q * q.x
+			qq.y += q * q.y
+			xq.x += x * q.x
+			xq.y += x * q.y
+		if absf(qq.determinant()) < 1e-6:
+			continue
+		var fm := xq * qq.affine_inverse()
+		if absf(fm.determinant()) < 1e-6:
+			continue
+		var q_p: Vector2 = qm + fm.affine_inverse().basis_xform(p - xm)
+		if q_p.x > lo.x and q_p.x < hi.x and q_p.y > lo.y and q_p.y < hi.y:
+			n += 1
+	return n
+
+
 func _sample_soft(f: int, bodies: Dictionary) -> void:
 	if not bodies.has(sc.target):
 		if sc.name != "squash" or f != sc.hold:

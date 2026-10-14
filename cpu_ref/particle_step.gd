@@ -26,6 +26,11 @@ const MIN_DIST := 1e-4
 ## Shape matching keeps a body's last rotation when |A_pq| (the length of the vector its
 ## angle comes from) is below this, per live member, in px^2.
 const BODY_ROT_EPS := 1e-4
+## Half-width, in spacings, of a body member's lattice cell for the push-out between two soft
+## bodies (in_lattice_cell, ADR 0008): a little over half a spacing, so a point at the
+## middle of a lattice square, half a spacing from four members, is still in one of their cells.
+## Mirror: SOFT_CELL in powder.glslinc.
+const SOFT_CELL := 0.55
 
 ## World box particles are kept inside.
 var world_size: Vector2
@@ -36,6 +41,10 @@ var rest_density: float
 ## _contact_delta's part that pushes a body member away from other bodies (contacts and
 ## push-out), as powder.glslinc's body_out.
 var _body_out := Vector2.ZERO
+## For a member of a soft body, the part of _contact_delta's result that comes from other soft
+## bodies (their contacts, the push-out and friction; 0 for anything else): what
+## _share_pushes_over_regions shares over its region (ADR 0008 item 1).
+var _body_share := Vector2.ZERO
 ## This substep's soft-body regions (_find_regions), each particle's region rotation (state
 ## "region_rot") and rest offset, for the contacts and the push-out (ADR 0005 items 4 and 6).
 var _regions: Array = []
@@ -177,6 +186,10 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	# A body member's push from other bodies this substep, summed over the iterations and spread
 	# over its body (velocity_update takes its separating speed out). GPU: vel (solve_delta).
 	var pushed := back.duplicate()
+	# This iteration's push and friction from other soft bodies, per soft member (GPU: body_push,
+	# solve_delta).
+	var body_push := PackedVector2Array()
+	body_push.resize(n)
 	for _it in iterations:
 		for i in n:
 			lambda[i] = minf(_lambda(i, pred, mat, neighbours[i], h), 0.0) if _class(mat[i]) == LIQUID else 0.0
@@ -186,8 +199,12 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 				d = _liquid_delta(i, pred, mat, lambda, neighbours[i], h, dt)
 			d += _contact_delta(i, pos, pred, mat, body, edge, bodies, neighbours[i])
 			delta[i] = d.limit_length(0.5 * SimParams.SPACING)
+			body_push[i] = Vector2.ZERO
 			if body[i] != 0 and d.length() > 1e-9:
-				pushed[i] += _body_out * (delta[i].length() / d.length())
+				var scale := delta[i].length() / d.length()
+				pushed[i] += _body_out * scale
+				body_push[i] = _body_share * scale
+		_share_pushes_over_regions(delta, body_push)
 		for i in n:
 			pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i], body[i] != 0)
 		_match_shapes(pred, mat, body, rest, bodies, members, dt, iterations)
@@ -592,6 +609,38 @@ func _match_regions(pred: PackedVector2Array, mat: PackedInt32Array, rest: Packe
 		goal /= list.size()
 		var k := 1.0 - pow(1.0 - materials[mat[i]].stiffness, dt * 60.0 / iterations)
 		pred[i] += k * (goal - pred[i])
+
+
+## Between two soft bodies a contact moves a patch, not one member (ADR 0008 item 1): each member
+## of a soft body hands what it gets from other soft bodies this iteration (body_push: their
+## contacts, the push-out and their friction) out in equal parts to the members of its region,
+## itself included, so member i moves by sum over r in its region of body_push[r] / |r's region|
+## instead of its own (the relation is symmetric). Pushed on its own, a member that carries a
+## contact moves out of line with its neighbours by far more than its region pulls it back in an
+## iteration (k 0.08 at stiffness 0.5), so one soft body's members slipped between the other's and
+## it draped over it; shared, the patch moves together, as shape matching spreads a rigid body's
+## push. Shared this way the body's total push is kept: with each member taking its region's mean
+## instead, members near an edge (smaller regions) counted for more, and a soft stack 2 px off
+## centre crept sideways for good (CPU 0.02 px/s, GPU 0.1 px/s) until it slipped. The friction goes
+## with the push: shared without it, the contact row was held by friction while the patch behind
+## it moved, and three 8x5 bodies stacked at stiffness 0.2 rocked sideways in turn, growing from
+## 0.05 to 4 px/s within 7 s. What a soft body gets from rigid bodies, grains and water, and its
+## self-contacts, stay on the member: a jelly plank whose pushes from its two carrot pillars were
+## shared slid off them into the gap (body_probe droop). Mirror: solve_apply.glsl (body_push from
+## solve_delta.glsl).
+func _share_pushes_over_regions(delta: PackedVector2Array, body_push: PackedVector2Array) -> void:
+	var share := PackedVector2Array()
+	share.resize(delta.size())
+	for i in delta.size():
+		var list: PackedInt32Array = _regions[i]
+		if list.is_empty():
+			continue
+		var got := Vector2.ZERO
+		for r in list:
+			got += body_push[r] / _regions[r].size()
+		share[i] = got - body_push[i]
+	for i in delta.size():
+		delta[i] += share[i]
 
 
 ## Per particle, its region (ADR 0005 item 3): empty outside soft bodies; for a member of a soft
@@ -1341,12 +1390,14 @@ static func stack_weight(m_i: float, m_j: float, rv_y: float) -> float:
 	return m_j / (m_i * exp(clampf(SimParams.STACK_K * rv_y, -8.0, 8.0)) + m_j)
 
 
-## stack_weight for a contact with a body (ADR 0002 item 11), except where either side is in a
-## soft body (ADR 0005): there the share is by density alone, so a carrot set on a jelly presses
-## it flat. With STACK_K the jelly under it took almost none of the contact and stood as tall as
-## an unloaded one (body_probe squash). Mirror: body_stack_weight in powder.glslinc.
-static func body_stack_weight(m_i: float, m_j: float, rv_y: float, soft: bool) -> float:
-	return m_j / (m_i + m_j) if soft else stack_weight(m_i, m_j, rv_y)
+## stack_weight for a contact with a body (ADR 0002 item 11), except where one side is in a soft
+## body and the other isn't (ADR 0005 item 11): there the share is by density alone, so a carrot
+## set on a jelly presses it flat. With STACK_K the jelly under it took almost none of the contact
+## and stood as tall as an unloaded one (body_probe squash). Two soft bodies keep STACK_K (ADR 0008
+## item 2): sharing by density, the lower one gave way under the upper one, and a stack of them
+## leaned over and slid apart. Mirror: body_stack_weight in powder.glslinc.
+static func body_stack_weight(m_i: float, m_j: float, rv_y: float, soft_i: bool, soft_j: bool) -> float:
+	return m_j / (m_i + m_j) if soft_i != soft_j else stack_weight(m_i, m_j, rv_y)
 
 
 ## Contacts with any particle closer than SPACING (POWDER_LIQUID_REACH x SPACING for a
@@ -1365,7 +1416,10 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	var sum := Vector2.ZERO
 	var nearest_push := Vector2.ZERO  # the nearest pair's contact push-out
 	var sum_bodies := Vector2.ZERO  # body member i: the part of sum from other bodies
+	var soft_i := _soft(i, mat, body)
+	var sum_soft := Vector2.ZERO  # soft member i: the part of sum from other soft bodies
 	var fric := Vector2.ZERO
+	var fric_soft := Vector2.ZERO  # soft member i: the part of fric from other soft bodies
 	var n_near := 0
 	var n_wet := 0
 	var fric_w := 0.0
@@ -1412,11 +1466,14 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			# since a stack with mass-weighted friction swayed for good (ADR 0002).
 			var yi: float = bodies[body[i]].centroid.y if body[i] != 0 else pred[i].y
 			var yj: float = bodies[body[j]].centroid.y if body[j] != 0 else pred[j].y
-			w_push = body_stack_weight(mi.density, mj.density, yi - yj, _soft(i, mat, body) or _soft(j, mat, body))
+			w_push = body_stack_weight(mi.density, mj.density, yi - yj, _soft(i, mat, body), _soft(j, mat, body))
 			w = w_push
 		sum += w_push * pen * normal
+		var soft_pair: bool = soft_i and body[j] != 0 and not own and _soft(j, mat, body)
 		if body[i] != 0 and body[j] != 0 and not own:
 			sum_bodies += w_push * pen * normal
+		if soft_pair:
+			sum_soft += w_push * pen * normal
 		if j == nearest:
 			nearest_push = w_push * pen * normal
 		var mu: float = minf(mi.friction, mj.friction)
@@ -1424,10 +1481,14 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			var rel := (pred[i] - pos[i]) - (pred[j] - pos[j])
 			var tangent := rel - rel.dot(normal) * normal
 			var t_len := tangent.length()
+			var f := Vector2.ZERO
 			if t_len < mu * pen:
-				fric -= w * tangent  # static: cancel the slide
+				f = -w * tangent  # static: cancel the slide
 			elif t_len > 1e-6:
-				fric -= w * tangent * minf(0.8 * mu * pen / t_len, 1.0)  # kinetic
+				f = -w * tangent * minf(0.8 * mu * pen / t_len, 1.0)  # kinetic
+			fric += f
+			if soft_pair:
+				fric_soft += f
 			fric_w += w
 	# Friction is averaged over the contacts (divided by their total weight, at least 1),
 	# so the correction per iteration stays below CONTACT_RELAX. An unnormalised sum
@@ -1439,20 +1500,29 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	if mi["class"] == LIQUID:
 		sum /= maxf(n_touch, 1.0)  # liquid: averaged over what it touches (powder.glslinc)
 	var out := Vector2.ZERO
+	var soft_near := false  # i and its nearest member of another body are both in soft bodies
 	if nearest >= 0:
-		out = _push_out(pred[i], pred[nearest], edge[nearest], bodies[body[nearest]], _member_rot(nearest, mat, body, bodies))
+		soft_near = soft_i and _soft(nearest, mat, body)
+		var r_near := _member_rot(nearest, mat, body, bodies)
+		out = _push_out(pred[i], pred[nearest], edge[nearest], bodies[body[nearest]], r_near)
+		if soft_near and not in_lattice_cell(pred[i], pred[nearest], r_near):
+			out = Vector2.ZERO  # outside the other body: a corner's outline misfires (ADR 0008 item 1)
 		if body[i] != 0 and out.dot(pred[i] - pred[nearest]) < 0.0:
 			# Past the nearest member's edge row, that pair pushes inward: the outline decides
 			# (powder.glslinc contact_delta).
 			sum -= nearest_push
 			sum_bodies -= nearest_push
+			if soft_near:
+				sum_soft -= nearest_push
 		if body[i] != 0:
 			# Body-body: each side takes its contact share, so the pair separates by the depth
 			# (powder.glslinc contact_delta).
 			var yj: float = bodies[body[nearest]].centroid.y
 			out *= body_stack_weight(mi.density, materials[mat[nearest]].density, bodies[body[i]].centroid.y - yj,
-					_soft(i, mat, body) or _soft(nearest, mat, body))
+					soft_i, _soft(nearest, mat, body))
 	_body_out = (sum_bodies + out) * SimParams.CONTACT_RELAX if body[i] != 0 else Vector2.ZERO
+	_body_share = (sum_soft + (out if soft_near else Vector2.ZERO) + fric_soft / maxf(fric_w, 1.0)) \
+			* SimParams.CONTACT_RELAX if soft_i else Vector2.ZERO
 	return (sum + fric * (1.0 - SimParams.WET_SLIP * wet) + out) * SimParams.CONTACT_RELAX
 
 
@@ -1469,6 +1539,22 @@ static func _push_out(x: Vector2, x_j: Vector2, e_j: Vector2, b: Dictionary, r: 
 	var normal := e / len
 	var d := len - normal.dot(x - x_j)
 	return d * normal if d > 0.0 else Vector2.ZERO
+
+
+## Whether x lies in the lattice cell of a body member at x_j turned by r: within SOFT_CELL
+## spacings of it along both of the turned lattice's axes. On a square lattice a member's cell is
+## the part of the body nearest it, so a point is inside the body only if it is in the cell of
+## its nearest member. Between two soft bodies the push-out acts only there (ADR 0008 item 1): a
+## corner member's way out is the 45-degree diagonal, so a point 1.7 px under a corner of the body
+## above, 0.6 px in from its side, read 0.22 px inside it, though 0.7 px below its bottom face. A
+## member took that push on its own and its body's shape took it back; shared over its region
+## (_share_pushes_over_regions) it moved the patch, and a soft stack 2 px off centre crept sideways
+## for good. Not against a rigid body: a jelly plank on two carrot pillars slid off their corners
+## into the gap (test_jelly_plank_bends_over_a_gap). Mirror: in_lattice_cell in powder.glslinc.
+static func in_lattice_cell(x: Vector2, x_j: Vector2, r: Vector2) -> bool:
+	var q := x - x_j
+	q = Vector2(r.x * q.x + r.y * q.y, -r.y * q.x + r.x * q.y)  # into j's turned frame
+	return maxf(absf(q.x), absf(q.y)) < SOFT_CELL * SimParams.SPACING
 
 
 ## Quadratic drag of a grain toward its liquid neighbours' kernel-weighted velocity,

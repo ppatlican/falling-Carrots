@@ -8,7 +8,7 @@
 // with no rotation, no reference pressure yet. The body pass fills in the rest during the
 // first solver iteration.
 
-// common.glslinc stamp: Params 124 B, v18. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v19. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

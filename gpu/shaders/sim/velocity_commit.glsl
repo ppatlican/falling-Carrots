@@ -4,7 +4,7 @@
 // Velocity 3/3: write the solved position and new velocity back to the particle's slot
 // for the next frame.
 
-// common.glslinc stamp: Params 124 B, v18. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v19. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

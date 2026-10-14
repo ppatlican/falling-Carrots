@@ -91,6 +91,11 @@ layout(set = 0, binding = 26, std430) buffer BodySpawn { vec4 body_spawn[]; };
 // body_region_fit, read by body_region_goal and, for the rotation, by the push-out and the
 // swept contacts (member_rot). brush_spawn starts a body's members at (0, 0, 1, 0).
 layout(set = 0, binding = 27, std430) buffer RegionFrame { vec4 region_frame[]; };
+// What a soft member gets from other soft bodies in this iteration (their contacts, the push-out and
+// friction) over the size of its region, per sorted index: solve_delta writes it, and solve_apply
+// moves a soft member by the shares of the members of its region instead of its own (ADR 0008
+// item 1). solve_pressure clears it before the substep's first apply.
+layout(set = 0, binding = 28, std430) buffer BodyPush { vec2 body_push[]; };
 
 // Body record flags (info.w). STALE: the eraser took members, so the outline (rest_offset.zw)
 // is out of date and the push-out skips the body. WET_NOW / WET: a member touched liquid this

@@ -19,6 +19,7 @@ const GROUPS := {
 	"test_dropped_jelly_wobbles_and_settles": ["soft"],
 	"test_jelly_squashes_under_a_carrot_and_springs_back": ["soft"],
 	"test_jelly_strip_folds_without_passing_through_itself": ["soft"],
+	"test_soft_body_rests_on_a_soft_body": ["soft"],
 	"test_three_rigid_boxes_stack_and_settle": ["rigid"],
 	"test_five_aligned_boxes_hold_without_sinking": ["rigid"],
 	"test_half_erased_box_keeps_shape_without_drifting": ["rigid", "erase"],
@@ -228,6 +229,34 @@ func test_jelly_strip_folds_without_passing_through_itself() -> void:
 			% [hang, closest])
 	expect(hang > 8.0, "the strip folds over the carrot: ends over 8 px below its top: %.1f" % hang)
 	expect(closest > 0.75 * SimParams.SPACING, "no member passes through its own body: closest non-region pair %.2f px" % closest)
+
+
+## ADR 0008: a soft body set on another soft body rests on it. Two 16x10 jellies at stiffness 0.5
+## and region 2 (a carrot set soft with the parameter panel, as body_probe set=carrot.stiffness=),
+## the upper one 2 px over the lower (just touching), 270 frames. Before ADR 0008 the upper one's
+## bottom members slipped between the lower one's and it draped over it (ADR 0008 Context).
+func test_soft_body_rests_on_a_soft_body() -> void:
+	var world := Vector2(64, 48)
+	var sim = _sim(world, {"stiffness": 0.5, "region": 2.0})
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var fl := _floor_y(world)
+	var low: int = ParticleStep.make_body(state, _box(Vector2(32, fl), 16, 10), _jelly)
+	var top: int = ParticleStep.make_body(state, _box(Vector2(32, fl - 10 * SimParams.SPACING), 16, 10), _jelly)
+	var most_inside := 0
+	var speed := 0.0
+	for f in 270:
+		_frame(sim, state)
+		if f % 10 == 9:
+			most_inside = maxi(most_inside, _members_in_lattice(state, top, low) + _members_in_lattice(state, low, top))
+		if f >= 240:
+			speed = maxf(speed, maxf(_max_member_speed(state, low), _max_member_speed(state, top)))
+	var inside := _members_in_lattice(state, top, low) + _members_in_lattice(state, low, top)
+	var above: float = _fit(state, low).c.y - _fit(state, top).c.y
+	_report("16x10 jelly (stiffness 0.5, region 2) on another, 270 frames: members inside the other %d at the end (most %d at a sample), the upper one's centre %.2f px above the lower one's, |rotation| %.4f / %.4f rad, fastest member over the last 30 frames %.3f px/s"
+			% [inside, most_inside, above, absf(_fit(state, low).theta), absf(_fit(state, top).theta), speed])
+	expect_eq(most_inside, 0, "no member inside the other jelly at any sample")
+	expect(above > 5.0 * SimParams.SPACING, "the upper jelly stays on top: centres %.2f px apart" % above)
+	expect(speed < 1.0, "both come to rest, every member under 1 px/s: %.3f" % speed)
 
 
 func test_three_rigid_boxes_stack_and_settle() -> void:
@@ -820,12 +849,15 @@ func test_split_plan_for_the_gpu() -> void:
 
 ## A ParticleStep over the shipped table: rigid "carrot" (stiffness 1), "jelly" (stiffness
 ## 0.3) and "cork" (rigid, density 0.5: it floats).
-func _sim(world := WORLD):
+## `jelly` sets jelly's parameters for this sim, as the parameter panel does (column -> value).
+func _sim(world := WORLD, jelly := {}):
 	var table = MaterialTable.new()
 	var problems: PackedStringArray = table.load_file()
 	expect(problems.is_empty(), "materials.json: %s" % "; ".join(problems))
 	_carrot = table.id_of("carrot")
 	_jelly = table.id_of("jelly")
+	for column in jelly:
+		table.set_value(_jelly, column, jelly[column])
 	_cork = table.id_of("cork")
 	_water = table.id_of("water")
 	_sand = table.id_of("sand")
@@ -1144,6 +1176,61 @@ func _members_inside(state: Dictionary, id: int, other: int) -> int:
 	for m in _live(state, other):
 		var q: Vector2 = (state.pos[m] - fit.c).rotated(-fit.theta)
 		if q.x > lo.x and q.x < hi.x and q.y > lo.y and q.y < hi.y:
+			n += 1
+	return n
+
+
+## Members of body `id` inside body `other`'s lattice, soft bodies included: each member is taken
+## into `other`'s rest frame by a local fit (an affine map, rest -> now, over `other`'s members
+## within 1.5 spacings on the rest lattice of its member nearest the point) and counts if it lands
+## inside the bounding box of `other`'s rest lattice (past its boundary members). The whole-body
+## fit of _members_inside reads a squashed jelly's own dent as overlap.
+func _members_in_lattice(state: Dictionary, id: int, other: int) -> int:
+	var live := _live(state, other)
+	var lo := Vector2(INF, INF)
+	var hi := -lo
+	for m in live:
+		lo = lo.min(state.rest[m])
+		hi = hi.max(state.rest[m])
+	var n := 0
+	for i in _live(state, id):
+		var p: Vector2 = state.pos[i]
+		var j := -1
+		var best := INF
+		for m in live:
+			var d2: float = p.distance_squared_to(state.pos[m])
+			if d2 < best:
+				best = d2
+				j = m
+		if best > 4.0 * SimParams.SPACING * SimParams.SPACING:
+			continue
+		var near := PackedInt32Array()
+		var qm := Vector2.ZERO
+		var xm := Vector2.ZERO
+		for m in live:
+			if state.rest[m].distance_to(state.rest[j]) <= 1.5 * SimParams.SPACING:
+				near.append(m)
+				qm += state.rest[m]
+				xm += state.pos[m]
+		qm /= near.size()
+		xm /= near.size()
+		# x - xm = F (q - qm) with F = (sum x q^T)(sum q q^T)^-1, so q = qm + F^-1 (p - xm).
+		var qq := Transform2D(Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
+		var xq := Transform2D(Vector2.ZERO, Vector2.ZERO, Vector2.ZERO)
+		for m in near:
+			var q: Vector2 = state.rest[m] - qm
+			var x: Vector2 = state.pos[m] - xm
+			qq.x += q * q.x
+			qq.y += q * q.y
+			xq.x += x * q.x
+			xq.y += x * q.y
+		if absf(qq.determinant()) < 1e-6:
+			continue
+		var f := xq * qq.affine_inverse()
+		if absf(f.determinant()) < 1e-6:
+			continue
+		var q_p: Vector2 = qm + f.affine_inverse().basis_xform(p - xm)
+		if q_p.x > lo.x and q_p.x < hi.x and q_p.y > lo.y and q_p.y < hi.y:
 			n += 1
 	return n
 
