@@ -2,6 +2,9 @@
 ## spawning stops exactly at the cap, and erasing returns slots for reuse.
 extends "res://tests/test_case.gd"
 
+## Test groups for run_tests.gd (-- @name); which to run for a change: docs/agents/testing.md.
+const FILE_GROUPS := ["setup", "quick"]
+
 const ParticlePool = preload("res://cpu_ref/particle_pool.gd")
 
 

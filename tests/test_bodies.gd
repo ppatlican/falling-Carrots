@@ -5,7 +5,44 @@
 ## Runs at the config.json defaults (2 substeps, 4 iterations). Thresholds come from what
 ## the owner could see: 0.1 px is a tenth of a pixel, and a body moving under 0.5 px/s
 ## shifts by less than a pixel in 2 s.
+## Cost is particles x frames x world area (the density grid covers the whole world every
+## substep): the body-in-water tests take 70-320 s each, the dry ones 3-60 s. A new test takes
+## the smallest world, particles and frames that still go red on the broken code (testing.md).
 extends "res://tests/test_case.gd"
+
+## Test groups for run_tests.gd (-- @name); which to run for a change: docs/agents/testing.md.
+const GROUPS := {
+	"test_rigid_box_on_floor_keeps_shape": ["rigid", "quick"],
+	"test_rigid_box_on_floor_does_not_rock": ["rigid"],
+	"test_squashed_jelly_springs_back": ["soft", "quick"],
+	"test_jelly_plank_bends_over_a_gap": ["soft"],
+	"test_dropped_jelly_wobbles_and_settles": ["soft"],
+	"test_jelly_squashes_under_a_carrot_and_springs_back": ["soft"],
+	"test_jelly_strip_folds_without_passing_through_itself": ["soft"],
+	"test_three_rigid_boxes_stack_and_settle": ["rigid"],
+	"test_five_aligned_boxes_hold_without_sinking": ["rigid"],
+	"test_half_erased_box_keeps_shape_without_drifting": ["rigid", "erase"],
+	"test_box_spawned_into_floor_does_not_launch": ["rigid", "quick"],
+	"test_box_dropped_on_corner_tips_and_settles": ["rigid"],
+	"test_rest_outline_of_a_box": ["rigid", "erase", "quick"],
+	"test_sinking_box_keeps_water_out": ["bodies-water"],
+	"test_light_box_floats_at_its_density": ["bodies-water"],
+	"test_light_box_rises_from_the_bottom": ["bodies-water"],
+	"test_submerged_body_keeps_its_reference_pressure": ["bodies-water", "hydro"],
+	"test_cork_pressed_into_wet_sand_rises": ["bodies-water", "sand", "hydro"],
+	"test_sunk_jelly_keeps_its_shape": ["bodies-water", "soft"],
+	"test_box_dropped_on_sand_keeps_grains_out": ["sand", "rigid", "quick"],
+	"test_box_dropped_on_box_stays_out": ["rigid", "quick"],
+	"test_fast_box_drop_stacks_off_centre": ["rigid"],
+	"test_fast_box_drop_on_plank_stays_on_top": ["rigid"],
+	"test_boxes_colliding_sideways_stay_apart": ["rigid"],
+	"test_fast_box_drop_on_a_stack_of_three": ["rigid"],
+	"test_erasing_part_of_a_body_works_its_outline_out_again": ["erase", "quick"],
+	"test_erasing_a_body_in_two_makes_two_bodies": ["erase", "quick"],
+	"test_pieces_keep_the_motion_they_had": ["erase"],
+	"test_body_pieces_on_the_rest_lattice": ["erase", "quick"],
+	"test_split_plan_for_the_gpu": ["erase", "quick"],
+}
 
 const MaterialTable = preload("res://cpu_ref/material_table.gd")
 const ParticleStep = preload("res://cpu_ref/particle_step.gd")
@@ -19,6 +56,9 @@ const ITERATIONS := 4
 const FLOOR := WORLD.y - 0.5 * SimParams.SPACING
 ## Fastest a body counts as at rest (px/s): under a pixel in 2 s.
 const REST_SPEED := 0.5
+## A carrot's speed 20 px before it lands from a 330 px drop (main.tscn's Drop buttons): the
+## material's drag (0.6/s) holds the fall to 387 px/s at the impact, as on the GPU (~390).
+const DROP_SPEED := 378.0
 
 var _carrot: int
 var _jelly: int
@@ -470,13 +510,15 @@ func test_cork_pressed_into_wet_sand_rises() -> void:
 ## its top (p_ref), so a jelly's bottom and lower sides are pushed at up to ~9 g and it was
 ## squeezed out of shape, with water inside (GPU: 4.4 px off, 20-26 inside). The pushes on a soft
 ## body are projected onto its rigid motion, so the water moves and turns it without deforming it.
+## 150 frames (240 took twice as long): without the projection, 6 water particles got inside in
+## both, and the shape error read the same (1.49 px at 240, 1.51 at 150).
 func test_sunk_jelly_keeps_its_shape() -> void:
 	var world := Vector2(64, 60)
 	# The control: the same jelly on the dry floor sags under its own weight.
 	var dry_sim = _sim(world)
 	var dry := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
 	var dry_id: int = ParticleStep.make_body(dry, _box(Vector2(32, _floor_y(world)), 16, 10), _jelly)
-	for f in 240:
+	for f in 120:
 		_frame(dry_sim, dry)
 	var sag: float = _fit(dry, dry_id).err
 	# The 16x10 jelly main.tscn drops (density 1.1), let go on the floor of a pool, 10 rows of
@@ -486,14 +528,14 @@ func test_sunk_jelly_keeps_its_shape() -> void:
 	var id: int = ParticleStep.make_body(state, _box(Vector2(32, _floor_y(world)), 16, 10), _jelly)
 	var most_inside := 0
 	var worst := 0.0
-	for f in 240:
+	for f in 150:
 		_frame(sim, state)
 		if f % 10 == 9:
 			most_inside = maxi(most_inside, _inside(state, id, _water).size())
-			if f >= 120:
+			if f >= 90:
 				worst = maxf(worst, _fit(state, id).err)
 	var above := _floor_y(world) - _lowest(state, id)
-	_report("jelly 16x10 on the floor of a pool, 240 frames: shape error up to %.3f px over the last 2 s (%.3f px dry on the floor), %d water inside at the end (most %d), lowest particle %.2f px above the floor, speed %.3f px/s"
+	_report("jelly 16x10 on the floor of a pool, 150 frames: shape error up to %.3f px over the last second (%.3f px dry on the floor), %d water inside at the end (most %d), lowest particle %.2f px above the floor, speed %.3f px/s"
 			% [worst, sag, _inside(state, id, _water).size(), most_inside, above, _body_vel(state, id).length()])
 	expect(above < 2.0 * SimParams.SPACING, "the jelly stays on the floor (or one water layer above it): %.2f px above it" % above)
 	expect(worst < 2.0 * sag, "the sunk jelly keeps its shape within twice its dry sag (%.3f px): %.3f" % [sag, worst])
@@ -553,29 +595,31 @@ func test_box_dropped_on_box_stays_out() -> void:
 ## A fast, off-centre drop (body_probe boxhigh): at ~390 px/s the box moves 1.6 spacings a
 ## substep and dips ~2.5 spacings in. Its push back out came back as speed: it bounced up at
 ## ~78 px/s, tilted and slid off. The push may stop a body but not send it away (velocity
-## update, stop_not_launch).
+## update, stop_not_launch). The fast drops start the box 20 px above at DROP_SPEED instead (see
+## _drop_fast): the same impact in a world a fifth the size, 240 frames instead of 400.
 func test_fast_box_drop_stacks_off_centre() -> void:
-	var world := Vector2(160, 420)
+	var world := Vector2(80, 80)
 	var sim = _sim(world)
 	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
 	var floor_y := _floor_y(world)
-	var below: int = ParticleStep.make_body(state, _box(Vector2(80, floor_y), 16, 10), _carrot)
-	var above: int = ParticleStep.make_body(state, _box(Vector2(84, floor_y - 20.0 - 330.0), 16, 10), _carrot)
+	var below: int = ParticleStep.make_body(state, _box(Vector2(40, floor_y), 16, 10), _carrot)
+	var above: int = ParticleStep.make_body(state, _box(Vector2(44, floor_y - 20.0 - 20.0), 16, 10), _carrot)
+	_drop_fast(state, above)
 	var touched := false
 	var rebound := 0.0
 	var max_speed := 0.0
-	for f in 400:
+	for f in 240:
 		_frame(sim, state)
 		var v := _body_vel(state, above)
 		touched = touched or _closest_cross_pair(state) < SimParams.SPACING
 		if touched:
 			rebound = maxf(rebound, -v.y)
-		if f >= 340:
+		if f >= 180:
 			max_speed = maxf(max_speed, v.length())
 	var inside := _members_inside(state, below, above) + _members_inside(state, above, below)
 	var on_top: bool = _fit(state, above).c.y < _fit(state, below).c.y - 10.0 * SimParams.SPACING + 1.0
 	var gap := _closest_cross_pair(state)
-	_report("16x10 carrot dropped 330 px, 4 px off centre, onto another, 400 frames: on top %s, fastest rebound %.1f px/s, %d members inside the other, closest cross-body pair %.3f px, speed (last 60 frames) %.3f px/s"
+	_report("16x10 carrot dropped as from 330 px, 4 px off centre, onto another, 240 frames: on top %s, fastest rebound %.1f px/s, %d members inside the other, closest cross-body pair %.3f px, speed (last 60 frames) %.3f px/s"
 			% [on_top, rebound, inside, gap, max_speed])
 	expect(on_top, "the box stays on the other")
 	expect(rebound < 20.0, "no bounce, rebound < 20 px/s: %.1f" % rebound)
@@ -584,16 +628,18 @@ func test_fast_box_drop_stacks_off_centre() -> void:
 	expect(max_speed < REST_SPEED, "at rest, speed < %.1f px/s: %.3f" % [REST_SPEED, max_speed])
 
 
+## Without swept contacts the box lodged in the plank (26 members inside, rebound 36 px/s).
 func test_fast_box_drop_on_plank_stays_on_top() -> void:
-	var world := Vector2(160, 420)
+	var world := Vector2(80, 80)
 	var sim = _sim(world)
 	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
 	var floor_y := _floor_y(world)
-	var plank: int = ParticleStep.make_body(state, _box(Vector2(80, floor_y), 16, 2), _carrot)
-	var above: int = ParticleStep.make_body(state, _box(Vector2(84, floor_y - 4.0 - 330.0), 16, 10), _carrot)
-	var r := _drop_run(sim, state, plank, above, 400)
+	var plank: int = ParticleStep.make_body(state, _box(Vector2(40, floor_y), 16, 2), _carrot)
+	var above: int = ParticleStep.make_body(state, _box(Vector2(44, floor_y - 4.0 - 20.0), 16, 10), _carrot)
+	_drop_fast(state, above)
+	var r := _drop_run(sim, state, plank, above, 240)
 	var on_top: bool = _fit(state, above).c.y < _fit(state, plank).c.y - 6.0 * SimParams.SPACING + 1.0
-	_report("16x10 carrot dropped 330 px, 4 px off centre, onto a 16x2 plank, 400 frames: on top %s, %s"
+	_report("16x10 carrot dropped as from 330 px, 4 px off centre, onto a 16x2 plank, 240 frames: on top %s, %s"
 			% [on_top, _drop_line(r)])
 	expect(on_top, "the box doesn't tunnel through the plank")
 	_expect_drop(r)
@@ -619,20 +665,21 @@ func test_boxes_colliding_sideways_stay_apart() -> void:
 
 
 func test_fast_box_drop_on_a_stack_of_three() -> void:
-	var world := Vector2(160, 420)
+	var world := Vector2(80, 120)
 	var sim = _sim(world)
 	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
 	var floor_y := _floor_y(world)
 	var stack: Array[int] = []
 	for k in 3:
-		stack.append(ParticleStep.make_body(state, _box(Vector2(80, floor_y - k * 10.0 * SimParams.SPACING), 16, 10), _carrot))
-	var above: int = ParticleStep.make_body(state, _box(Vector2(84, floor_y - 60.0 - 330.0), 16, 10), _carrot)
-	var r := _drop_run(sim, state, stack[2], above, 400)
+		stack.append(ParticleStep.make_body(state, _box(Vector2(40, floor_y - k * 10.0 * SimParams.SPACING), 16, 10), _carrot))
+	var above: int = ParticleStep.make_body(state, _box(Vector2(44, floor_y - 60.0 - 20.0), 16, 10), _carrot)
+	_drop_fast(state, above)
+	var r := _drop_run(sim, state, stack[2], above, 240)
 	var on_top: bool = _fit(state, above).c.y < _fit(state, stack[2]).c.y - 10.0 * SimParams.SPACING + 1.0
 	var lean := 0.0
 	for id in stack:
 		lean = maxf(lean, absf(_fit(state, id).theta))
-	_report("16x10 carrot dropped 330 px, 4 px off centre, onto a stack of three, 400 frames: on top %s, the stack's |rotation| %.3f rad, %s"
+	_report("16x10 carrot dropped as from 330 px, 4 px off centre, onto a stack of three, 240 frames: on top %s, the stack's |rotation| %.3f rad, %s"
 			% [on_top, lean, _drop_line(r)])
 	expect(on_top, "the box stays on the stack")
 	expect(lean < 0.05, "the stack stays standing, |rotation| < 0.05 rad: %.3f" % lean)
@@ -871,6 +918,14 @@ func _body_vel(state: Dictionary, id: int) -> Vector2:
 	for m in live:
 		v += state.vel[m]
 	return v / live.size()
+
+
+## Sets a body falling at DROP_SPEED. Started 20 px above what it hits, it lands at 386.5 px/s,
+## as one dropped from 330 px (387.1 px/s), and the tests' numbers match the 330 px drops on the
+## shipped code, without swept contacts and without stop_not_launch (2026-10-14).
+func _drop_fast(state: Dictionary, id: int) -> void:
+	for m in _live(state, id):
+		state.vel[m] = Vector2(0.0, DROP_SPEED)
 
 
 ## Runs a body-on-body impact: `moving` flies at `hit`. Returns the fastest rebound after they

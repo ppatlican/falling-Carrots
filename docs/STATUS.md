@@ -75,7 +75,7 @@ Terms follow `CONTEXT.md`. The design and the rules the code must keep are in `d
 | Dark strip between settled sand and water, drawn over (owner's scene: 3 × +10k water, then 2 × +10k sand; `main.tscn` shots at 40 and 60 s, 5 runs each; `mounds` shots) | PC, RTX 3080 Ti, 2026-10-11 | Columns with a dark pixel right above the bed top 59% / 56% → 27% / 24% (medians), `mounds` 31% / 30% → 13% / 14%; the continuous line is gone (single speckle pixels remain). Drawing only (`render_gap.glsl`): the air is still in the sim. Bed pixels drawn blue unchanged (≤ 0.03% settled). Render pass +20 µs with sand in water, +2 µs for 50k pure water. CPU tests 15 pass |
 | Phone | — | **Not yet** |
 
-Run tests: `Godot_v4.7.1-stable_win64_console.exe --headless --path <project> --script res://tests/run_tests.gd`
+Run tests: `Godot_v4.7.1-stable_win64_console.exe --headless --path <project> --script res://tests/run_tests.gd -- @quick` (groups and what to run for a change: `docs/agents/testing.md`)
 Run validator: `... --headless --path <project> --script res://tools/validate_materials.gd`
 
 ## Measured numbers (GPU µs per pass, 1 s average)

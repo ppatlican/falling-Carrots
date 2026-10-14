@@ -2,6 +2,9 @@
 ## cap, occupied spots left out, at least 2 particles thick, one body per piece.
 extends "res://tests/test_case.gd"
 
+## Test groups for run_tests.gd (-- @name); which to run for a change: docs/agents/testing.md.
+const FILE_GROUPS := ["brush", "quick"]
+
 const BodyBrush = preload("res://core/body_brush.gd")
 const SimParams = preload("res://core/sim_params.gd")
 

@@ -3,6 +3,9 @@
 ## still, and particles haven't collapsed onto each other.
 extends "res://tests/test_case.gd"
 
+## Test groups for run_tests.gd (-- @name); which to run for a change: docs/agents/testing.md.
+const FILE_GROUPS := ["liquids", "sand", "quick"]
+
 const MaterialTable = preload("res://cpu_ref/material_table.gd")
 const ParticleStep = preload("res://cpu_ref/particle_step.gd")
 const SimParams = preload("res://core/sim_params.gd")

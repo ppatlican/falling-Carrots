@@ -2,6 +2,9 @@
 ## must be right. Expected values were computed independently in Python.
 extends "res://tests/test_case.gd"
 
+## Test groups for run_tests.gd (-- @name); which to run for a change: docs/agents/testing.md.
+const FILE_GROUPS := ["setup", "quick"]
+
 const SmokeHash = preload("res://gpu/smoke_hash.gd")
 
 const EXPECTED := {
