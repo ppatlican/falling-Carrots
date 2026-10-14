@@ -28,14 +28,18 @@ A cluster solid at stiffness 1: keeps its shape exactly (carrot, a drawn block).
 _Avoid_: Solid (ambiguous with static solid)
 
 **Soft body**:
-A cluster solid below stiffness 1: bends and springs back (jelly), or keeps its dents if it has plasticity (dough).
+A cluster solid below stiffness 1: bends, wobbles and springs back (jelly), or keeps its dents if it has plasticity (dough). It is matched over regions, not as one cluster (ADR 0005).
 _Avoid_: Deformable
 
 **Jelly**:
 The springy soft-body material, as in OE-Cake.
 
 **Stiffness**:
-The cluster-solid parameter: the share of a body's shape error removed per 1/60 s. 1 is a rigid body; lower is a soft body.
+The cluster-solid parameter: the share of a body's shape error removed per 1/60 s (for a soft body, of each region's). 1 is a rigid body; lower is a soft body.
+
+**Region**:
+In a soft body, a member and the members of its body whose rest offsets lie within the material's `region` radius of its own (1.5–2.0 spacings). Each region is fitted like a small rigid body every iteration, and each member moves toward the mean of its regions' goals, so the body bends where it is loaded. Smaller regions bend more. A long or big soft body sags and slumps a lot (the noodle, ADR 0005 Known limits).
+_Avoid_: Cluster (a region is not its own body)
 
 **Gas**:
 A behaviour class of light, short-lived particles moved by heat and wind (fire, smoke, steam).

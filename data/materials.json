@@ -68,7 +68,7 @@
 			"viscosity": 0.0,
 			"drag": 0.6,
 			"wind_coupling": 0.1,
-			"stiffness": 0.3,
+			"stiffness": 0.95,
 			"region": 1.5,
 			"conductivity": 0.2,
 			"heat_capacity": 0.8,

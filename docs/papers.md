@@ -44,7 +44,8 @@ Read only the section for the problem at hand. Fetch one paper section at a time
 - **Meshless Deformations Based on Shape Matching** (Müller et al. 2005): https://graphics.stanford.edu/courses/cs468-05-fall/Papers/p471-muller.pdf
   Core of the cluster-solid class: rigid blocks (R only), jelly (linear/quadratic blend), overlapping clusters, plasticity for dough.
 - **FastLSM: Fast Lattice Shape Matching for Robust Real-Time Deformation** (Rivers & James, SIGGRAPH 2007): https://doi.org/10.1145/1275808.1276480
-  Shape matching over small overlapping regions of a lattice, one region per particle: bodies bend locally, region size sets how stiff. The basis of ADR 0005 (soft bodies bend).
+  Shape matching over small overlapping regions of a lattice, one region per particle: bodies bend locally, region size sets how stiff. The basis of ADR 0005 (soft bodies bend). Built with Jacobi averaging and 8 iterations a frame, a long or big body slumps: a pull crosses it in about (length / region)² iterations (ADR 0005 Known limits).
+- **Hierarchical Position Based Dynamics** (Müller, VRIPHYS 2008; on Matthias Müller's publications page): solves on coarser particle levels too, so a constraint's effect crosses a big body in few iterations. The lead for stiffer long jellies if the owner wants them (ADR 0005, Decided with the owner).
 - **Solid Simulation with Oriented Particles** (Müller & Chentanez 2011): https://matthias-research.github.io/pages/publications/orientedParticles.pdf
   Each particle matches its own neighbourhood and keeps an orientation; how OE-Cake's Elastic is described (joins keep distance and orientation). ADR 0005.
 - **Position Based Dynamics** (Müller et al. 2007): https://www.cs.toronto.edu/~jacobson/seminar/mueller-et-al-2007.pdf

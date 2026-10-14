@@ -25,6 +25,8 @@ var _jelly: int
 var _cork: int
 var _water: int
 var _sand: int
+## Jelly's region radius in spacings (ADR 0005).
+var _region: float
 
 
 func test_rigid_box_on_floor_keeps_shape() -> void:
@@ -77,10 +79,115 @@ func test_squashed_jelly_springs_back() -> void:
 	var off := 0.0
 	for i in state.pos.size():
 		off = maxf(off, state.pos[i].distance_to(control.pos[i]))
-	_report("squashed jelly (stiffness 0.3): shape error %.3f px, under 10%% after %d frames; at 2 s %.3f px from an unsquashed jelly at rest (its sag %.3f px)" % [start, back, off, _fit(control, id).err])
-	# Stiffness 0.3 alone removes all but 0.7^n of the error in n frames.
+	_report("squashed jelly: shape error %.3f px, under 10%% after %d frames; at 2 s %.3f px from an unsquashed jelly at rest (its sag %.3f px)" % [start, back, off, _fit(control, id).err])
 	expect(back > 0, "jelly springs back to under 10%% of its start error (%.2f px) within 2 s" % start)
 	expect(off < 0.1 * start, "after 2 s every particle is within 10%% of the start error of an unsquashed jelly at rest: %.3f px" % off)
+
+
+## ADR 0005: a soft body is matched over small regions, so it bends. A 24x6 jelly plank laid
+## over a 20 px gap between two carrot pillars sags into it and rests there (one cluster sagged
+## about 1 px). Thinner or longer planks fall through the gap (ADR 0005 Known limits).
+func test_jelly_plank_bends_over_a_gap() -> void:
+	var world := Vector2(80, 40)
+	var sim = _sim(world)
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var fl := _floor_y(world)
+	# Pillars 6 wide, 10 tall, their inner faces 20 px apart.
+	ParticleStep.make_body(state, _box(Vector2(40 - 15, fl), 6, 10), _carrot)
+	ParticleStep.make_body(state, _box(Vector2(40 + 15, fl), 6, 10), _carrot)
+	var top := fl - 10 * SimParams.SPACING
+	var id: int = ParticleStep.make_body(state, _box(Vector2(40, top), 24, 6), _jelly)
+	var live := _live(state, id)
+	var mid0 := _rest_column_y(state, live, 0.0)
+	for f in 120:
+		_frame(sim, state)
+	var sag := _rest_column_y(state, live, 0.0) - _rest_column_y(state, live, 15.0)
+	var down := _rest_column_y(state, live, 0.0) - mid0
+	var speed := _max_member_speed(state, id)
+	_report("jelly 24x6 over a 20 px gap, 120 frames: middle %.2f px below the columns over the pillars (moved down %.2f px), fastest member %.2f px/s, closest non-region pair %.2f px"
+			% [sag, down, speed, _self_gap(state, id)])
+	expect(sag > 2.0, "the plank bends: its middle sags over 2 px below its ends: %.2f" % sag)
+	expect(down < 10.0, "the plank stays on the pillars: middle moved down %.2f px" % down)
+	expect(speed < 5.0 * REST_SPEED, "the plank rests, every member under %.1f px/s: %.2f" % [5.0 * REST_SPEED, speed])
+
+
+## ADR 0005: a 16x10 jelly dropped 40 px wobbles (its shape error peaks at the impact and
+## swings), then settles within 2 s and rests.
+func test_dropped_jelly_wobbles_and_settles() -> void:
+	var world := Vector2(60, 70)
+	var sim = _sim(world)
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var fl := _floor_y(world)
+	var id: int = ParticleStep.make_body(state, _box(Vector2(30, fl - 40.0), 16, 10), _jelly)
+	var errs := PackedFloat32Array()
+	var landed := -1
+	for f in 210:
+		_frame(sim, state)
+		errs.append(_fit(state, id).err)
+		if landed < 0 and fl - _lowest(state, id) < 0.5:
+			landed = f
+	var rest_err: float = errs[errs.size() - 1]
+	var peak := 0.0
+	var swings := 0
+	var settled := landed
+	for f in range(landed, errs.size()):
+		peak = maxf(peak, errs[f])
+		if f > landed and signf(errs[f] - rest_err) != signf(errs[f - 1] - rest_err):
+			swings += 1
+		if absf(errs[f] - rest_err) > 0.5:
+			settled = f
+	var speed := _max_member_speed(state, id)
+	_report("jelly 16x10 dropped 40 px: landed frame %d, shape error peak %.2f px, %d swings, within 0.5 px of its rest error (%.2f px) from %.2f s after landing; fastest member at 3.5 s %.2f px/s"
+			% [landed, peak, swings, rest_err, (settled - landed) / 60.0, speed])
+	expect(peak > 1.0, "the jelly deforms on impact: peak shape error over 1 px: %.2f" % peak)
+	expect(swings >= 2, "the jelly wobbles: at least 2 swings: %d" % swings)
+	expect(settled - landed < 120, "it settles within 2 s of landing: %.2f s" % ((settled - landed) / 60.0))
+	expect(speed < 2.0 * REST_SPEED, "it rests, every member under %.1f px/s: %.2f" % [2.0 * REST_SPEED, speed])
+
+
+## ADR 0005: a 12x8 carrot set on a 12x8 jelly flattens it; once the carrot is erased the jelly
+## gets back within 0.5 px of the height of an unloaded jelly beside it.
+func test_jelly_squashes_under_a_carrot_and_springs_back() -> void:
+	var world := Vector2(100, 40)
+	var sim = _sim(world)
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var fl := _floor_y(world)
+	var id: int = ParticleStep.make_body(state, _box(Vector2(25, fl), 12, 8), _jelly)
+	var control: int = ParticleStep.make_body(state, _box(Vector2(75, fl), 12, 8), _jelly)
+	var carrot: int = ParticleStep.make_body(state, _box(Vector2(25, fl - 8 * SimParams.SPACING - 0.5), 12, 8), _carrot)
+	for f in 90:
+		_frame(sim, state)
+	var loaded := _height(state, id)
+	var free := _height(state, control)
+	ParticleStep.erase_particles(state, _live(state, carrot))
+	for f in 90:
+		_frame(sim, state)
+	var back := absf(_height(state, id) - _height(state, control))
+	_report("jelly 12x8 under a 12x8 carrot: %.2f px tall against %.2f px unloaded (%.0f%% squashed); 1.5 s after the carrot is erased %.3f px off the unloaded height"
+			% [loaded, free, 100.0 * (1.0 - loaded / free), back])
+	expect(loaded < 0.95 * free, "the carrot squashes the jelly by over 5%%: %.2f px against %.2f" % [loaded, free])
+	expect(back < 0.5, "the jelly springs back within 0.5 px of an unloaded one: %.3f px" % back)
+
+
+## ADR 0005 item 4: same-body pairs further apart in the rest shape than the region collide, so a
+## 40x3 jelly strip dropped across a carrot folds over it without passing through itself.
+func test_jelly_strip_folds_without_passing_through_itself() -> void:
+	var world := Vector2(110, 50)
+	var sim = _sim(world)
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var fl := _floor_y(world)
+	ParticleStep.make_body(state, _box(Vector2(55, fl), 6, 10), _carrot)
+	var id: int = ParticleStep.make_body(state, _box(Vector2(55, fl - 10 * SimParams.SPACING - 4.0), 40, 3), _jelly)
+	var closest := INF
+	for f in 120:
+		_frame(sim, state)
+		if f % 5 == 4:
+			closest = minf(closest, _self_gap(state, id))
+	var hang := _lowest(state, id) - (fl - 10 * SimParams.SPACING)
+	_report("jelly 40x3 over a carrot, 120 frames: ends hang %.1f px below the carrot's top, closest non-region pair %.2f px"
+			% [hang, closest])
+	expect(hang > 8.0, "the strip folds over the carrot: ends over 8 px below its top: %.1f" % hang)
+	expect(closest > 0.75 * SimParams.SPACING, "no member passes through its own body: closest non-region pair %.2f px" % closest)
 
 
 func test_three_rigid_boxes_stack_and_settle() -> void:
@@ -675,6 +782,7 @@ func _sim(world := WORLD):
 	_cork = table.id_of("cork")
 	_water = table.id_of("water")
 	_sand = table.id_of("sand")
+	_region = table.materials[_jelly].region
 	return ParticleStep.new(world, table)
 
 
@@ -894,6 +1002,45 @@ func _lowest(state: Dictionary, id: int) -> float:
 	for m in _live(state, id):
 		y = maxf(y, state.pos[m].y)
 	return y
+
+
+## Height of a body: lowest member centre minus highest.
+func _height(state: Dictionary, id: int) -> float:
+	var top := INF
+	for m in _live(state, id):
+		top = minf(top, state.pos[m].y)
+	return _lowest(state, id) - top
+
+
+## Mean y of the members whose rest offset x is within a spacing of +-x (both sides).
+func _rest_column_y(state: Dictionary, live: PackedInt32Array, x: float) -> float:
+	var y := 0.0
+	var n := 0
+	for m in live:
+		if absf(absf(state.rest[m].x) - x) < SimParams.SPACING:
+			y += state.pos[m].y
+			n += 1
+	return y / n
+
+
+func _max_member_speed(state: Dictionary, id: int) -> float:
+	var v := 0.0
+	for m in _live(state, id):
+		v = maxf(v, state.vel[m].length())
+	return v
+
+
+## Closest pair of a soft body's members that are not in each other's region (further apart in
+## the rest shape than its material's region radius): ADR 0005 item 4's self-contacts.
+func _self_gap(state: Dictionary, id: int) -> float:
+	var w := _region * SimParams.SPACING + 0.01
+	var live := _live(state, id)
+	var best := INF
+	for a in live.size():
+		for b in range(a + 1, live.size()):
+			if state.rest[live[a]].distance_to(state.rest[live[b]]) > w:
+				best = minf(best, state.pos[live[a]].distance_to(state.pos[live[b]]))
+	return best
 
 
 ## Particles of `material` whose centre is inside the body's outline (the bounding box of its
