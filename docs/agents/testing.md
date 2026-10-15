@@ -22,8 +22,9 @@ Pick the CPU test groups and GPU probe scenarios a change can affect, run those,
 | `@liquids` | sand sinking through water, the grid on hand-made cells, two liquids layering by density, also from a mixed start (ADR 0010) | 8 | ~1 min |
 | `@hydro` | density projection grid: hand-made cells, p_ref under water, cork in wet sand, liquids by density | 9 | ~3 min |
 | `@brush` | body brush strokes (`core/body_brush.gd`) | 7 | <1 s |
+| `@stick` | stickiness (ADR 0011): hanging from the ceiling, tearing, sticky clumps falling freely, a damp column, a liquid and a body sticking | 9 | ~15 s |
 
-The whole suite (72 tests, `--list`, 2026-10-15) takes ~20 min in one process, ~14 min as two in parallel: `-- @bodies-water` in one, `-- @rigid @erase @brush @setup @liquids` and the six dry `@soft` methods in the other. `test_light_box_rises_from_the_bottom` alone takes ~4-5 min.
+The whole suite (81 tests, `--list`, 2026-10-15) takes ~20 min in one process, ~14 min as two in parallel: `-- @bodies-water` in one, `-- @rigid @erase @brush @setup @liquids @stick` and the six dry `@soft` methods in the other. `test_light_box_rises_from_the_bottom` alone takes ~4-5 min.
 
 ## Changed file → what to run
 
@@ -35,7 +36,7 @@ The whole suite (72 tests, `--list`, 2026-10-15) takes ~20 min in one process, ~
 | `tools/*_probe.gd` | — | the scenarios you changed, once |
 | `data/materials.json` | `@setup`, plus the groups of the material's class: water or oil `@liquids @hydro @bodies-water`, sand `@sand`, carrot or cork `@rigid @bodies-water`, jelly `@soft` | that material's scenarios at both ends of the parameter's range (ADR 0001, `gpu-probe.md`) |
 | `config.json` | `@setup` (CPU tests fix substeps and iterations themselves) | the scenarios the setting touches |
-| `core/sim_params.gd` | by constant: `HYDRO_*` `@hydro @liquids @bodies-water`; `BODY_*`, `STACK_K` `@rigid @soft @bodies-water`; powder constants `@sand @liquids`; `SPACING`, `H`, `DT`, `GRAVITY`, `MAX_STEP` the full suite | as the matching shader rows |
+| `core/sim_params.gd` | by constant: `HYDRO_*` `@hydro @liquids @bodies-water`; `BODY_*`, `STACK_K` `@rigid @soft @bodies-water`; powder constants `@sand @liquids`; `STICK_*` `@stick`; `SPACING`, `H`, `DT`, `GRAVITY`, `MAX_STEP` the full suite | as the matching shader rows |
 | `core/body_brush.gd` | `@brush` | `main.tscn` screenshots of a stroke |
 | `core/game_config.gd`, `debug/`, `project.godot` | `@setup` | — |
 | `cpu_ref/material_table.gd`, `particle_pool.gd` | `@setup` | — |
@@ -49,6 +50,7 @@ The whole suite (72 tests, `--list`, 2026-10-15) takes ~20 min in one process, ~
 | … `_hydro_*`, `hydro_*`, `_cradled` | `@hydro @liquids @bodies-water` | — |
 | … `_body_pressure_delta`, `_body_p_sample`, `_body_liquid_fill`, `body_wet_face`, `_body_liquid_drag`, `_project_body_pushes` | `@bodies-water` | — |
 | … `_lambda`, `_liquid_delta`, `liquid_pair_share`, `_xsph`, `scorr`, `wall_density*` | `@liquids @bodies-water` | — |
+| … `has_stickiness`, `_stick_*`, `stick_shape`, `stick_hold`, `_contact_share`, `_touch_distance` | `@stick` (the shipped table has no stickiness, so nothing else runs them) | — |
 | … `_powder_liquid_drag`, powder sleeping | `@sand @liquids` | — |
 | … `step()`, `_find_neighbours`, `_apply_delta`, `_clamp_to_world` | the full suite | — |
 | `gpu/shaders/sim/body_match`, `body_project` | `@setup` | `body_probe tests,boxdrop,boxhigh,plank,boxside,boxstack,waterjelly`; `body_project` also `corkstrip` and the `solve_pressure` row |
@@ -61,6 +63,7 @@ The whole suite (72 tests, `--list`, 2026-10-15) takes ~20 min in one process, ~
 | … `solve_pressure` | `@setup` | `body_probe watersink,waterjelly,waterfloat,waterdeep,pourfloor,sandcorks,corkstrip` |
 | … `powder.glslinc` | `@setup` | the sand checks; `water_feel_probe sandair,erase,shaft,sink`; `body_probe sand,sandlow`; `body_probe jellystack,jellydrop` and `stack3,stack5,boxstack set=carrot.stiffness=0.5 frames=1800` (the soft verdict, ADR 0008) |
 | … `predict`, `velocity_*`, `hash_*`, `scan_*` | `@setup` | the sand checks, `gpu_probe water`, `body_probe tests` |
+| … `stick.glslinc` (stickiness, ADR 0011) | `@setup` | with the sticky columns set (`set=sand.cohesion=1,...`): `water_feel_probe erase,shaft 1500` (`floating` 0), the sand checks, `gpu_probe water 2400 3 gap=30 every=47`, `body_probe tests,boxstack` and `jelly,squash,fold`; `main.tscn` shots of a +10k sand drop; ADR 0011 Results lists the full set |
 | … `common.glslinc` | `@setup` (packing) | every probe whose pass reads what changed |
 | … `render*` | `@setup` | `main.tscn` screenshots only |
 | `gpu/shaders/smoke/`, `gpu/smoke_*` | `@setup` | `debug/smoke_test.tscn` |

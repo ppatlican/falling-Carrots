@@ -25,7 +25,7 @@ void main() {
 		v += powder_liquid_drag(t);
 	}
 	if (params.sticky != 0u) {
-		v += stick_pull(t) * params.dt + stick_drag(t);
+		v += stick_velocity(t);
 	}
 	scratch[t] = v;
 }

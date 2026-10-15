@@ -18,7 +18,9 @@
 ##   erase  sand pile built with the moving brush (frames 1-PILE), then the eraser scrubbing
 ##          sideways across it while rising from the floor (to ERASE_END), as the owner
 ##          does: grains with nothing under them (no grain within 4 px below and not on
-##          the floor) that are still (< SLEEP_SPEED) are clumps held in the air (should be 0)
+##          the floor) that are still (< SLEEP_SPEED) are clumps held in the air (should be 0);
+##          floating: still grains in clumps touching no wall, floor or ceiling (should be 0; with
+##          sticky sand, ADR 0011, a grain under an overhang counts as stuck but not floating)
 ##   shaft  the erase pile, then the eraser cut straight down at x=300 and x=345: dry sand
 ##          should cave in to its angle of repose, so the empty 2 px cells left in
 ##          x 285..360, y 260..356 should drop back towards 0, not stay open
@@ -1020,17 +1022,22 @@ func _sink_gap(b: Dictionary, t: float) -> void:
 
 func _shaft_stats(b: Dictionary, t: float) -> void:
 	var cells := {}
+	var ps := PackedVector2Array()
+	var vs := PackedVector2Array()
 	for i in cap:
 		var fl := int(b.mat_flags.decode_u32(i * 4))
 		if (fl & 0x100) == 0 or (fl & 0xFF) != sand:
 			continue
-		cells[Vector2i(int(b.pos.decode_float(i * 8) / 2.0), int(b.pos.decode_float(i * 8 + 4) / 2.0))] = true
+		var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		ps.append(p)
+		vs.append(Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4)))
+		cells[Vector2i(int(p.x / 2.0), int(p.y / 2.0))] = true
 	var empty := 0
 	for cy in range(130, 178):
 		for cx in range(143, 180):
 			if not cells.has(Vector2i(cx, cy)):
 				empty += 1
-	print("SHAFT t=%.2f empty_cells=%d of %d" % [t, empty, 48 * 37])
+	print("SHAFT t=%.2f empty_cells=%d of %d floating=%d" % [t, empty, 48 * 37, _floating(ps, vs)])
 
 
 func _erase_stats(b: Dictionary, t: float) -> void:
@@ -1064,9 +1071,49 @@ func _erase_stats(b: Dictionary, t: float) -> void:
 		if vs[i].length() < SimParams.SLEEP_SPEED:
 			stuck += 1
 			stuck_y += p.y
-	print("ERASE t=%.2f phase=%s grains=%d unsupported=%d stuck(still, nothing below)=%d stuck_mean_y=%.0f" % [
+	print("ERASE t=%.2f phase=%s grains=%d unsupported=%d stuck(still, nothing below)=%d stuck_mean_y=%.0f floating=%d" % [
 			t, "pile" if frame_i <= ERASE_PILE else ("erase" if frame_i <= ERASE_END else "after"),
-			ps.size(), unsupported, stuck, stuck_y / maxi(stuck, 1)])
+			ps.size(), unsupported, stuck, stuck_y / maxi(stuck, 1), _floating(ps, vs)])
+
+
+## Still grains (< SLEEP_SPEED) in clumps of touching grains (flood fill over 2 px cells) that
+## touch no wall, floor or ceiling: held in the air by nothing. With sticky sand (ADR 0011) a
+## grain hanging under an overhang has nothing below it and is fine; one in a clump hung from
+## nothing is the mid-air clump bug.
+func _floating(ps: PackedVector2Array, vs: PackedVector2Array) -> int:
+	var cells := {}
+	for i in ps.size():
+		var c := Vector2i(int(ps[i].x / 2.0), int(ps[i].y / 2.0))
+		if not cells.has(c):
+			cells[c] = []
+		cells[c].append(i)
+	var size := Vector2i(SimParams.WORLD_SIZE / 2.0)
+	var seen := {}
+	var floating := 0
+	for start in cells:
+		if seen.has(start):
+			continue
+		var queue: Array = [start]
+		seen[start] = true
+		var members: Array = []
+		var anchored := false
+		while not queue.is_empty():
+			var c: Vector2i = queue.pop_back()
+			members.append_array(cells[c])
+			if c.x <= 1 or c.y <= 1 or c.x >= size.x - 2 or c.y >= size.y - 2:
+				anchored = true
+			for dy in [-1, 0, 1]:
+				for dx in [-1, 0, 1]:
+					var n: Vector2i = c + Vector2i(dx, dy)
+					if cells.has(n) and not seen.has(n):
+						seen[n] = true
+						queue.append(n)
+		if anchored:
+			continue
+		for i in members:
+			if vs[i].length() < SimParams.SLEEP_SPEED:
+				floating += 1
+	return floating
 
 
 func _shot_rt(f: int) -> void:

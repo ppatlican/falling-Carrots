@@ -246,6 +246,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 				+ (_body_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt) if body[i] != 0 else Vector2.ZERO)
 		if sticky:
 			new_vel[i] += _stick_pull(i, pred, mat, body, bodies, neighbours[i]) * dt \
+					+ _stick_damp(i, pred, vel, mat, body, bodies, neighbours[i], dt) \
 					+ _stick_drag(i, pred, vel, mat, neighbours[i], dt)
 	for i in n:
 		vel[i] = new_vel[i]
@@ -1735,21 +1736,19 @@ func _stick_k(m_i: int, m_j: int) -> float:
 	return maxf(materials[m_i].adhesion, materials[m_j].adhesion)
 
 
-## Strength of a sticky pull between two particles x px further apart than touching: STICK_TOUCH
-## when they touch or overlap, full at STICK_FULL spacings, 0 again from STICK_REACH, so it mostly
-## resists pulling apart. At full strength when touching it pressed every contact together: at
-## one substep sand at cohesion 1 squeezed to ~3/4 of its height. At 0 a row hung under another
-## fell ~0.2 px before its pull took hold and was too fast to stop by the end of the band, so
-## nothing hung from the ceiling but the row touching it (test_sticky_sand_holds_to_the_ceiling).
-## Mirror: stick_shape.
+## Strength of a sticky pull between two particles x px further apart than touching: 0 when they
+## touch or overlap, full at STICK_FULL spacings, 0 again from STICK_REACH, so it only resists
+## pulling apart. Any pull while touching presses the pair together, and its contact pushes it apart
+## again unevenly (STACK_K): at half strength a sticky 30 x 20 block fell 12 px in 30 frames
+## against 46 for dry sand (test_a_sticky_block_falls_freely); at full strength sand also squeezed
+## to ~3/4 of its height. A row hung under another is caught by the damping (_stick_damp) before
+## it has sagged far enough for this to hold it. Mirror: stick_shape.
 static func stick_shape(x: float) -> float:
 	var full := SimParams.STICK_FULL * SimParams.SPACING
 	var reach := SimParams.STICK_REACH * SimParams.SPACING
-	if x >= reach:
+	if x <= 0.0 or x >= reach:
 		return 0.0
-	if x >= full:
-		return (reach - x) / (reach - full)
-	return lerpf(SimParams.STICK_TOUCH, 1.0, maxf(x, 0.0) / full)
+	return x / full if x < full else (reach - x) / (reach - full)
 
 
 ## Strength of a hold at x px past touching: full while touching and out to STICK_FULL spacings
@@ -1795,10 +1794,11 @@ func _contact_share(i: int, j: int, pred: PackedVector2Array, mat: PackedInt32Ar
 ## body, which its shape holds) pulls it by STICK_G x gravity x the pair's coefficient x
 ## stick_shape, times i's share of the pair's contact (_contact_share); each wall within reach
 ## pulls it by its adhesion in full. At most STICK_CAP x gravity.
-## The share is the contact's, not the mass's, because the pull presses touching particles
-## together and their contact pushes them apart again by that share: with mass shares, a pair one
-## above the other was pulled together evenly and pushed apart mostly upward (STACK_K), so a
-## sticky clump in mid-air rose to the ceiling (test_a_sticky_clump_in_mid_air_falls).
+## The share is the contact's, not the mass's, so a pull that ends in a contact is undone as it
+## was made: while the pull still acted on touching pairs, mass shares pulled a pair one above the
+## other together evenly and its contact pushed it apart mostly upward (STACK_K), and a sticky
+## clump in mid-air rose to the ceiling. With the pull at 0 while touching no test tells the two
+## apart (ADR 0011); the GPU checks ran with the contact's.
 ## Mirror: stick_pull in stick.glslinc.
 func _stick_pull(i: int, pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
 		bodies: Array, nb: PackedInt32Array) -> Vector2:
@@ -1827,6 +1827,39 @@ func _stick_pull(i: int, pred: PackedVector2Array, mat: PackedInt32Array, body: 
 	return (a * (SimParams.STICK_G * SimParams.GRAVITY)).limit_length(SimParams.STICK_CAP * SimParams.GRAVITY)
 
 
+## Velocity change of particle i from the damping of its sticky pairs: a pair touching or within
+## the pull's band (stick_hold) that is moving apart loses that separating speed, up to what its
+## pull could take away in a step (STICK_G x gravity x the pair's coefficient x dt), shared as its
+## contact (_contact_share). It never presses a pair together, so it lifts nothing, and it stops a
+## row hung under another before it sags out of reach: the pull alone, nothing while touching,
+## caught it ~0.2 px down and too fast to stop by the end of the band
+## (test_sticky_sand_holds_to_the_ceiling). Mirror: stick_damp in stick.glslinc.
+func _stick_damp(i: int, pred: PackedVector2Array, vel: PackedVector2Array, mat: PackedInt32Array,
+		body: PackedInt32Array, bodies: Array, nb: PackedInt32Array, dt: float) -> Vector2:
+	var m_i := mat[i]
+	var dv := Vector2.ZERO
+	for j in nb:
+		if body[i] != 0 and body[j] == body[i]:
+			continue
+		var k := _stick_k(m_i, mat[j])
+		if k <= 0.0:
+			continue
+		var rv := pred[j] - pred[i]
+		var r := rv.length()
+		if r < MIN_DIST:
+			continue
+		var w := stick_hold(r - _touch_distance(m_i, mat[j]))
+		if w <= 0.0:
+			continue
+		var n := rv / r
+		var sep := (vel[j] - vel[i]).dot(n)  # > 0: moving apart
+		if sep <= 0.0:
+			continue
+		var most := k * w * SimParams.STICK_G * SimParams.GRAVITY * dt
+		dv += n * (minf(sep, most) * _contact_share(i, j, pred, mat, body, bodies))
+	return dv
+
+
 ## Velocity change that keeps a sticky particle from sliding along what it sticks to. A wall's
 ## pull never reaches the solver's wall friction (predict clamps the particle to the wall first),
 ## so a grain or body particle a wall pulls gets Coulomb friction here: up to its friction x the
@@ -1834,8 +1867,9 @@ func _stick_pull(i: int, pred: PackedVector2Array, mat: PackedInt32Array, body: 
 ## itself is balanced against it), so it can rest on a side wall. A liquid has no friction: it is
 ## dragged toward the velocity of what it sticks to that isn't liquid (a wall's is 0, and only
 ## along the wall) at STICK_DRAG per second times the pair's coefficient and stick_hold, averaged
-## over at least a weight of 1, so it creeps instead of sliding off (honey on a wall). Grains and
-## bodies stick to each other through their contacts' friction, which the pull presses together.
+## over at least a weight of 1, so it creeps instead of sliding off (honey on a wall). Between
+## particles the pull and the damping act along the pair; sliding along each other is left to their
+## contacts' friction.
 ## Mirror: stick_drag in stick.glslinc.
 func _stick_drag(i: int, pred: PackedVector2Array, vel: PackedVector2Array, mat: PackedInt32Array,
 		nb: PackedInt32Array, dt: float) -> Vector2:

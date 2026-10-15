@@ -1,6 +1,6 @@
 ## Stickiness (ADR 0011): cohesion and adhesion in the CPU reference. Sticky sand holds to the
-## ceiling and as a column, an overloaded sticky block breaks, a sticky clump in mid-air still
-## falls (sleeping), a sticky liquid clings to a wall, a sticky body hangs from the ceiling, and a
+## ceiling and as a column, an overloaded sticky block breaks, a sticky clump or block in mid-air
+## falls as a dry one, a sticky liquid clings to a wall, a sticky body hangs from the ceiling, and a
 ## pair is pulled together as its contact pushes it apart. With no stickiness nothing changes.
 extends "res://tests/test_case.gd"
 
@@ -119,9 +119,9 @@ func test_an_overloaded_sticky_block_breaks() -> void:
 	expect(low > state.pos.size() / 2, "%d of %d grains fell to the lower half" % [low, state.pos.size()])
 
 
-## A sticky clump let go in mid-air falls to the floor as a whole. Its pulls press its grains
-## together and their contacts push them apart again; split by mass, while a contact pushes the
-## upper grain most (STACK_K), the clump rose to the ceiling (_stick_pull).
+## A sticky clump let go in mid-air falls to the floor as a whole. While the pull still acted on
+## touching grains and was split by mass, their contacts pushed them apart mostly upward (STACK_K)
+## and the clump rose to the ceiling (_stick_pull, ADR 0011).
 func test_a_sticky_clump_in_mid_air_falls() -> void:
 	var table = _table()
 	var sand: int = table.id_of("sand")
@@ -135,6 +135,24 @@ func test_a_sticky_clump_in_mid_air_falls() -> void:
 		highest = minf(highest, p.y)
 	# On the floor the 6 rows reach up to ~10 px above it.
 	expect(highest > WORLD.y - 16.0, "the clump's top grain at y %.1f (floor %.0f)" % [highest, WORLD.y])
+
+
+## A big sticky block on the rest lattice let go in mid-air falls as fast as a dry one. Pulled
+## while touching, its pairs were pressed together and their contacts pushed them apart mostly
+## upward (STACK_K): it fell 12 px in 30 frames against 46 (stick_shape).
+func test_a_sticky_block_falls_freely() -> void:
+	var table = _table()
+	var sand: int = table.id_of("sand")
+	var drop := {}
+	for c in [1.0, 0.0]:
+		table.set_value(sand, "cohesion", c)
+		var sim = ParticleStep.new(Vector2(80, 120), table)
+		var state := _state()
+		_block(state, Vector2(10, 4), 30, 20, sand)
+		var y0 := _mean_y(state)
+		_run(sim, state, 30)
+		drop[c] = _mean_y(state) - y0
+	expect(drop[1.0] > 0.95 * drop[0.0], "sticky block fell %.1f px, dry %.1f" % [drop[1.0], drop[0.0]])
 
 
 ## A column of damp sand (cohesion 1) stands, where a dry one slumps into a pile. Hex-packed, as
