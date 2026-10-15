@@ -10,21 +10,23 @@ Pick the CPU test groups and GPU probe scenarios a change can affect, run those,
 ## Groups
 `run_tests.gd -- @soft @erase` runs every test in those groups; files and method names still work and mix with groups. `-- @soft --list` prints what would run. Tags sit at the top of each test file (`GROUPS`, `FILE_GROUPS`); the runner fails a test with no group, so tag a new test when you add it.
 
-| group | what it covers | tests | time (one process) |
+| group | what it covers | tests | time (parallel runner, 10 processes) |
 |---|---|---|---|
-| `@quick` | any change, first: loading, setup, one dry scene per area (no body in water: the cheapest takes ~70 s) | 47 | ~1.5 min |
-| `@setup` | materials table, config, project settings, scripts load, shaders compile, stale shader imports refused, particle pool, smoke hash | 25 | ~5 s |
-| `@rigid` | rigid bodies dry: on the floor, stacks, corner drop, fast drops, body-body push-out | 14 | ~3.5 min |
-| `@soft` | soft bodies (ADR 0005) dry, a soft body resting on another (ADR 0008), and the sunk jelly | 8 | ~4 min |
-| `@erase` | erasing part of a body, splitting into pieces (ADR 0004), outlines, the GPU split plan | 7 | ~15 s |
-| `@bodies-water` | bodies in water: sinking, floating, rising, p_ref, cork in wet sand, sunk jelly | 6 | ~13 min |
-| `@sand` | sand into water, a box on sand, a cork in a wet sand bed | 4 | ~2 min |
-| `@liquids` | sand sinking through water, the grid on hand-made cells, two liquids layering by density, also from a mixed start (ADR 0010) | 8 | ~1 min |
-| `@hydro` | density projection grid: hand-made cells, p_ref under water, cork in wet sand, liquids by density | 9 | ~3 min |
-| `@brush` | body brush strokes (`core/body_brush.gd`) | 7 | <1 s |
-| `@stick` | stickiness (ADR 0011): hanging from the ceiling, tearing, sticky clumps falling freely, a damp column, a liquid and a body sticking | 9 | ~15 s |
+| `@quick` | any change, first: loading, setup, one dry scene per area (no body in water) | 50 | 21 s |
+| `@setup` | materials table, config, project settings, scripts load, shaders compile, stale shader imports refused, particle pool, smoke hash | 25 | 5 s |
+| `@rigid` | rigid bodies dry: on the floor, stacks, corner drop, fast drops, body-body push-out | 14 | 32 s |
+| `@soft` | soft bodies (ADR 0005) dry, a soft body resting on another (ADR 0008), and the sunk jelly | 8 | 32 s |
+| `@erase` | erasing part of a body, splitting into pieces (ADR 0004), outlines, the GPU split plan | 7 | 2 s |
+| `@bodies-water` | bodies in water: sinking, floating, rising, p_ref, cork in wet sand, sunk jelly | 6 | 94 s |
+| `@sand` | sand into water, a box on sand, a cork in a wet sand bed | 4 | 22 s |
+| `@liquids` | sand sinking through water, the grid on hand-made cells, two liquids layering by density, also from a mixed start (ADR 0010) | 8 | 11 s |
+| `@hydro` | density projection grid: hand-made cells, p_ref under water, cork in wet sand, liquids by density | 9 | 22 s |
+| `@brush` | body brush strokes (`core/body_brush.gd`) | 7 | 2 s |
+| `@stick` | stickiness (ADR 0011): hanging from the ceiling, tearing, sticky clumps falling freely, a damp column, a liquid and a body sticking | 9 | 4 s |
 
-The whole suite (81 tests, `--list`, 2026-10-15) takes ~20 min in one process, ~14 min as two in parallel: `-- @bodies-water` in one, `-- @rigid @erase @brush @setup @liquids @stick` and the six dry `@soft` methods in the other. `test_light_box_rises_from_the_bottom` alone takes ~4-5 min.
+The whole suite (81 tests) takes ~2.3 min (135 s on the owner's PC, 20 logical cores, 2026-10-16; it took ~20 min in one process before). The runner runs each selected test in its own child process, up to `-j N` at once (default half the logical cores; `-j 1` runs them one after another in one process, as before), longest first by the times the last run took (`user://test_durations.json`), and prints each test's lines as one block when it ends; a test that hits a script error fails (in one process it used to pass, since GDScript carries on). So a group takes about as long as its slowest test: the full suite's is `test_light_box_rises_from_the_bottom`, ~80 s alone and ~135 s beside nine others (~7 min before the speed-up below).
+
+**Speed of the CPU reference (2026-10-16).** Made ~2-5x faster without changing what it computes: all 81 tests print exactly the numbers they printed before (checked against a run of the code before). What was changed, so later edits keep it: per-substep caches of each particle's class, density, friction, region reach and soft flag (`_cache_particles`) instead of a material row lookup per neighbour pair; kernel constants worked out once (`_poly6_k`, `_spiky_k`, `_w6`); `_lambda`'s kernel values per pair kept for `_liquid_delta` in the same iteration (`_pair_g`, `_pair_w`); no `_contact_delta` call for a liquid particle with only liquid neighbours (it returns exactly zero); neighbour and region lists from a flat counting-sort grid, in the same order as before; `_hydro_solve`'s per-cell tests worked out once per solve instead of in each of its 32 sweeps; and no density projection grid in a dry step (no liquid, no wet body), where its pressure pushes nothing. Keep sums in the same order when editing these loops: floats added in another order give other last digits, and the printed numbers stop matching.
 
 ## Changed file → what to run
 
@@ -74,4 +76,4 @@ The whole suite (81 tests, `--list`, 2026-10-15) takes ~20 min in one process, ~
 The sand checks are the two runs in `gpu-probe.md`, Reading the output (50k sand at rest; sand into water).
 
 ## Keeping a new test short
-Cost is particles × frames × world area: the CPU step runs the density grid over the whole world every substep, water or not, so a dry 192-particle scene steps at ~95 ms a frame in a 160 x 100 world and ~220 ms in 160 x 420. Use the smallest world and the fewest particles and frames that still go red on the broken code (revert the fix in a tmp copy and run the test there). A body that should hit at speed can start close to its target with that speed (`_drop_fast` in `test_bodies.gd`): a carrot's drag (0.6/s) makes a 330 px fall land at 387 px/s, and one started 20 px above at 378 px/s lands at 386.5. The fast-drop tests did this and went from 95–140 s to 15–25 s each, with the same numbers on the shipped code and on the two broken variants they were checked against.
+Cost is particles × frames, plus world area once there is liquid: with any liquid (or a wet body) the CPU step runs the density grid over the whole world every substep, so keep a wet test's world small; a dry step skips the grid. Use the smallest world and the fewest particles and frames that still go red on the broken code (revert the fix in a tmp copy and run the test there). A body that should hit at speed can start close to its target with that speed (`_drop_fast` in `test_bodies.gd`): a carrot's drag (0.6/s) makes a 330 px fall land at 387 px/s, and one started 20 px above at 378 px/s lands at 386.5. The fast-drop tests did this and went from 95–140 s to 15–25 s each, with the same numbers on the shipped code and on the two broken variants they were checked against.

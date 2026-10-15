@@ -5,8 +5,9 @@
 ## Runs at the config.json defaults (2 substeps, 4 iterations). Thresholds come from what
 ## the owner could see: 0.1 px is a tenth of a pixel, and a body moving under 0.5 px/s
 ## shifts by less than a pixel in 2 s.
-## Cost is particles x frames x world area (the density grid covers the whole world every
-## substep): the body-in-water tests take 70-320 s each, the dry ones 3-60 s. A new test takes
+## Cost is particles x frames, x world area with water (the density grid covers the whole world
+## every substep that has liquid): alone, the body-in-water tests take 20-80 s each, the dry ones
+## 1-30 s (testing.md). A new test takes
 ## the smallest world, particles and frames that still go red on the broken code (testing.md).
 extends "res://tests/test_case.gd"
 

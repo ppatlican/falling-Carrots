@@ -2,7 +2,10 @@
 
 A small, readable CPU implementation of the core rules (spec section 6). It is the
 ground truth that headless tests check, and the reference GPU shaders are compared
-against. Plain GDScript, no engine nodes, so it runs under `--headless`.
+against. Plain GDScript, no engine nodes, so it runs under `--headless`. `particle_step.gd`'s
+neighbour loops read per-substep caches instead of material rows, and skip the density grid in a
+dry step, for speed only: what they compute is unchanged (`docs/agents/testing.md`, Speed of the
+CPU reference).
 
 | Module | Spec | Filled in by |
 |---|---|---|

@@ -51,7 +51,7 @@ When a task needs a subagent, delegate it through `/grok-cc:rescue` (the Grok CL
 
 ### Running tests
 - Before running anything, pick what the change can affect from `docs/agents/testing.md`: changed file → CPU test groups and GPU probe scenarios. Name what you skipped and why in the report.
-- CPU tests: `--headless --script res://tests/run_tests.gd -- @quick @soft test_bodies.gd <method>` runs those groups, files and methods (`--list` prints them without running). `@quick` (~1.5 min) suits any change; the full suite takes ~19 min (~13 as two parallel processes), so run it once before the final commit only when the change reaches the whole step.
+- CPU tests: `--headless --script res://tests/run_tests.gd -- @quick @soft test_bodies.gd <method>` runs those groups, files and methods (`--list` prints them without running). Each test runs in its own child process, up to `-j N` at once (default half the logical cores; `-j 1` for one process). `@quick` (~20 s) suits any change; the full suite takes ~2.5 min, so run it before the final commit whenever the change reaches the CPU reference.
 - GPU probes: pass `--disable-vsync` (a third faster, same results).
 
 ### GDScript pitfalls seen here
