@@ -68,7 +68,8 @@
 ##            water": a 180x10 cork (STRIP_COLS x STRIP_ROWS, about one body-brush stroke across the
 ##            screen) let go at y 30, on the floor by frame ~120, then 2 x "+10k water" at frames 240
 ##            and 270, 2400 frames: it rises off the floor and floats (mean draft over the last 60
-##            frames under 1). It stayed on the floor while each member's pressure push was clamped on
+##            frames under 1) on the water, not over a cell of air (the median gap between its bottom and
+##            the water under it under GAP_MAX; 18 px before ADR 0003 item 18). It stayed on the floor while each member's pressure push was clamped on
 ##            its own (body_project.glsl). Takes ~15 s to come up. "trace" prints its bottom's height,
 ##            speed and p_ref every sample, with "refs" what set a low p_ref; "bare" the bare members
 ##            and the grid's p at their outline points every 60 frames
@@ -205,6 +206,8 @@ const RISEN := 1.5
 ## across the screen makes.
 const STRIP_COLS := 180
 const STRIP_ROWS := 10
+## Most air (px) corkstrip and waterstrip allow between the cork's bottom and the water under it.
+const GAP_MAX := 3.0
 ## How far into the sand pile's top the sandstroke stroke's centre line runs (px).
 const STROKE_DEPTH := 4.0
 
@@ -846,9 +849,9 @@ func _sample(f: int, b: Dictionary) -> void:
 			var inside := _inside(b, bodies[1], fit, water)
 			sc.most_inside = maxi(sc.most_inside, inside)
 			if f % 60 == 0 or (sc.name.begins_with("waterdeep") and f % 20 == 0) or (sc.name.begins_with("pour") and f % 20 == 0):
-				print("  f=%d c=(%.1f, %.1f) rot %.3f v=%s draft %.2f inside %d; water top at x 40 / 600 %.1f / %.1f; p_ref %.0f" % [f, fit.c.x, fit.c.y, fit.theta,
+				print("  f=%d c=(%.1f, %.1f) rot %.3f v=%s draft %.2f inside %d; water top at x 40 / 600 %.1f / %.1f; p_ref %.0f; gap under %.1f px" % [f, fit.c.x, fit.c.y, fit.theta,
 						_mean_vel(bodies[1]), _draft(b, bodies[1]), inside, _top_of(b, water, 40.0, 17.0), _top_of(b, water, 600.0, 17.0),
-						b.bodies.decode_float(1 * ParticleSim.BODY_BYTES + 40)])
+						b.bodies.decode_float(1 * ParticleSim.BODY_BYTES + 40), _gap_under(b, bodies[1])])
 			if f % 300 == 0 and OS.get_cmdline_user_args().has("grid"):
 				_print_grid_columns(b, [fit.c.x, fit.c.x + 120.0])
 				var top := INF
@@ -1419,9 +1422,9 @@ func _sample_corkstrip(f: int, b: Dictionary, bodies: Dictionary) -> void:
 		var bottom := -INF
 		for q in body.pos:
 			bottom = maxf(bottom, q.y)
-		print("  f=%d cork c=(%.1f, %.1f) rot %.3f v=%s bottom %.1f above floor; draft %.2f; water top %.1f; p_ref %.1f flags %d"
+		print("  f=%d cork c=(%.1f, %.1f) rot %.3f v=%s bottom %.1f above floor; draft %.2f; water top %.1f; p_ref %.1f flags %d; gap under %.1f px"
 				% [f, fit.c.x, fit.c.y, fit.theta, _mean_vel(body), FLOOR - bottom, draft, _top_of(b, water, 40.0, 17.0),
-				b.bodies.decode_float(base + 40), b.bodies.decode_u32(base + 12)])
+				b.bodies.decode_float(base + 40), b.bodies.decode_u32(base + 12), _gap_under(b, body)])
 	if f % 300 == 0 and OS.get_cmdline_user_args().has("grid"):
 		_print_grid_columns(b, [fit.c.x, fit.c.x + 200.0])
 		_print_pressure_push(b, body)
@@ -1437,12 +1440,54 @@ func _sample_corkstrip(f: int, b: Dictionary, bodies: Dictionary) -> void:
 			_print_refs(b, body, fit.theta)
 	if f > sc.frames - 60:
 		sc.late.append(draft)
+		sc.late_gap = sc.get("late_gap", 0.0) + _gap_under(b, body) / 6.0
 	if f == sc.frames:
 		var mean := 0.0
 		for v in sc.late:
 			mean += v / sc.late.size()
-		_result("corkstrip: 180x10 cork on the floor under 20k water: mean draft over the last 60 frames %.2f (floats under 1)" % mean,
-				mean < 1.0)
+		_result("corkstrip: 180x10 cork on the floor under 20k water: mean draft over the last 60 frames %.2f (floats under 1), gap under it %.1f px (under %.0f)"
+				% [mean, sc.late_gap, GAP_MAX], mean < 1.0 and sc.late_gap < GAP_MAX)
+
+
+## Median over the middle 80% of a body's width, in 4 px columns, of the height of air between its
+## lowest member and the highest water particle under it (0 where water touches it). A floater
+## whose bottom face reads the grid's pressure over air rides on a gap (owner report 2026-10-15).
+func _gap_under(b: Dictionary, body: Dictionary) -> float:
+	var left := INF
+	var right := -INF
+	for p in body.pos:
+		left = minf(left, p.x)
+		right = maxf(right, p.x)
+	var inset := 0.1 * (right - left)
+	var n := int((right - left - 2.0 * inset) / 4.0)
+	if n < 1:
+		return 0.0
+	var bottoms := PackedFloat32Array()
+	var tops := PackedFloat32Array()
+	bottoms.resize(n)
+	tops.resize(n)
+	bottoms.fill(-INF)
+	tops.fill(INF)
+	for p in body.pos:
+		var k := int((p.x - left - inset) / 4.0)
+		if k >= 0 and k < n:
+			bottoms[k] = maxf(bottoms[k], p.y)
+	for i in b.mat_flags.size() / 4:
+		var mf: int = b.mat_flags.decode_u32(i * 4)
+		if (mf & 0x100) == 0 or (mf & 0xFF) != water:
+			continue
+		var q := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		var k := int((q.x - left - inset) / 4.0)
+		if k >= 0 and k < n and q.y > bottoms[k]:
+			tops[k] = minf(tops[k], q.y)
+	var gaps := []
+	for k in n:
+		if bottoms[k] > -INF and tops[k] < INF:
+			gaps.append(maxf(tops[k] - bottoms[k] - SimParams.SPACING, 0.0))
+	if gaps.is_empty():
+		return 0.0
+	gaps.sort()
+	return gaps[gaps.size() / 2]
 
 
 ## Debug ("bare", corkstrip): the boundary members with nothing but their own body within 1.5

@@ -1155,8 +1155,14 @@ func _hydro_solve(phi: PackedVector4Array, p: PackedFloat32Array, dt: float) -> 
 						and phi[c].z < SimParams.HYDRO_BODY_CELL
 				# Compression counts body volume too, so water squeezed under or into a body is pushed out.
 				var err := maxf(phi[c].x + phi[c].z - 1.0, 0.0)
+				var room := minf(phi[c].x + phi[c].y * SimParams.HYDRO_POWDER_FULL + phi[c].z - 1.0, 0.0)
 				if covered:
-					err += minf(phi[c].x + phi[c].y * SimParams.HYDRO_POWDER_FULL + phi[c].z - 1.0, 0.0)
+					err += room
+				elif hydro_under_floater(phi, ci, size):
+					# Under the bottom of a body that floats: pulled for at most HYDRO_ROOF_PULL of its room,
+					# so the water rises into the gap the coarse grid leaves under it (hydro_row). Not under a
+					# body still under water: the void a rising body leaves was pulled to 0 and it hung there.
+					err += maxf(room, -SimParams.HYDRO_ROOF_PULL)
 				var k := 1.0 - pow(1.0 - SimParams.HYDRO_K, dt * 60.0)  # share per step (hydro_k())
 				var rhs := -a * a * k * err / (dt * dt)
 				p[c] = maxf(lerpf(maxf(p[c], 0.0), (sum + wall_sum - rhs) / n, SimParams.HYDRO_SOR), 0.0)
@@ -1174,6 +1180,25 @@ static func hydro_air(phi: PackedVector4Array, ci: Vector2i, size: Vector2i) -> 
 	if ci.y > 0 and level >= SimParams.HYDRO_MIXED_WET and fill >= SimParams.HYDRO_MIXED_SOLID:
 		return not hydro_solid(phi[c - size.x]) and hydro_level(phi[c - size.x]) < SimParams.HYDRO_AIR
 	return true
+
+
+## True when cell ci is under the bottom of a body that floats: HYDRO_BODY_ROOF of body in the
+## cell above, less in its own, not the floor row, and going up past the cells holding body
+## (HYDRO_BODY_CELL), within HYDRO_ROOF_REACH cells, the first is open-cell air
+## (hydro_under_floater in hydro_solve.glsl).
+static func hydro_under_floater(phi: PackedVector4Array, ci: Vector2i, size: Vector2i) -> bool:
+	if ci.y < 1 or ci.y >= size.y - 1:
+		return false
+	var c := ci.y * size.x + ci.x
+	if phi[c - size.x].z < SimParams.HYDRO_BODY_ROOF or phi[c].z >= SimParams.HYDRO_BODY_ROOF:
+		return false
+	for k in range(2, SimParams.HYDRO_ROOF_REACH + 1):
+		if ci.y - k < 0:
+			return true
+		var u: Vector4 = phi[c - k * size.x]
+		if u.z < SimParams.HYDRO_BODY_CELL:
+			return hydro_level(u) < SimParams.HYDRO_AIR and not hydro_solid(u)
+	return false
 
 
 ## True when a cell is bed: a solid wall for the grid (hydro_solid). Sand at its packing, and

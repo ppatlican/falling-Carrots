@@ -31,6 +31,10 @@
 // minimum for a workgroup).
 shared vec2 s_phi[HYDRO_MAX_CELLS];
 shared float s_p[HYDRO_MAX_CELLS];
+// One bit per cell: under a floater's bottom (hydro_under_floater), set before the rows are
+// worked out. Testing it in hydro_row instead, inlined into each of a thread's rows, took the
+// hydro pass from ~150 to ~220-235 us per frame, with or without bodies (2026-10-15).
+shared uint s_roof[HYDRO_MAX_CELLS / 32];
 
 // Cells per thread.
 const int HYDRO_SLOTS = HYDRO_MAX_CELLS / LOCAL_SIZE_X;
@@ -44,6 +48,10 @@ const int HYDRO_ROW_KEEP = 3;    // walled in: max(p, 0)
 // Body volume from which a cell is a body's: it isn't pulled full, and as bed it is a wall to
 // the water beside it, not porous sand (see hydro_row). Mirror: SimParams.HYDRO_BODY_CELL.
 const float HYDRO_BODY_CELL = 0.05;
+// Body volume in the cell above from which a cell is under a body's bottom, and the most room
+// such a cell is pulled for (see hydro_row). Mirror: SimParams.HYDRO_BODY_ROOF, HYDRO_ROOF_PULL.
+const float HYDRO_BODY_ROOF = 0.25;
+const float HYDRO_ROOF_PULL = 0.003;
 
 // A cell short of HYDRO_AIR but holding at least this much liquid and HYDRO_MIXED_SOLID of
 // bed fill (sand or body) is under water, not air, when the cell above isn't air (hydro_air).
@@ -73,6 +81,37 @@ bool hydro_air(ivec2 ci) {
 		return u.y < HYDRO_SOLID && u.x < HYDRO_AIR;
 	}
 	return true;
+}
+
+// Most cells hydro_under_floater looks up from a cell for the air over the body above it.
+const int HYDRO_ROOF_REACH = 3;
+
+// True when coarse cell ci is under the bottom of a body that floats: HYDRO_BODY_ROOF of body
+// in the cell above, less in its own, not the floor row, and the body reaches the air: going
+// up from the cell above, past the cells holding body (HYDRO_BODY_CELL), the first cell is air
+// (open-cell air: hydro_air's mixed-cell rule is for cells pinned under water), within
+// HYDRO_ROOF_REACH cells (bodies up to ~48 px tall). A floating body's gap is open to the air at
+// its ends, so its water rises into it; under water, a body's void is water closing in.
+// Mirror: ParticleStep.hydro_under_floater.
+bool hydro_under_floater(ivec2 ci, ivec2 size) {
+	if (ci.y < 1 || ci.y >= size.y - 1) {
+		return false;
+	}
+	vec4 own = hydro_phi[hydro_index(ci)];
+	vec4 above = hydro_phi[hydro_index(ci - ivec2(0, 1))];
+	if (above.z < HYDRO_BODY_ROOF || own.z >= HYDRO_BODY_ROOF) {
+		return false;
+	}
+	for (int k = 2; k <= HYDRO_ROOF_REACH; k++) {
+		if (ci.y - k < 0) {
+			return true;
+		}
+		vec4 u = hydro_phi[hydro_index(ci - ivec2(0, k))];
+		if (u.z < HYDRO_BODY_CELL) {
+			return hydro_level(u) < HYDRO_AIR && !hydro_solid(u);
+		}
+	}
+	return false;
 }
 
 // The projected SOR update of coarse cell ci as a HydroRow. Per cell, with a the cell
@@ -195,8 +234,19 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 	bool covered = above.x + above.y * HYDRO_POWDER_VOL + above.z >= HYDRO_FULL && ci.y < size.y - 1
 			&& own.z < HYDRO_BODY_CELL;
 	float err = max(own.x + own.z - 1.0, 0.0);
+	float room = min(own.x + own.y * HYDRO_POWDER_FULL + own.z - 1.0, 0.0);
 	if (covered) {
-		err += min(own.x + own.y * HYDRO_POWDER_FULL + own.z - 1.0, 0.0);
+		err += room;
+	} else if ((s_roof[c >> 5u] & (1u << (c & 31u))) != 0u) {
+		// Under the bottom of a body that floats (hydro_under_floater), a cell with room is
+		// pulled, for at most HYDRO_ROOF_PULL of it. The body's bottom cell is only part full,
+		// as its bottom row cuts through it, so it never covered the cell under it: that cell was
+		// water under a wall, at hydrostatic p, and its water, weightless, stayed where it lay,
+		// a cell of air under a long floating cork (~18 px, body_probe corkstrip; owner
+		// screenshot 2026-10-15). Not under a body still under water: the void a rising body
+		// leaves under it is such a cell too, and pulled, even capped, its p went to 0, the
+		// body's bottom read it, and a long cork rising off the floor hung ~25 px up (corkstrip).
+		err += max(room, -HYDRO_ROOF_PULL);
 	}
 	float rhs = -a * a * hydro_k() * err / (params.dt * params.dt);
 	return HydroRow(w / n, (wall_sum - rhs) / n, HYDRO_ROW_LIQUID);
@@ -206,10 +256,18 @@ void main() {
 	ivec2 size = hydro_size();
 	uint n = uint(size.x * size.y);
 	uint tid = gl_LocalInvocationID.x;
+	if (tid < uint(HYDRO_MAX_CELLS / 32)) {
+		s_roof[tid] = 0u;
+	}
+	memoryBarrierShared();
+	barrier();
 	for (uint c = tid; c < n; c += LOCAL_SIZE_X) {
 		vec4 phi = hydro_phi[c];
 		s_phi[c] = vec2(hydro_level(phi), hydro_solid_fill(phi));
 		s_p[c] = hydro_p[c];
+		if (hydro_under_floater(ivec2(int(c) % size.x, int(c) / size.x), size)) {
+			atomicOr(s_roof[c >> 5u], 1u << (c & 31u));
+		}
 	}
 	memoryBarrierShared();
 	barrier();
