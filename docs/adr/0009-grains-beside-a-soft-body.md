@@ -1,6 +1,6 @@
 # 0009: Grains beside a soft body
 
-Date: 2026-10-15. Status: proposed; built on branch `worktree-jelly-on-sand` for the owner to try (Results and Known limits below). Fixes the owner's report of 2026-10-14 (STATUS Known issues, "Jelly on sand at low stiffness jitters and sinks into the pile").
+Date: 2026-10-15. Status: proposed; on main. The owner tried it on 2026-10-15: below some stiffness the jelly still worms and digs through the sand, left for later (Known limits). Fixes the owner's report of 2026-10-14 (STATUS Known issues, "Jelly on sand at low stiffness jitters and sinks into the pile").
 
 ## Context
 Owner, 2026-10-14: "add 10k sand, then drop a long horizontal strip of jelly on top of it. Some tiny pieces of jelly spaz out, constantly jittering and digging through the sand", with the jelly's stiffness lowered to the panel's minimum, 0.2. Measured on the GPU before this ADR (`body_probe`, RTX 3080 Ti, `--disable-vsync`):
@@ -56,6 +56,7 @@ GPU (`body_probe`, RTX 3080 Ti, `--disable-vsync`; the same build's runs differ,
 - **CPU**: `test_soft_jelly_rests_on_sand` (new, the repro above, 57 s): main 39.23 px/s and 9.38 px, this ADR 0.76 px/s and 5.30 px. `@rigid @soft @sand @setup @quick` 61/61, `@bodies-water` 6/6.
 
 ## Known limits
+- **Below some stiffness a jelly on sand still worms and digs through it** (owner, 2026-10-15: "below certain stiffnesses it still starts worming and digging thru sand - but can do it later"). The threshold wasn't measured; deferred by the owner.
 - **A stiff jelly sits a little lower on sand after a fast landing.** Out-of-cell push-outs during a ~300 px/s landing were what kept the shipped jelly's bottom row fully on top (a row-deep share of members under the sand's top: 72–174 against 3–5). Tried and rejected, below: letting the push act while the two close fast (a landing). It held the shipped jelly up (11 under), but made a resting one sparkle.
 - **A soft jelly dropped onto sand lands with sand mixed into it.** At 0.2 the ~300 px/s landing opens the bottom rows, and grains that end in the stretched gaps aren't pushed out any more, so the strip rests thinned with sand among its lower rows (`sandjelly` 0.2: 600–700 grains inside its outline; main 771, with the strip at the floor). The speed-gated variant below kept it cleaner (14,600 jelly pixels against 12,800–13,300), but made the shipped jelly sparkle.
 - **A member in a floor corner reads a speed it doesn't have** (not from this ADR: the same on main). With the stroke reaching the left wall (`sandstroke span=280`), a member at x 4–7 on the floor holds its place within 0.1 px while its velocity flips sign at 6–14 px/s every sample, so the probe's "still moving" check fails at any stiffness.
