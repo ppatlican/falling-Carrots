@@ -1,7 +1,8 @@
 ## GPU probe: fills the GPU sim with block fills, steps it and prints settling metrics.
 ## Needs a real window (no --headless). Run it in a copy of the repo, not the repo itself:
 ##   Godot_console.exe --path <copy> --script res://tools/gpu_probe.gd -- <mat>[,<mat>] <frames> [blocks] [spawn_y] [top]
-##   mat      material name; "water,sand" drops one block of each, 240 frames apart
+##   mat      material name; "water,sand" drops one block of each, 240 frames apart ("oil,water":
+##            water poured onto oil; the per-material lines' mean_y shows which ends on top)
 ##   blocks   10k block fills (default 5); by default all at y=8 in consecutive frames
 ##   spawn_y  above 8: stack the blocks upward from this y (279 = 10k at rest on the floor)
 ##   top      list the highest particles instead of the fastest risers
@@ -158,7 +159,7 @@ func _analyse(b: Dictionary) -> void:
 	var stats := {}
 	for m in seq:
 		stats[m] = {"n": 0, "max_speed": 0.0, "sum_speed": 0.0, "moving": 0, "top_y": 1e9,
-				"wall_up": 0.0, "wall_n": 0, "rev": 0, "sum_vy": 0.0, "max_up": 0.0, "bottom_moving": 0, "bottom_vertical": 0}
+				"wall_up": 0.0, "wall_n": 0, "rev": 0, "sum_vy": 0.0, "max_up": 0.0, "bottom_moving": 0, "bottom_vertical": 0, "sum_y": 0.0}
 	var alive := 0
 	var sum_d2 := 0.0
 	var cnt_d := 0
@@ -183,6 +184,7 @@ func _analyse(b: Dictionary) -> void:
 		var sp := Vector2(vx, vy).length()
 		s.n += 1
 		s.sum_speed += sp
+		s.sum_y += y
 		s.sum_vy += vy
 		if sp > s.max_speed:
 			s.max_speed = sp
@@ -216,7 +218,7 @@ func _analyse(b: Dictionary) -> void:
 	for m in seq:
 		var sm = stats[m]
 		if sm.n > 0:
-			print("  mat%d n=%d mean_speed=%.2f max_speed=%.2f mean_vy=%.2f max_up=%.2f wall_up=%.2f" % [m, sm.n, sm.sum_speed / sm.n, sm.max_speed, sm.sum_vy / sm.n, sm.max_up, sm.wall_up])
+			print("  mat%d n=%d mean_speed=%.2f max_speed=%.2f mean_vy=%.2f max_up=%.2f wall_up=%.2f mean_y=%.2f" % [m, sm.n, sm.sum_speed / sm.n, sm.max_speed, sm.sum_vy / sm.n, sm.max_up, sm.wall_up, sm.sum_y / sm.n])
 	var s = stats[mat_id]
 	n_samples += 1
 	if n_samples % 5 == 0:

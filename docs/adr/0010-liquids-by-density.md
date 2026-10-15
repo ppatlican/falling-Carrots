@@ -1,6 +1,6 @@
 # 0010: Liquids by density (mass-weighted PBF and grid)
 
-Date: 2026-10-15. Status: proposed. Milestone 3b, STATUS Next item 9 ("per-material liquid density"); fixes STATUS Known issues "Liquids ignore their material density".
+Date: 2026-10-15. Status: accepted (owner, 2026-10-15; answers below). Milestone 3b, STATUS Next item 9 ("per-material liquid density"); fixes STATUS Known issues "Liquids ignore their material density".
 
 ## Context
 ADR 0001 and SPEC 2.2 say buoyancy comes from each material's density. For liquids the code doesn't do that yet. What it does today (read before writing this):
@@ -47,7 +47,7 @@ Each liquid particle's mass is its material's `density` (water 1). Every rule be
 6. **Body buoyancy needs nothing new:** `body_pressure_delta` reads p, which now carries each liquid's weight. A cork in oil floats deeper, and one between oil and water floats at the interface. `body_p_sample`'s continuation below the last row becomes `ρ_cell × gravity × depth`, with `ρ_cell` from that row's cell. The p_ref floor stays `gravity × BODY_SURFACE_DROP` (Known limits).
 7. **The bubble pull is by volume, unchanged.** A bubble is missing volume whichever liquid surrounds it, so `covered`, `room` and `HYDRO_ROOF_PULL` don't read density. Through decision 3 its pull moves each liquid by its own mass.
 8. **Panel:** liquid `density` joins `PANEL_FIELDS` (curved slider, like the other densities). `CLASS_RANGES` gets liquid density **0.5–2** to start: a ratio of up to 4 against water, FleX's 4:1. It covers petrol (0.7), oil (0.9) and syrup (1.4). Both ends are probed against water, and widened or narrowed from that. The shared 0.1–10 stays for powders and bodies.
-9. **Test liquid.** Layering needs two liquids, so the tests and probes need a second liquid row. CPU tests and `gpu_probe` / `water_feel_probe` add an "oil" row in memory (density 0.8, viscosity 0.1, drag 0.15, amber), as the body tests did before step 5. `materials.json` is unchanged unless the owner says otherwise (Question 1). The `main.tscn` screenshots add the same row at runtime through `MaterialTable` and `update_material`, and fill it with `_pending_fill`.
+9. **Oil ships** (owner, 2026-10-15): a toolbar material, row 5 of `materials.json` (density 0.8, viscosity 0.1, drag 0.15, `#d9a62b`). The tests and probes use it as the second liquid (`gpu_probe oil,water`).
 
 ### Mixed-liquid cells, in one place
 | | rule | in a cell half oil, half water |
@@ -75,10 +75,10 @@ Each liquid particle's mass is its material's `density` (water 1). Every rule be
 3. `MaterialTable`: the range, the panel field, tests in `test_parameters.gd`.
 4. Verify as the task lists (AGENTS.md): CPU `@quick @setup @hydro @liquids @bodies-water`; GPU `gpu_probe water` (both drop patterns, `every=47`), `water_feel_probe surface,bowl`, `body_probe watersink,waterfloat,waterbig,corkstrip,pourfloor,sandcorks`, the sand checks, `set=water.density=0.5` and `=2`, and a layering scenario (new: `water_feel_probe layers`: oil blocks then water blocks, and the reverse; the oil and water mean heights and the share of each in the other's layer, on plateaus). Timing of `hydro` and `solve` against main, back to back, `--disable-vsync`. `main.tscn` screenshots of oil on water and water under oil.
 
-## Questions for the owner
-1. **Ship oil as a toolbar material?** SPEC's v1 roster lists oil. Proposed row: density 0.8, viscosity 0.1, drag 0.15, colour `#d9a62b`. Without it, in game only the water density slider shows the change, and only through bodies: a cork rides higher on denser water. The proposal is to keep oil test-only now and add it once you've seen the screenshots.
-2. **Liquid density range 0.5–2 to start?** It is widened only if both ends probe clean.
-3. Sand still sinks through any liquid density (above). Fine for this slice?
+## Owner's answers (2026-10-15)
+1. Oil: a toolbar material now.
+2. The liquid density range: the implementer's call (0.5–2, from the probes; Results).
+3. Sand sinking through any liquid density: fine for now. Why it does: a grain feels no grid pressure; it meets liquid only through contacts, split by the fixed `POWDER_LIQUID_SHARE`, so its buoyancy doesn't depend on the liquid. Changing that touches the sand-under-water tuning (pore water, mounds, the sand bowl), a slice of its own.
 
 ## Known limits (expected)
 - A heavy body in a heavy liquid counts at less than its weight in the grid's level (decision 5); it only matters at a surface.

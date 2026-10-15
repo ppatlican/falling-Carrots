@@ -23,7 +23,7 @@
 // spawned into the floor or pushed out of another body may leave at most that much faster.
 // Without it, a box spawned 4 px into the floor launched at 284 px/s (CPU reference).
 
-// common.glslinc stamp: Params 124 B, v19. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v20. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Fastest speed (px/s) that still counts as resting: 0.1 px per 1/60 s step, below the

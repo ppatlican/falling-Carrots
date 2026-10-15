@@ -56,15 +56,16 @@ const CLUSTER_FIELDS := [
 ##   cluster stiffness: same-body particles don't push on each other, so a body at stiffness 0
 ##   collapses onto one point (ADR 0002); below 0.2 a jelly ends as a puddle that doesn't spring
 ##   back (body_probe wobble, squash) and its members sink into a sand bed.
+##   liquid density: at most 4 to 1 against water either way, as FleX's two-phase liquid
+##   (ADR 0010).
 const CLASS_RANGES := {
-	"liquid": [["drag", 0.1, 5.0]],
+	"liquid": [["density", 0.5, 2.0], ["drag", 0.1, 5.0]],
 	"cluster": [["drag", 0.5, 5.0], ["stiffness", 0.2, 1.0]],
 }
-## Columns the parameter panel shows, per class, in display order (ADR 0007). A liquid's
-## density does nothing yet (STATUS Known issues), and nothing reads the heat, wind and
-## lifetime columns, so they have no slider.
+## Columns the parameter panel shows, per class, in display order (ADR 0007; liquid density,
+## ADR 0010). Nothing reads the heat, wind and lifetime columns, so they have no slider.
 const PANEL_FIELDS := {
-	"liquid": ["viscosity", "drag"],
+	"liquid": ["density", "viscosity", "drag"],
 	"powder": ["density", "friction", "drag"],
 	"cluster": ["density", "friction", "drag", "stiffness", "region"],
 	"gas": [],

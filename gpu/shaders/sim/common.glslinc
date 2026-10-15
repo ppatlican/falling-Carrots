@@ -61,7 +61,7 @@ layout(set = 0, binding = 18, std430) buffer SMat { uint s_mat[]; };
 
 // --- Output -------------------------------------------------------------------------
 layout(set = 0, binding = 19, rgba8) uniform image2D out_image;
-// Bindings 20 to 22: the liquid density projection grid (hydro.glslinc).
+// Bindings 20 to 22 and 29: the liquid density projection grid (hydro.glslinc).
 
 // --- Cluster solids (docs/adr/0002-cluster-solid-layout.md) -----------------------------
 // A body particle carries its body id in mat_flags bits 16-31 (0 = not in a body; ids

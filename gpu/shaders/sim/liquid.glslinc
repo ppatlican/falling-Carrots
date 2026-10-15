@@ -1,7 +1,9 @@
 // Behaviour class: LIQUID. PBF density constraint (Macklin & Mueller 2013).
 // Mirror: cpu_ref/particle_step.gd _lambda / _liquid_delta / _xsph.
 // All indices are sorted indices (see common.glslinc).
-// Density is normalised (1.0 = rest). Liquid neighbours count toward it and move with
+// Density is normalised (1.0 = rest): a volume constraint, the same for every liquid. A
+// liquid's material density is its particles' mass, which splits each liquid pair's
+// correction (liquid_pair_share, ADR 0010). Liquid neighbours count toward it and move with
 // the constraint; powder grains count at their solid share (LIQUID_POWDER_SHARE) and body
 // particles in full (displacing_share), and neither moves with it. The constraint only pushes apart (C >= 0), which keeps free surfaces stable.
 // Walls count toward density (wall_density).
@@ -116,9 +118,20 @@ float liquid_lambda(uint t) {
 	return min(-c / (grad_sum + dot(grad_t, grad_t) + params.lambda_eps), 0.0);
 }
 
+// Share of a liquid pair's correction that particle t (density rho_t) takes, against the
+// two-water-particle split (ADR 0010, FleX 2014 7.1.1): its mass share, 2 rho_j / (rho_t +
+// rho_j). Both sides change momentum alike, the pair separates as two water particles do, and
+// the light side moves at most twice as far. Exactly 1 between two liquids of one density.
+// Mirror: ParticleStep.liquid_pair_share.
+float liquid_pair_share(float rho_t, float rho_j) {
+	// Exactly 1 for one density (Vulkan's division needn't be exact).
+	return rho_t == rho_j ? 1.0 : 2.0 * rho_j / (rho_t + rho_j);
+}
+
 vec2 liquid_delta(uint t) {
 	vec2 pt = s_pred[t];
 	float lt = lambda[t];
+	float rho_t = materials[s_material(t)].phys.x;
 	vec2 wall_grad;
 	wall_density(pt, wall_grad);
 	vec2 d = lt * wall_grad;
@@ -128,12 +141,13 @@ vec2 liquid_delta(uint t) {
 		vec2 rv = pt - s_pred[j];
 		float r2 = dot(rv, rv);
 		if (r2 >= params.h * params.h) continue;
-		uint cj = s_class(j);
+		Material mj = materials[s_material(j)];
+		uint cj = mj.info.x;
 		if (cj != CLASS_LIQUID) {
 			d += lt * displacing_share(cj) * spiky_grad(rv, t, j);
 			continue;
 		}
-		d += (lt + lambda[j] + scorr(r2)) * spiky_grad(rv, t, j);
+		d += (lt + lambda[j] + scorr(r2)) * liquid_pair_share(rho_t, mj.phys.x) * spiky_grad(rv, t, j);
 	} END_NEIGHBOURS
 	return d / params.rest_density;
 }

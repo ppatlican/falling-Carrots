@@ -17,7 +17,7 @@
 // body draped over another. The region is found as body_region_goal finds it.
 // Mirror: ParticleStep._share_pushes_over_regions.
 
-// common.glslinc stamp: Params 124 B, v19. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v20. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

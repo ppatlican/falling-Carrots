@@ -97,6 +97,25 @@
 			"melt_temp": null,
 			"lifetime": 0.0,
 			"tags": []
+		},
+		{
+			"id": 5,
+			"name": "oil",
+			"class": "liquid",
+			"color": "#d9a62b",
+			"density": 0.8,
+			"friction": 0.0,
+			"viscosity": 0.1,
+			"drag": 0.15,
+			"wind_coupling": 0.05,
+			"stiffness": 0.0,
+			"conductivity": 0.15,
+			"heat_capacity": 2.0,
+			"ignition_temp": 300.0,
+			"boil_temp": null,
+			"melt_temp": null,
+			"lifetime": 0.0,
+			"tags": []
 		}
 	]
 }

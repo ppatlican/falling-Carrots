@@ -2,11 +2,11 @@
 #version 450
 
 // Solve, once per frame before the iterations: liquids are pushed down the gradient of
-// the density projection grid's pressure (hydro_delta in hydro.glslinc), into scratch,
+// the density projection grid's pressure (hydro_delta in hydro.glslinc) over their mass, into scratch,
 // clamped like solve_delta. solve_apply then applies it.
 // Body particles are pushed by the pressure on their wet surface (body_pressure_delta, ADR 0003).
 
-// common.glslinc stamp: Params 124 B, v19. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v20. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
 
@@ -163,7 +163,12 @@ void main() {
 	if (body != 0u) {
 		d = body_pressure_delta(t, body);
 	} else if (s_class(t) == CLASS_LIQUID) {
+		// Over the particle's mass (ADR 0010): a liquid lighter than the one around it rises.
+		float rho = materials[s_material(t)].phys.x;
 		d = hydro_delta(s_pred[t]);
+		if (rho != 1.0) {
+			d /= rho;
+		}
 	}
 	// A body's pushes are capped after body_project has taken their rigid part, not here.
 	float len = length(d);

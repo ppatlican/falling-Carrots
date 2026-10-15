@@ -21,7 +21,7 @@
 // no difference: what is left is the 64 barriers on one compute unit.
 
 #define LOCAL_SIZE_X 128
-// common.glslinc stamp: Params 124 B, v19. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 124 B, v20. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
 
@@ -131,6 +131,9 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 	float phi = phi_c.x;
 	bool solid = phi_c.y >= HYDRO_SOLID;
 	bool air = hydro_air(ci);
+	// Liquid volume and mass of this cell, for hydro_rho's faces (read here, not per face).
+	float x_c = hydro_phi[c].x;
+	float m_c = hydro_mass[c];
 	vec4 w = vec4(0.0);
 	float n = 0.0;
 	float wall_sum = 0.0;
@@ -152,16 +155,21 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 		if (nc.x < 0 || nc.y < 0 || nc.x >= size.x) {
 			continue;
 		}
-		vec2 phi_nv = s_phi[hydro_index(nc)];
+		uint ni = hydro_index(nc);
+		vec2 phi_nv = s_phi[ni];
 		float phi_n = phi_nv.x;
 		bool solid_n = phi_nv.y >= HYDRO_SOLID;
 		bool air_n = hydro_air(nc);
+		// Liquid density across this face (hydro_rho, inlined on the values read above); a face
+		// weighs 1 / rho, the head in the pores is rho's (ADR 0010).
+		float rho_f = hydro_rho_of(m_c + hydro_mass[ni], x_c + hydro_phi[ni].x);
+		float w_f = rho_f == 1.0 ? 1.0 : 1.0 / rho_f;
 		if (solid) {
-			// The bed carries the pressure of the water on it into its pores, continued
-			// hydrostatically from each neighbour that isn't air: p = p_n - head * off.y.
+			// The bed carries the pressure of the liquid on it into its pores, continued
+			// hydrostatically from each neighbour that isn't air: p = p_n - rho head * off.y.
 			if (!air_n) {
 				w[k] = 1.0;
-				wall_sum -= head * float(off.y);
+				wall_sum -= rho_f * head * float(off.y);
 				n += 1.0;
 			}
 		} else if (solid_n) {
@@ -178,9 +186,9 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 			// to 0 or to 5.8 million in a frame. Bed that is mostly body stays a wall: a body
 			// lets no water through.
 			if (!air) {
-				if (hydro_phi[hydro_index(nc)].z < HYDRO_BODY_CELL) {
-					w[k] = 1.0;
-					n += 1.0;
+				if (hydro_phi[ni].z < HYDRO_BODY_CELL) {
+					w[k] = w_f;
+					n += w_f;
 				} else {
 					wall_sum += head * float(off.y);
 				}
@@ -193,11 +201,13 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 				n += 1.0;
 			}
 		} else if (air_n) {
-			// p = 0 at the surface, theta of the way: the term (0 - p) / theta.
-			n += 1.0 / hydro_theta(phi, phi_n);
+			// p = 0 at the surface, theta of the way: the term (0 - p) / theta, over this cell's
+			// liquid density.
+			float rho_c = hydro_rho_of(m_c, x_c);
+			n += 1.0 / (rho_c * hydro_theta(phi, phi_n));
 		} else {
-			w[k] = 1.0;
-			n += 1.0;
+			w[k] = w_f;
+			n += w_f;
 		}
 	}
 	if (solid || air) {
