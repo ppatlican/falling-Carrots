@@ -30,7 +30,7 @@
 // are equal. Mirror: cpu_ref/particle_step.gd _project_body_pushes, and _sweep_bodies for the rewind.
 
 #define LOCAL_SIZE_X 128
-// common.glslinc stamp: Params 124 B, v20. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v21. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // No turn when sum |r|^2 is below this, per live member, in px^2. Mirror: ParticleStep.BODY_ROT_EPS.

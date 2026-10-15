@@ -35,7 +35,7 @@ const SOFT_CELL := 0.55
 ## World box particles are kept inside.
 var world_size: Vector2
 ## Per material id: { "class": int, "density", "friction", "viscosity", "drag", "stiffness",
-## "region" (cluster materials; 0 for the rest) }.
+## "region" (cluster materials; 0 for the rest), "cohesion", "adhesion" (ADR 0011) }.
 var materials: Dictionary
 var rest_density: float
 ## Liquid density per coarse cell over water's, from the last _hydro_density (ADR 0010).
@@ -68,6 +68,8 @@ func _init(world: Vector2, material_table) -> void:
 			"drag": float(row.drag),
 			"stiffness": float(row.stiffness),
 			"region": float(row.get("region", 0.0)),
+			"cohesion": float(row.get("cohesion", 0.0)),
+			"adhesion": float(row.get("adhesion", 0.0)),
 		}
 	rest_density = rest_density_for(SimParams.H, SimParams.SPACING)
 
@@ -218,6 +220,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	# Velocity update, drag, then XSPH viscosity from the raw velocities.
 	var new_vel := PackedVector2Array()
 	new_vel.resize(n)
+	# Stickiness (ADR 0011), only while some material has any: none of it is computed otherwise.
+	var sticky := has_stickiness()
 	for i in n:
 		var v := (pred[i] - pos[i]) / dt
 		if body[i] != 0:
@@ -240,6 +244,9 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h, dt) \
 				+ _powder_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt) \
 				+ (_body_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt) if body[i] != 0 else Vector2.ZERO)
+		if sticky:
+			new_vel[i] += _stick_pull(i, pred, mat, body, bodies, neighbours[i]) * dt \
+					+ _stick_drag(i, pred, vel, mat, neighbours[i], dt)
 	for i in n:
 		vel[i] = new_vel[i]
 		pos[i] = pred[i]
@@ -1708,3 +1715,158 @@ func _xsph(i: int, pred: PackedVector2Array, vel: PackedVector2Array, mat: Packe
 		if _class(mat[j]) == LIQUID:
 			sum += (vel[j] - vel[i]) * poly6(pred[i].distance_squared_to(pred[j]), h)
 	return sum * (visc * dt * 60.0 / rest_density)
+
+
+# --- Stickiness (ADR 0011; stick.glslinc) ---------------------------------------------
+
+## Whether any material has cohesion or adhesion (GPU: Params.sticky, ParticleSim).
+func has_stickiness() -> bool:
+	for m in materials:
+		if materials[m].cohesion > 0.0 or materials[m].adhesion > 0.0:
+			return true
+	return false
+
+
+## Stickiness coefficient of a pair of materials: cohesion within one material, else the
+## larger adhesion (honey sticks to a carrot whatever the carrot's). Mirror: stick_k.
+func _stick_k(m_i: int, m_j: int) -> float:
+	if m_i == m_j:
+		return materials[m_i].cohesion
+	return maxf(materials[m_i].adhesion, materials[m_j].adhesion)
+
+
+## Strength of a sticky pull between two particles x px further apart than touching: STICK_TOUCH
+## when they touch or overlap, full at STICK_FULL spacings, 0 again from STICK_REACH, so it mostly
+## resists pulling apart. At full strength when touching it pressed every contact together: at
+## one substep sand at cohesion 1 squeezed to ~3/4 of its height. At 0 a row hung under another
+## fell ~0.2 px before its pull took hold and was too fast to stop by the end of the band, so
+## nothing hung from the ceiling but the row touching it (test_sticky_sand_holds_to_the_ceiling).
+## Mirror: stick_shape.
+static func stick_shape(x: float) -> float:
+	var full := SimParams.STICK_FULL * SimParams.SPACING
+	var reach := SimParams.STICK_REACH * SimParams.SPACING
+	if x >= reach:
+		return 0.0
+	if x >= full:
+		return (reach - x) / (reach - full)
+	return lerpf(SimParams.STICK_TOUCH, 1.0, maxf(x, 0.0) / full)
+
+
+## Strength of a hold at x px past touching: full while touching and out to STICK_FULL spacings
+## past it, 0 from STICK_REACH. A wall's pull, x past STICK_WALL spacings from the wall (the clamp
+## keeps a particle at 0.5-0.75, so one touching the wall is held; a wall can't be pressed in),
+## and a liquid's drag along what it sticks to. Mirror: stick_hold.
+static func stick_hold(x: float) -> float:
+	var full := SimParams.STICK_FULL * SimParams.SPACING
+	var reach := SimParams.STICK_REACH * SimParams.SPACING
+	return clampf((reach - x) / (reach - full), 0.0, 1.0)
+
+
+## Contact distance of a pair, as _contact_delta takes it: POWDER_LIQUID_REACH spacings between
+## a grain and a liquid, else a spacing (liquid pairs: their rest spacing).
+func _touch_distance(m_i: int, m_j: int) -> float:
+	var ci := _class(m_i)
+	var cj := _class(m_j)
+	if (ci == POWDER and cj == LIQUID) or (ci == LIQUID and cj == POWDER):
+		return SimParams.POWDER_LIQUID_REACH * SimParams.SPACING
+	return SimParams.SPACING
+
+
+## Share of a pair's push-out particle i takes in _contact_delta (w_push there): by STACK_K
+## between grains and with bodies, POWDER_LIQUID_SHARE between a grain and a liquid, else by density.
+func _contact_share(i: int, j: int, pred: PackedVector2Array, mat: PackedInt32Array,
+		body: PackedInt32Array, bodies: Array) -> float:
+	var mi: Dictionary = materials[mat[i]]
+	var mj: Dictionary = materials[mat[j]]
+	var ci: int = mi["class"]
+	var cj: int = mj["class"]
+	if (ci == POWDER and cj == LIQUID) or (ci == LIQUID and cj == POWDER):
+		return SimParams.POWDER_LIQUID_SHARE if ci == POWDER else 1.0 - SimParams.POWDER_LIQUID_SHARE
+	if ci == POWDER and cj == POWDER:
+		return stack_weight(mi.density, mj.density, pred[i].y - pred[j].y)
+	if ci != LIQUID and cj != LIQUID:
+		var yi: float = bodies[body[i]].centroid.y if body[i] != 0 else pred[i].y
+		var yj: float = bodies[body[j]].centroid.y if body[j] != 0 else pred[j].y
+		return body_stack_weight(mi.density, mj.density, yi - yj, _soft(i, mat, body), _soft(j, mat, body))
+	return mj.density / (mi.density + mj.density)
+
+
+## Acceleration (px/s^2) of particle i from stickiness: each sticky neighbour (not of its own
+## body, which its shape holds) pulls it by STICK_G x gravity x the pair's coefficient x
+## stick_shape, times i's share of the pair's contact (_contact_share); each wall within reach
+## pulls it by its adhesion in full. At most STICK_CAP x gravity.
+## The share is the contact's, not the mass's, because the pull presses touching particles
+## together and their contact pushes them apart again by that share: with mass shares, a pair one
+## above the other was pulled together evenly and pushed apart mostly upward (STACK_K), so a
+## sticky clump in mid-air rose to the ceiling (test_a_sticky_clump_in_mid_air_falls).
+## Mirror: stick_pull in stick.glslinc.
+func _stick_pull(i: int, pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
+		bodies: Array, nb: PackedInt32Array) -> Vector2:
+	var m_i := mat[i]
+	var a := Vector2.ZERO
+	for j in nb:
+		if body[i] != 0 and body[j] == body[i]:
+			continue
+		var k := _stick_k(m_i, mat[j])
+		if k <= 0.0:
+			continue
+		var rv := pred[j] - pred[i]
+		var r := rv.length()
+		if r < MIN_DIST:
+			continue
+		var w := stick_shape(r - _touch_distance(m_i, mat[j]))
+		if w <= 0.0:
+			continue
+		a += rv / r * (k * w * _contact_share(i, j, pred, mat, body, bodies))
+	var adh: float = materials[m_i].adhesion
+	if adh > 0.0:
+		var wall := SimParams.STICK_WALL * SimParams.SPACING
+		var p := pred[i]
+		a += Vector2(-stick_hold(p.x - wall) + stick_hold(world_size.x - p.x - wall),
+				-stick_hold(p.y - wall) + stick_hold(world_size.y - p.y - wall)) * adh
+	return (a * (SimParams.STICK_G * SimParams.GRAVITY)).limit_length(SimParams.STICK_CAP * SimParams.GRAVITY)
+
+
+## Velocity change that keeps a sticky particle from sliding along what it sticks to. A wall's
+## pull never reaches the solver's wall friction (predict clamps the particle to the wall first),
+## so a grain or body particle a wall pulls gets Coulomb friction here: up to its friction x the
+## pull, against its speed along the wall and the gravity the next step adds along it (as the pull
+## itself is balanced against it), so it can rest on a side wall. A liquid has no friction: it is
+## dragged toward the velocity of what it sticks to that isn't liquid (a wall's is 0, and only
+## along the wall) at STICK_DRAG per second times the pair's coefficient and stick_hold, averaged
+## over at least a weight of 1, so it creeps instead of sliding off (honey on a wall). Grains and
+## bodies stick to each other through their contacts' friction, which the pull presses together.
+## Mirror: stick_drag in stick.glslinc.
+func _stick_drag(i: int, pred: PackedVector2Array, vel: PackedVector2Array, mat: PackedInt32Array,
+		nb: PackedInt32Array, dt: float) -> Vector2:
+	var m_i := mat[i]
+	var adh: float = materials[m_i].adhesion
+	var wall := SimParams.STICK_WALL * SimParams.SPACING
+	var p := pred[i]
+	var v := vel[i]
+	# Pull of the side walls and of the floor and ceiling, per unit of adhesion.
+	var wx := stick_hold(p.x - wall) + stick_hold(world_size.x - p.x - wall)
+	var wy := stick_hold(p.y - wall) + stick_hold(world_size.y - p.y - wall)
+	if _class(m_i) != LIQUID:
+		if adh <= 0.0:
+			return Vector2.ZERO
+		var limit: float = materials[m_i].friction * adh * SimParams.STICK_G * SimParams.GRAVITY * dt
+		var need := Vector2(v.x, v.y + SimParams.GRAVITY * dt)  # what the next step slides by, as speed
+		return Vector2(-clampf(need.x, -limit * wy, limit * wy), -clampf(need.y, -limit * wx, limit * wx))
+	var sum := Vector2.ZERO
+	var w_sum := 0.0
+	for j in nb:
+		if _class(mat[j]) == LIQUID:
+			continue
+		var k := _stick_k(m_i, mat[j])
+		if k <= 0.0:
+			continue
+		var w := k * stick_hold(p.distance_to(pred[j]) - _touch_distance(m_i, mat[j]))
+		sum += (vel[j] - v) * w
+		w_sum += w
+	if adh > 0.0:
+		sum += Vector2(-v.x * wy, -v.y * wx) * adh
+		w_sum += (wx + wy) * adh
+	if w_sum <= 0.0:
+		return Vector2.ZERO
+	return sum / maxf(w_sum, 1.0) * (1.0 - exp(-SimParams.STICK_DRAG * dt))

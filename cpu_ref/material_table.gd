@@ -32,6 +32,11 @@ const NUMBER_FIELDS := [
 	# water hung in the air at 7 px/s; at 10, 300 grains of a 50k sand fill still slid after
 	# 50 s, where at 5 they died down (ADR 0007).
 	["drag", 0.0, 5.0],
+	# Stickiness (ADR 0011): a pair's pull at 1 is SimParams.STICK_G x gravity, split by mass.
+	#   cohesion: between particles of one material (in no body, or in different bodies).
+	#   adhesion: between different materials (the larger of the two) and toward the walls.
+	["cohesion", 0.0, 1.0],
+	["adhesion", 0.0, 1.0],
 	["wind_coupling", 0.0, 10.0],
 	["stiffness", 0.0, 1.0],
 	["conductivity", 0.0, 100.0],
@@ -63,11 +68,11 @@ const CLASS_RANGES := {
 	"cluster": [["drag", 0.5, 5.0], ["stiffness", 0.2, 1.0]],
 }
 ## Columns the parameter panel shows, per class, in display order (ADR 0007; liquid density,
-## ADR 0010). Nothing reads the heat, wind and lifetime columns, so they have no slider.
+## ADR 0010; cohesion and adhesion, ADR 0011). Nothing reads the heat, wind and lifetime columns, so they have no slider.
 const PANEL_FIELDS := {
-	"liquid": ["density", "viscosity", "drag"],
-	"powder": ["density", "friction", "drag"],
-	"cluster": ["density", "friction", "drag", "stiffness", "region"],
+	"liquid": ["density", "viscosity", "drag", "cohesion", "adhesion"],
+	"powder": ["density", "friction", "drag", "cohesion", "adhesion"],
+	"cluster": ["density", "friction", "drag", "stiffness", "region", "cohesion", "adhesion"],
 	"gas": [],
 	"static": [],
 }
@@ -77,7 +82,7 @@ const PANEL_FIELDS := {
 ##   vec4  density, friction, viscosity, drag           offset 16
 ##   vec4  wind_coupling, stiffness, conductivity, heat_capacity  offset 32
 ##   uvec4 class, 0, 0, 0                               offset 48
-##   vec4  region (0 for non-clusters), 0, 0, 0 (cohesion, adhesion, plasticity later)  offset 64
+##   vec4  region (0 for non-clusters), cohesion, adhesion, 0 (plasticity later)  offset 64
 const GPU_STRIDE := 80
 
 ## Rows keyed by material id (int). Each row is the Dictionary from the file.
@@ -242,6 +247,8 @@ func pack_row(id: int) -> PackedByteArray:
 		b.encode_float(k * 4, floats[k])
 	b.encode_u32(48, class_of(id))
 	b.encode_float(64, float(row.get("region", 0.0)))
+	b.encode_float(68, float(row.cohesion))
+	b.encode_float(72, float(row.adhesion))
 	return b
 
 

@@ -50,7 +50,7 @@ const KERNELS := [
 	"render_clear", "render_points", "render_gap", "render_powder",
 ]
 ## Must match Params in common.glslinc.
-const PUSH_SIZE := 124
+const PUSH_SIZE := 128
 ## Prefix sum: 256 elements per workgroup, at most 256 workgroups (one scan_blocks group).
 const SCAN_BLOCK := 256
 const MAX_SCAN_BLOCKS := 256
@@ -121,6 +121,9 @@ var _bodies: Array = []
 ## Material ids whose stiffness is under 1 (soft bodies, ADR 0005). The parameter panel can move
 ## a material across 1 while its bodies exist (update_material, ADR 0007).
 var _soft_materials := {}
+## Materials with cohesion or adhesion (ADR 0011): while any is, Params.sticky is 1 and
+## velocity_xsph runs the stickiness loop (stick.glslinc); otherwise it costs nothing.
+var _sticky_materials := {}
 ## Bodies waiting to spawn, one per frame: { "id", "material", "spawn" (bytes), "mean", "count" }.
 var _pending_bodies: Array = []
 ## Ids found empty, whose GPU records are zeroed next frame.
@@ -153,6 +156,7 @@ func _init(ctx, particle_cap: int, solver_iterations: int, material_table, subst
 	for id in material_table.materials:
 		if float(material_table.materials[id].stiffness) < 1.0:
 			_soft_materials[id] = true
+		_note_sticky(material_table, id)
 	_grid = SimParams.grid_size()
 	_n_cells = _grid.x * _grid.y
 	_rest_density = ParticleStep.rest_density_for(SimParams.H, SimParams.SPACING)
@@ -453,6 +457,7 @@ func update_material(material_table, id: int) -> void:
 	var row: PackedByteArray = material_table.pack_row(id)
 	for k in row.size():
 		_material_bytes[id * MaterialTable.GPU_STRIDE + k] = row[k]
+	_note_sticky(material_table, id)
 	var became_soft := false
 	if float(material_table.materials[id].stiffness) < 1.0:
 		became_soft = not _soft_materials.has(id)
@@ -461,6 +466,15 @@ func update_material(material_table, id: int) -> void:
 		_soft_materials.erase(id)
 	if _gpu_ready:
 		RenderingServer.call_on_render_thread(_update_material_rt.bind(id, row, became_soft))
+
+
+## Keeps _sticky_materials up to date with a material's row.
+func _note_sticky(material_table, id: int) -> void:
+	var row: Dictionary = material_table.materials[id]
+	if float(row.get("cohesion", 0.0)) > 0.0 or float(row.get("adhesion", 0.0)) > 0.0:
+		_sticky_materials[id] = true
+	else:
+		_sticky_materials.erase(id)
 
 
 func _update_material_rt(id: int, row: PackedByteArray, became_soft: bool) -> void:
@@ -732,7 +746,7 @@ func _set_live_count(count: int) -> void:
 		live_count = count
 
 
-## Push constants, same layout as Params in common.glslinc (124 bytes).
+## Push constants, same layout as Params in common.glslinc (128 bytes).
 func _push(brush: Dictionary, view_flags: int) -> PackedByteArray:
 	var b := PackedByteArray()
 	b.resize(PUSH_SIZE)
@@ -768,6 +782,7 @@ func _push(brush: Dictionary, view_flags: int) -> PackedByteArray:
 	b.encode_u32(112, _body_max_id())
 	b.encode_u32(116, brush.get("body_first", 0))
 	b.encode_u32(120, _iterations)
+	b.encode_u32(124, 1 if not _sticky_materials.is_empty() else 0)
 	return b
 
 

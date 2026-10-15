@@ -66,6 +66,22 @@ const MAX_SEPARATION := 0.0
 ## Share of its friction a powder grain loses when fully surrounded by liquid. Lets
 ## sand under water slump and settle under the water instead of trapping it.
 const WET_SLIP := 0.9
+
+## Stickiness (ADR 0011; stick.glslinc, ParticleStep._stick_pull). A pair pulls together by
+## STICK_G x gravity x its coefficient (cohesion for one material, else the larger adhesion), split
+## as its contact is: STICK_TOUCH of that when touching (the pair's contact distance), full at
+## STICK_FULL spacings past it, fading to nothing at STICK_REACH (short of a lattice diagonal,
+## 0.41 past; ParticleStep.stick_shape). A wall pulls a particle within STICK_WALL spacings of it (the clamp
+## inset is 0.5-0.75) by its adhesion in full, out to STICK_FULL past that, and takes none. A particle's summed pull is at most STICK_CAP x gravity. A liquid
+## sticking to something that isn't liquid, or to a wall, is also dragged toward its velocity at
+## STICK_DRAG per second at adhesion 1, so it clings instead of sliding off.
+const STICK_G := 4.0
+const STICK_FULL := 0.15
+const STICK_REACH := 0.4
+const STICK_TOUCH := 0.5
+const STICK_WALL := 0.75
+const STICK_CAP := 6.0
+const STICK_DRAG := 30.0
 ## Powder sleeping (velocity_update.glsl): a grain the solver stopped that moved slower
 ## than this (px/s) in a step stays put with zero velocity. 0.1 px per 1/60 s step.
 const SLEEP_SPEED := 6.0

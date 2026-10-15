@@ -1,0 +1,166 @@
+// Stickiness (ADR 0011): cohesion and adhesion, a pull applied as speed in velocity_xsph.glsl,
+// only while params.sticky is set (some material has any). Include after common.glslinc and
+// powder.glslinc. All indices are sorted indices. Mirror: cpu_ref/particle_step.gd, the
+// Stickiness section (_stick_pull, _stick_drag and their helpers); the constants are SimParams'.
+//
+// A pair pulls together by STICK_G x gravity x its coefficient (stick_k), as its contact pushes it
+// apart (contact_share), over a short band past touching (stick_shape). The pull is speed added at
+// the end of the step, like gravity in predict, so a grain hung by it doesn't move; the solver
+// still keeps everything apart. A wall pulls a particle near it by its adhesion. A pair's pull is
+// capped, and so is a particle's sum (STICK_CAP), so a sticky clump breaks under enough weight.
+
+const float STICK_G = 4.0;
+const float STICK_FULL = 0.15;
+const float STICK_REACH = 0.4;
+const float STICK_TOUCH = 0.5;
+const float STICK_WALL = 0.75;
+const float STICK_CAP = 6.0;
+const float STICK_DRAG = 30.0;
+
+// Stickiness coefficient of a pair of materials: cohesion within one material, else the larger
+// adhesion (honey sticks to a carrot whatever the carrot's). Mirror: ParticleStep._stick_k.
+float stick_k(uint m_t, uint m_j) {
+	if (m_t == m_j) {
+		return materials[m_t].more.y;
+	}
+	return max(materials[m_t].more.z, materials[m_j].more.z);
+}
+
+// Strength of a pull between two particles x px further apart than touching: STICK_TOUCH when they
+// touch or overlap, full at STICK_FULL spacings, 0 from STICK_REACH, so it mostly resists pulling
+// apart (at full strength when touching it squeezed sand; at 0 nothing hung under a ceiling but
+// the row touching it). Mirror: ParticleStep.stick_shape.
+float stick_shape(float x) {
+	float full = STICK_FULL * params.spacing;
+	float reach = STICK_REACH * params.spacing;
+	if (x >= reach) {
+		return 0.0;
+	}
+	if (x >= full) {
+		return (reach - x) / (reach - full);
+	}
+	return mix(STICK_TOUCH, 1.0, max(x, 0.0) / full);
+}
+
+// Strength of a hold at x px past touching: full out to STICK_FULL spacings, 0 from STICK_REACH.
+// A wall's pull (x past STICK_WALL spacings from it; the clamp keeps a particle at 0.5-0.75) and a
+// liquid's drag along what it sticks to. Mirror: ParticleStep.stick_hold.
+float stick_hold(float x) {
+	float full = STICK_FULL * params.spacing;
+	float reach = STICK_REACH * params.spacing;
+	return clamp((reach - x) / (reach - full), 0.0, 1.0);
+}
+
+// Contact distance of a pair (contact_delta's reach). Mirror: ParticleStep._touch_distance.
+float touch_distance(uint c_t, uint c_j) {
+	bool powder_liquid = (c_t == CLASS_POWDER && c_j == CLASS_LIQUID) || (c_t == CLASS_LIQUID && c_j == CLASS_POWDER);
+	return powder_liquid ? POWDER_LIQUID_REACH * params.spacing : params.spacing;
+}
+
+// Share of a pair's push-out t takes in contact_delta (w_push there). The pull is split the same
+// way, because it presses touching particles together and their contact pushes them apart again
+// by that share: split by mass, a pair one above the other was pulled together evenly and pushed
+// apart mostly upward (STACK_K), and a sticky clump in mid-air rose to the ceiling.
+// Mirror: ParticleStep._contact_share.
+float contact_share(uint t, uint j) {
+	Material mt = materials[s_material(t)];
+	Material mj = materials[s_material(j)];
+	uint ct = mt.info.x;
+	uint cj = mj.info.x;
+	if ((ct == CLASS_POWDER && cj == CLASS_LIQUID) || (ct == CLASS_LIQUID && cj == CLASS_POWDER)) {
+		return ct == CLASS_POWDER ? POWDER_LIQUID_SHARE : 1.0 - POWDER_LIQUID_SHARE;
+	}
+	if (ct == CLASS_POWDER && cj == CLASS_POWDER) {
+		return stack_weight(mt.phys.x, mj.phys.x, s_pred[t].y - s_pred[j].y);
+	}
+	if (ct != CLASS_LIQUID && cj != CLASS_LIQUID) {
+		uint bt = s_body(t);
+		uint bj = s_body(j);
+		return body_stack_weight(mt.phys.x, mj.phys.x, stack_height(t, bt) - stack_height(j, bj),
+				bt != 0u && soft_material(s_material(t)), bj != 0u && soft_material(s_material(j)));
+	}
+	return mj.phys.x / (mt.phys.x + mj.phys.x);
+}
+
+// Acceleration (px/s^2) of t from stickiness: each sticky neighbour not of its own body (its shape
+// holds that) pulls it by STICK_G x gravity x stick_k x stick_shape x contact_share; each wall
+// within reach pulls it by its adhesion in full. At most STICK_CAP x gravity.
+// Mirror: ParticleStep._stick_pull.
+vec2 stick_pull(uint t) {
+	uint m_t = s_material(t);
+	uint c_t = materials[m_t].info.x;
+	uint b_t = s_body(t);
+	vec2 pt = s_pred[t];
+	vec2 a = vec2(0.0);
+	FOR_EACH_NEIGHBOUR(t) {
+		uint j = k;
+		if (j == t || (b_t != 0u && s_body(j) == b_t)) continue;
+		uint m_j = s_material(j);
+		float kj = stick_k(m_t, m_j);
+		if (kj <= 0.0) continue;
+		vec2 rv = s_pred[j] - pt;
+		float r = length(rv);
+		if (r < MIN_DIST) continue;
+		float w = stick_shape(r - touch_distance(c_t, materials[m_j].info.x));
+		if (w <= 0.0) continue;
+		a += rv / r * (kj * w * contact_share(t, j));
+	} END_NEIGHBOURS
+	float adh = materials[m_t].more.z;
+	if (adh > 0.0) {
+		float wall = STICK_WALL * params.spacing;
+		a += vec2(-stick_hold(pt.x - wall) + stick_hold(params.world_size.x - pt.x - wall),
+				-stick_hold(pt.y - wall) + stick_hold(params.world_size.y - pt.y - wall)) * adh;
+	}
+	a *= STICK_G * params.gravity;
+	float len = length(a);
+	float cap = STICK_CAP * params.gravity;
+	return len > cap ? a * (cap / len) : a;
+}
+
+// Velocity change that keeps a sticky particle from sliding along what it sticks to. A wall's pull
+// never reaches solve_apply's wall friction (predict clamps the particle to the wall first), so a
+// grain or body particle a wall pulls gets Coulomb friction here: up to its friction x the pull,
+// against its speed along the wall and the gravity the next step adds along it. A liquid has no
+// friction: it is dragged toward the velocity of what it sticks to that isn't liquid (a wall's is
+// 0, and only along the wall) at STICK_DRAG per second x stick_k x stick_hold, averaged over at
+// least a weight of 1, so it creeps instead of sliding off. Mirror: ParticleStep._stick_drag.
+vec2 stick_drag(uint t) {
+	uint m_t = s_material(t);
+	Material mt = materials[m_t];
+	float adh = mt.more.z;
+	float wall = STICK_WALL * params.spacing;
+	vec2 pt = s_pred[t];
+	vec2 vt = s_vel[t];
+	float wx = stick_hold(pt.x - wall) + stick_hold(params.world_size.x - pt.x - wall);  // side walls
+	float wy = stick_hold(pt.y - wall) + stick_hold(params.world_size.y - pt.y - wall);  // floor, ceiling
+	if (mt.info.x != CLASS_LIQUID) {
+		if (adh <= 0.0) {
+			return vec2(0.0);
+		}
+		float limit = mt.phys.y * adh * STICK_G * params.gravity * params.dt;
+		vec2 need = vec2(vt.x, vt.y + params.gravity * params.dt);  // what the next step slides by
+		return vec2(-clamp(need.x, -limit * wy, limit * wy), -clamp(need.y, -limit * wx, limit * wx));
+	}
+	vec2 sum = vec2(0.0);
+	float w_sum = 0.0;
+	FOR_EACH_NEIGHBOUR(t) {
+		uint j = k;
+		if (j == t) continue;
+		uint m_j = s_material(j);
+		uint c_j = materials[m_j].info.x;
+		if (c_j == CLASS_LIQUID) continue;
+		float kj = stick_k(m_t, m_j);
+		if (kj <= 0.0) continue;
+		float w = kj * stick_hold(length(pt - s_pred[j]) - touch_distance(CLASS_LIQUID, c_j));
+		sum += (s_vel[j] - vt) * w;
+		w_sum += w;
+	} END_NEIGHBOURS
+	if (adh > 0.0) {
+		sum += vec2(-vt.x * wy, -vt.y * wx) * adh;
+		w_sum += (wx + wy) * adh;
+	}
+	if (w_sum <= 0.0) {
+		return vec2(0.0);
+	}
+	return sum / max(w_sum, 1.0) * (1.0 - exp(-STICK_DRAG * params.dt));
+}

@@ -66,6 +66,9 @@ func test_class_ranges() -> void:
 	expect_eq(MaterialTable.range_of("stiffness", "cluster"), [0.2, 1.0], "cluster stiffness range")
 	expect_eq(MaterialTable.range_of("region", "cluster"), [1.5, 2.0], "region range")
 	expect_eq(MaterialTable.range_of("region", "powder"), [], "no region outside clusters")
+	for cls in ["liquid", "powder", "cluster"]:
+		expect_eq(MaterialTable.range_of("cohesion", cls), [0.0, 1.0], "%s cohesion range" % cls)
+		expect_eq(MaterialTable.range_of("adhesion", cls), [0.0, 1.0], "%s adhesion range" % cls)
 
 
 func test_gpu_packing_layout() -> void:
@@ -81,6 +84,10 @@ func test_gpu_packing_layout() -> void:
 	table.load_rows([_with(_sand_row(), {"id": 5, "class": "cluster", "stiffness": 0.3, "region": 1.75})])
 	expect_eq(table.pack_gpu().decode_float(5 * MaterialTable.GPU_STRIDE + 64), 1.75, "region at offset 64")
 	expect_eq(b.decode_float(0 + 16), 0.0, "unused id 0 stays zero")
+	table.load_rows([_with(_sand_row(), {"id": 2, "cohesion": 0.25, "adhesion": 0.75})])
+	b = table.pack_gpu()
+	expect_eq(b.decode_float(2 * MaterialTable.GPU_STRIDE + 68), 0.25, "cohesion at offset 68 (ADR 0011)")
+	expect_eq(b.decode_float(2 * MaterialTable.GPU_STRIDE + 72), 0.75, "adhesion at offset 72")
 
 
 func _sand_row() -> Dictionary:
