@@ -121,9 +121,6 @@ const HYDRO_BODY_CELL := 0.05
 ## enough that a floater doesn't heave on it. Mirror: hydro_solve.glsl.
 const HYDRO_BODY_ROOF := 0.25
 const HYDRO_ROOF_PULL := 0.003
-## Most cells the roof pull walks up through a body to find the air over it (a floating body up
-## to ~48 px tall). Mirror: hydro_under_floater in hydro_solve.glsl.
-const HYDRO_ROOF_REACH := 3
 ## A cell short of HYDRO_AIR that holds at least HYDRO_MIXED_WET of liquid and HYDRO_MIXED_SOLID
 ## of bed fill (sand or body) is under water, not air, when the cell above isn't air: its room
 ## is the water's gap from the grains and the body. Mirror: hydro_air in hydro_solve.glsl.

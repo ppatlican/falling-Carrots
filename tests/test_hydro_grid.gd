@@ -45,6 +45,23 @@ func test_cell_partly_filled_by_a_body_and_sand_under_water_is_not_air() -> void
 			"floor cell under the body: p %.0f, open water %.0f (head %.0f)" % [p[7 * COLS], p[7 * COLS + 2], head])
 
 
+## The cell under a floating body's bottom is under a floater however many cells the body holds:
+## a 40 px cork holds body in 4 (the tent smear adds one), and a walk stopped after 3 missed the
+## air over it, so its water was never pulled up and it floated over 15-18 px of air (body_probe
+## waterbig, ADR 0003 item 18). The same body with water over it isn't a floater.
+func test_cell_under_a_tall_floater_is_under_a_floater() -> void:
+	var phi := _pool()
+	for y in [0, 1]:
+		phi[y * COLS + 1] = Vector4.ZERO
+	for c in [Vector2i(1, 2), Vector2i(1, 3), Vector2i(1, 4), Vector2i(1, 5)]:
+		phi[c.y * COLS + c.x] = Vector4(0.0, 0.0, [0.1, 0.9, 1.0, 0.55][c.y - 2], 0.0)
+	phi[6 * COLS + 1] = Vector4(0.3, 0.0, 0.0, 0.0)
+	var size := Vector2i(COLS, ROWS)
+	expect(ParticleStep.hydro_under_floater(phi, Vector2i(1, 6), size), "cell under a body 4 cells tall, air over it")
+	phi[1 * COLS + 1] = Vector4(1.0, 0.0, 0.0, 0.0)
+	expect(not ParticleStep.hydro_under_floater(phi, Vector2i(1, 6), size), "the same body with water over it")
+
+
 ## Air in the top row, water at rest density below.
 func _pool() -> PackedVector4Array:
 	var phi := PackedVector4Array()

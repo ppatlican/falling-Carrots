@@ -1184,7 +1184,7 @@ static func hydro_air(phi: PackedVector4Array, ci: Vector2i, size: Vector2i) -> 
 
 ## True when cell ci is under the bottom of a body that floats: HYDRO_BODY_ROOF of body in the
 ## cell above, less in its own, not the floor row, and going up past the cells holding body
-## (HYDRO_BODY_CELL), within HYDRO_ROOF_REACH cells, the first is open-cell air
+## (HYDRO_BODY_CELL), up to the body's top however tall, the first is open-cell air
 ## (hydro_under_floater in hydro_solve.glsl).
 static func hydro_under_floater(phi: PackedVector4Array, ci: Vector2i, size: Vector2i) -> bool:
 	if ci.y < 1 or ci.y >= size.y - 1:
@@ -1192,13 +1192,11 @@ static func hydro_under_floater(phi: PackedVector4Array, ci: Vector2i, size: Vec
 	var c := ci.y * size.x + ci.x
 	if phi[c - size.x].z < SimParams.HYDRO_BODY_ROOF or phi[c].z >= SimParams.HYDRO_BODY_ROOF:
 		return false
-	for k in range(2, SimParams.HYDRO_ROOF_REACH + 1):
-		if ci.y - k < 0:
-			return true
-		var u: Vector4 = phi[c - k * size.x]
+	for y in range(ci.y - 2, -1, -1):
+		var u: Vector4 = phi[y * size.x + ci.x]
 		if u.z < SimParams.HYDRO_BODY_CELL:
 			return hydro_level(u) < SimParams.HYDRO_AIR and not hydro_solid(u)
-	return false
+	return true
 
 
 ## True when a cell is bed: a solid wall for the grid (hydro_solid). Sand at its packing, and

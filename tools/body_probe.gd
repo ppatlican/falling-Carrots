@@ -43,11 +43,12 @@
 ##   waterbig   a 40x20 cork set on the water: its cells are bed for the grid (ADR 0003), as
 ##            waterfloat over 1500 frames: its plunge sets off the pool's symmetric slosh (both
 ##            ends rise and fall together, ~2.8 s), which it heaves with until that dies out,
-##            ~10 s (still 2.6-4 px/s at 900 frames)
+##            ~10 s (still 2.6-4 px/s at 900 frames). Also checks the gap under it, as corkstrip
+##            (13-18 px while the grid's floater test stopped 3 cells up, ADR 0003 item 18)
 ##   waterbox   a 16x10 cork (the size main.tscn's Drop buttons make) set on the water, as
 ##            waterfloat
 ##   waterstrip a 180x10 cork (a brush stroke across the screen) set on the water, 1500 frames, as
-##            waterfloat
+##            waterfloat, and the gap under it, as corkstrip
 ##   waterdeep  a 270 px deep pool from wall to wall (320 x 135 water), a 16x10 cork let go at y 12
 ##            at frame 120 (main.tscn's Drop cork): it plunges and floats, as waterfloat
 ##   waterdeeptilt  the same, the cork turned 30 deg
@@ -873,15 +874,18 @@ func _sample(f: int, b: Dictionary) -> void:
 						b.bodies.decode_u32(1 * ParticleSim.BODY_BYTES + 12), on_top])
 			if f > sc.frames - 60:
 				var theta: float = fit.theta
-				sc.late.append([_draft(b, bodies[1]), _mean_vel(bodies[1]).length(), absf(theta - roundf(theta / PI) * PI)])
+				sc.late.append([_draft(b, bodies[1]), _mean_vel(bodies[1]).length(), absf(theta - roundf(theta / PI) * PI),
+						_gap_under(b, bodies[1])])
 			if f == sc.frames:
 				var draft := 0.0
 				var speed := 0.0
 				var tilt := 0.0
+				var gap := 0.0
 				for v in sc.late:
 					draft += v[0] / sc.late.size()
 					speed += v[1] / sc.late.size()
 					tilt = maxf(tilt, v[2])
+					gap += v[3] / sc.late.size()
 				var bottom := -INF
 				for q in bodies[1].pos:
 					bottom = maxf(bottom, q.y)
@@ -894,9 +898,12 @@ func _sample(f: int, b: Dictionary) -> void:
 							% [FLOOR - bottom, inside, sc.most_inside, fit.err, _mean_vel(bodies[1]).length()],
 							FLOOR - bottom < 2.0 * SimParams.SPACING and sc.most_inside == 0 and fit.err < 2.0)
 				else:
-					_result("%s: cork, last 60 frames: mean draft %.2f of its height, mean speed %.2f px/s, max tilt %.3f rad; water inside %d at the end (most %d at a sample), shape error %.4f px"
-							% [sc.name, draft, speed, tilt, inside, sc.most_inside, fit.err],
-							draft > 0.25 and draft < 0.7 and speed < 3.0 and tilt < 0.35 and inside == 0 and fit.err < 0.1)
+					# The wide floaters must float on the water, not over air (ADR 0003 item 18).
+					var wide: bool = sc.name in ["waterbig", "waterstrip"]
+					_result("%s: cork, last 60 frames: mean draft %.2f of its height, mean speed %.2f px/s, max tilt %.3f rad; water inside %d at the end (most %d at a sample), shape error %.4f px; gap under it %.1f px%s"
+							% [sc.name, draft, speed, tilt, inside, sc.most_inside, fit.err, gap, " (under %.0f)" % GAP_MAX if wide else ""],
+							draft > 0.25 and draft < 0.7 and speed < 3.0 and tilt < 0.35 and inside == 0 and fit.err < 0.1
+							and (not wide or gap < GAP_MAX))
 		"sandcorks":
 			_sample_sandcorks(f, b, bodies)
 		"sandjelly":
