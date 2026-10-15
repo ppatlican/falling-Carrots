@@ -8,6 +8,7 @@ How to measure the GPU sim: run the probe, read it, time passes, and capture wha
 - Use both drop patterns for liquids:
   - Default (blocks in consecutive frames): the STATUS baseline.
   - `gap=30`: blocks 30 frames apart, the pace of the owner clicking "+10k". It leaves more air and motion than the default. The owner's churn reports come from this pattern.
+- Two liquids (ADR 0010): `gpu_probe oil,water 4800 2 every=47` pours water onto oil; the per-material lines' `mean_y` shows which ends on top (~266 over ~329 when fully layered). A layered pool rocks for ~40–55 s as its interface sloshes (mean speed swinging 1–17 px/s with a ~5–6 s period), so run 4800 frames and judge the last 1000.
 - Pass `every=47` for liquids. The default sample interval of 60 frames can stay in phase with a 1 s bounce, so a body flying to the ceiling and back read as a steady 73 px/s.
 
 ## Reading the output

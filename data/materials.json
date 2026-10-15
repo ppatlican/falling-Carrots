@@ -102,7 +102,7 @@
 			"id": 5,
 			"name": "oil",
 			"class": "liquid",
-			"color": "#d9a62b",
+			"color": "#b5b82e",
 			"density": 0.8,
 			"friction": 0.0,
 			"viscosity": 0.1,
