@@ -27,10 +27,12 @@
 
 // Per cell: x its level (hydro_level), y its bed fill (hydro_solid_fill). The cell's own
 // compression and room, and the cell above's fullness, are read from hydro_phi when its row
-// is set up (once per frame), so shared memory stays 12 B per cell (16 KB is the Vulkan
-// minimum for a workgroup).
+// is set up (once per frame), so shared memory stays 16 B per cell with s_rho (16 KB is the
+// Vulkan minimum for a workgroup).
 shared vec2 s_phi[HYDRO_MAX_CELLS];
 shared float s_p[HYDRO_MAX_CELLS];
+// Per cell: its liquid density (hydro_rho, ADR 0010), for the faces' weights.
+shared float s_rho[HYDRO_MAX_CELLS];
 // One bit per cell: under a floater's bottom (hydro_floater_scan), set before the rows are
 // worked out. Testing it in hydro_row instead, inlined into each of a thread's rows, took the
 // hydro pass from ~150 to ~220-235 us per frame, with or without bodies (2026-10-15).
@@ -40,7 +42,7 @@ shared uint s_in_body[HYDRO_MAX_CELLS / 32];
 shared uint s_roof_body[HYDRO_MAX_CELLS / 32];
 
 // Cells per thread.
-const int HYDRO_SLOTS = HYDRO_MAX_CELLS / LOCAL_SIZE_X;
+const int HYDRO_SLOTS = (HYDRO_MAX_CELLS + LOCAL_SIZE_X - 1) / LOCAL_SIZE_X;
 
 // How a cell's new p follows from t = dot(w, p of the +x, -x, +y, -y neighbours) + b.
 const int HYDRO_ROW_BED = 0;     // sand bed: max(t, 0)
@@ -131,9 +133,7 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 	float phi = phi_c.x;
 	bool solid = phi_c.y >= HYDRO_SOLID;
 	bool air = hydro_air(ci);
-	// Liquid volume and mass of this cell, for hydro_rho's faces (read here, not per face).
-	float x_c = hydro_phi[c].x;
-	float m_c = hydro_mass[c];
+	float rho_c = s_rho[c];
 	vec4 w = vec4(0.0);
 	float n = 0.0;
 	float wall_sum = 0.0;
@@ -160,9 +160,9 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 		float phi_n = phi_nv.x;
 		bool solid_n = phi_nv.y >= HYDRO_SOLID;
 		bool air_n = hydro_air(nc);
-		// Liquid density across this face (hydro_rho, inlined on the values read above); a face
-		// weighs 1 / rho, the head in the pores is rho's (ADR 0010).
-		float rho_f = hydro_rho_of(m_c + hydro_mass[ni], x_c + hydro_phi[ni].x);
+		// Liquid density across this face: a face weighs 1 / rho, the head in the pores is rho's
+		// (ADR 0010).
+		float rho_f = hydro_face_rho(rho_c, s_rho[ni], phi, phi_n);
 		float w_f = rho_f == 1.0 ? 1.0 : 1.0 / rho_f;
 		if (solid) {
 			// The bed carries the pressure of the liquid on it into its pores, continued
@@ -203,7 +203,6 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 		} else if (air_n) {
 			// p = 0 at the surface, theta of the way: the term (0 - p) / theta, over this cell's
 			// liquid density.
-			float rho_c = hydro_rho_of(m_c, x_c);
 			n += 1.0 / (rho_c * hydro_theta(phi, phi_n));
 		} else {
 			w[k] = w_f;
@@ -280,6 +279,7 @@ void main() {
 		vec4 phi = hydro_phi[c];
 		s_phi[c] = vec2(hydro_level(phi), hydro_solid_fill(phi));
 		s_p[c] = hydro_p[c];
+		s_rho[c] = hydro_rho[c];
 		if (phi.z >= HYDRO_BODY_CELL) {
 			atomicOr(s_in_body[c >> 5u], 1u << (c & 31u));
 		}

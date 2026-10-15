@@ -49,7 +49,11 @@
 // (water 1). The grid's push moves it by -grad p dt^2 / density, and the solve weighs each face
 // between liquid cells by 1 / hydro_rho, so it removes each cell's compression whatever liquid
 // fills it; at rest (1 / rho) grad p = g, so the floor's and bodies' flux stays one head of
-// water's per cell. With water alone every such factor is exactly 1.
+// water's per cell. With water alone every such factor is exactly 1. Each cell's liquid density
+// is worked out by hydro_phi (one thread per cell) into hydro_rho; hydro_solve, one workgroup,
+// reads it once per cell into shared memory: reading a cell's and each neighbour's liquid mass and
+// volume from global memory per face there took its pass from ~185 to ~226 us for pure water and
+// ~149 to ~246 with oil on water (2026-10-15).
 
 // Per coarse cell, over rest density: x liquid, y powder, z body volume, w body weight in
 // the cell's liquid (each body particle at min(density, 1), over hydro_rho of the cell).
@@ -60,8 +64,9 @@ layout(set = 0, binding = 21, std430) buffer HydroP { float hydro_p[]; };      /
 // (density - 1; only liquids of density other than 1 add to it). hydro_splat adds, hydro_phi
 // reads and zeroes for the next frame.
 layout(set = 0, binding = 22, std430) buffer HydroAcc { int hydro_acc[]; };
-// Liquid mass per coarse cell over water's (hydro_phi.x with water alone, bit for bit).
-layout(set = 0, binding = 29, std430) buffer HydroMass { float hydro_mass[]; };
+// Liquid density per coarse cell over water's: its liquid mass over its liquid volume, exactly 1
+// with water alone or no liquid (hydro_rho_of).
+layout(set = 0, binding = 29, std430) buffer HydroRho { float hydro_rho[]; };
 
 const float HYDRO_FP = 1024.0;
 const uint HYDRO_CHANNELS = 5u;
@@ -82,9 +87,10 @@ const float HYDRO_THETA_MIN = 0.1;
 // tilt. Mirror: SimParams.HYDRO_SWEEPS.
 const int HYDRO_SWEEPS = 32;
 // Most coarse cells hydro_solve.glsl holds in shared memory (the 640x360 world at 16 px
-// cells is 40 x 23 = 920). particle_sim.gd refuses to start on a bigger grid.
+// cells is 40 x 23 = 920). particle_sim.gd refuses to start on a bigger grid. 960, not 1024,
+// so 16 B a cell and its bits stay under 16 KB, the Vulkan minimum for a workgroup.
 // Mirror: ParticleSim.HYDRO_MAX_CELLS.
-const int HYDRO_MAX_CELLS = 1024;
+const int HYDRO_MAX_CELLS = 960;
 // SOR over-relaxation. Mirror: SimParams.HYDRO_SOR.
 const float HYDRO_SOR = 1.8;
 // Share of a cell's compression removed per 1/60 s; hydro_k() gives the share per step, so
@@ -150,7 +156,7 @@ void hydro_splat(vec2 x, uint channel, float amount) {
 
 // The channels of hydro_phi at coarse cell c from the splatted sums: the tent weight over
 // the weight at rest spacing of the part of the tent inside the world (at the walls only
-// part of it can be filled). mass: the cell's liquid mass over water's (hydro_mass).
+// part of it can be filled). mass: the cell's liquid mass over water's (for hydro_rho).
 vec4 hydro_density(ivec2 ci, out float mass) {
 	float a = hydro_cell_size();
 	vec2 centre = (vec2(ci) + 0.5) * a;
@@ -173,10 +179,16 @@ float hydro_rho_of(float m, float x) {
 	return (m == x || x <= 1e-6) ? 1.0 : m / x;
 }
 
-// Liquid density over water's across the face between cells c and n (c == n: in cell c): their
-// liquid mass over their liquid volume (hydro_rho_of). Mirror: ParticleStep.hydro_rho.
-float hydro_rho(uint c, uint n) {
-	return hydro_rho_of(hydro_mass[c] + hydro_mass[n], hydro_phi[c].x + hydro_phi[n].x);
+// Liquid density over water's across the face between two cells of liquid density rho_c and
+// rho_n and level l_c and l_n (hydro_level): the same where they are equal (exact for water),
+// else their mean weighted by level, so a face to a cell with little liquid takes the other's.
+// Mirror: ParticleStep.hydro_face_rho.
+float hydro_face_rho(float rho_c, float rho_n, float l_c, float l_n) {
+	if (rho_c == rho_n) {
+		return rho_c;
+	}
+	float l = l_c + l_n;
+	return l <= 1e-6 ? rho_c : (rho_c * l_c + rho_n * l_n) / l;
 }
 
 // Share of the way from a liquid cell (phi_f) to its air neighbour (phi_a) at which
@@ -260,5 +272,5 @@ float body_p_sample(vec2 x) {
 	}
 	// Below the last row, the head of the liquid in that row's cell (ADR 0010).
 	uint c = hydro_index(ivec2(clamp(int(x.x / hydro_cell_size()), 0, size.x - 1), size.y - 1));
-	return s + hydro_rho(c, c) * params.gravity * (x.y - y_last);
+	return s + hydro_rho[c] * params.gravity * (x.y - y_last);
 }

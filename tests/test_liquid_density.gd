@@ -45,11 +45,10 @@ func test_liquid_pool_pressure_scales_with_its_density() -> void:
 		phi[c] = Vector4(1.0, 0.0, 0.0, 0.0) if c >= cols else Vector4.ZERO
 	var p_water := _solve(sim, phi, PackedFloat32Array())
 	for rho in [0.5, 2.0]:
-		var mass := PackedFloat32Array()
-		mass.resize(phi.size())
-		for c in phi.size():
-			mass[c] = phi[c].x * rho
-		var p := _solve(sim, phi, mass)
+		var cell_rho := PackedFloat32Array()
+		cell_rho.resize(phi.size())
+		cell_rho.fill(rho)
+		var p := _solve(sim, phi, cell_rho)
 		for y in [3, 7]:
 			var c: int = y * cols + 1
 			expect(absf(p[c] - rho * p_water[c]) < 0.02 * rho * p_water[c],
@@ -91,9 +90,9 @@ func _block(state: Dictionary, material: int, origin: Vector2, cols: int, rows: 
 
 
 ## p after 100 frames of sweeps, from 0.
-func _solve(sim, phi: PackedVector4Array, mass: PackedFloat32Array) -> PackedFloat32Array:
+func _solve(sim, phi: PackedVector4Array, rho: PackedFloat32Array) -> PackedFloat32Array:
 	var p := PackedFloat32Array()
 	p.resize(phi.size())
 	for f in 100:
-		sim._hydro_solve(phi, p, SimParams.DT, mass)
+		sim._hydro_solve(phi, p, SimParams.DT, rho)
 	return p

@@ -38,8 +38,8 @@ var world_size: Vector2
 ## "region" (cluster materials; 0 for the rest) }.
 var materials: Dictionary
 var rest_density: float
-## Liquid mass per coarse cell over water's, from the last _hydro_density (ADR 0010).
-var _hydro_mass := PackedFloat32Array()
+## Liquid density per coarse cell over water's, from the last _hydro_density (ADR 0010).
+var _hydro_rho := PackedFloat32Array()
 ## _contact_delta's part that pushes a body member away from other bodies (contacts and
 ## push-out), as powder.glslinc's body_out.
 var _body_out := Vector2.ZERO
@@ -164,7 +164,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	# Density projection grid, then its push on liquids and on bodies' wet surfaces
 	# (hydro_*.glsl, solve_pressure.glsl).
 	var phi := _hydro_density(pred, mat, body)
-	_hydro_solve(phi, hydro_p, dt, _hydro_mass)
+	_hydro_solve(phi, hydro_p, dt, _hydro_rho)
 	var delta := PackedVector2Array()
 	delta.resize(n)
 	# Swept contacts: each body that went into another this substep rewound along its path to
@@ -1104,37 +1104,53 @@ func _hydro_density(pred: PackedVector2Array, mat: PackedInt32Array, body: Packe
 				sum[c.y * size.x + c.x] += channel * tent
 				if extra != 0.0:
 					excess[c.y * size.x + c.x] += extra * tent
-	_hydro_mass.resize(sum.size())
+	_hydro_rho.resize(sum.size())
 	for c in sum.size():
 		var centre := (Vector2(c % size.x, c / size.x) + Vector2(0.5, 0.5)) * a
 		var inside := hydro_tent_inside(centre.x, a, world_size.x) * hydro_tent_inside(centre.y, a, world_size.y)
 		var scale := SimParams.SPACING * SimParams.SPACING / (a * a * inside)
 		sum[c] *= scale
-		_hydro_mass[c] = sum[c].x + excess[c] * scale
-		var rho := hydro_rho(_hydro_mass, sum, c, c)
+		var rho := hydro_rho_of(sum[c].x + excess[c] * scale, sum[c].x)
+		_hydro_rho[c] = rho
 		if rho != 1.0:
 			# A body at its weight in the liquid that is there (hydro_level), not in water.
 			sum[c].w = minf(sum[c].w / rho, sum[c].z)
 	return sum
 
 
-## Liquid density over water's across the face between cells c and n (c == n: in cell c): their
-## liquid mass over their liquid volume, 1 with no liquid or no mass channel (ADR 0010).
-## Mirror: hydro_rho in hydro.glslinc.
-static func hydro_rho(mass: PackedFloat32Array, phi: PackedVector4Array, c: int, n: int) -> float:
-	var x := phi[c].x + phi[n].x
-	if mass.is_empty() or x <= 1e-6:
-		return 1.0
-	return (mass[c] + mass[n]) / x
+## Liquid density over water's from a liquid mass m and volume x: m / x, exactly 1 where they
+## are equal (water alone) or there is no liquid (ADR 0010). Mirror: hydro_rho_of in hydro.glslinc.
+static func hydro_rho_of(m: float, x: float) -> float:
+	return 1.0 if m == x or x <= 1e-6 else m / x
+
+
+## Liquid density across the face between two cells of liquid density rho_c and rho_n and level
+## l_c and l_n (hydro_level): the same where they are equal, else their mean weighted by level.
+## Mirror: hydro_face_rho in hydro.glslinc.
+static func hydro_face_rho(rho_c: float, rho_n: float, l_c: float, l_n: float) -> float:
+	if rho_c == rho_n:
+		return rho_c
+	var l := l_c + l_n
+	return rho_c if l <= 1e-6 else (rho_c * l_c + rho_n * l_n) / l
+
+
+## Liquid density of cell c from a per-cell array, 1 without one (hand-made cells).
+static func _cell_rho(rho: PackedFloat32Array, c: int) -> float:
+	return 1.0 if rho.is_empty() else rho[c]
+
+
+## hydro_face_rho between cells c and n of the grid.
+static func _face_rho(rho: PackedFloat32Array, phi: PackedVector4Array, c: int, n: int) -> float:
+	return hydro_face_rho(_cell_rho(rho, c), _cell_rho(rho, n), hydro_level(phi[c]), hydro_level(phi[n]))
 
 
 ## HYDRO_SWEEPS projected red-black SOR sweeps on p, in place (hydro_sweep).
-## Each face between liquid cells weighs 1 / hydro_rho (the mass-weighted Poisson equation,
+## Each face between liquid cells weighs 1 / hydro_face_rho (the mass-weighted Poisson equation,
 ## ADR 0010), so the push over a particle's mass removes each cell's compression whatever its
-## liquid; the floor's and bodies' flux stays head, as (1/rho) dp/dn = g at rest. No mass
-## (hand-made cells): water everywhere.
+## liquid; the floor's and bodies' flux stays head, as (1/rho) dp/dn = g at rest. rho: each cell's
+## liquid density; none (hand-made cells): water everywhere.
 func _hydro_solve(phi: PackedVector4Array, p: PackedFloat32Array, dt: float,
-		mass := PackedFloat32Array()) -> void:
+		rho := PackedFloat32Array()) -> void:
 	var size := hydro_size(world_size)
 	var a := hydro_cell_size()
 	var offs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
@@ -1163,12 +1179,12 @@ func _hydro_solve(phi: PackedVector4Array, p: PackedFloat32Array, dt: float,
 					var air_n := hydro_air(phi, nc, size)
 					if solid:
 						if not air_n:  # sand bed: the liquid's pressure continued hydrostatically
-							sum += p[ni] - hydro_rho(mass, phi, c, ni) * head * off.y
+							sum += p[ni] - _face_rho(rho, phi, c, ni) * head * off.y
 							n += 1.0
 					elif solid_n:
 						if not air:
 							if phi[ni].z < SimParams.HYDRO_BODY_CELL:  # porous sand bed: its p, the water's continued
-								var wb := 1.0 / hydro_rho(mass, phi, c, ni)
+								var wb := 1.0 / _face_rho(rho, phi, c, ni)
 								sum += wb * p[ni]
 								n += wb
 							else:  # a body: a wall holding the water's weight, dp/dn = rho g . n
@@ -1178,9 +1194,9 @@ func _hydro_solve(phi: PackedVector4Array, p: PackedFloat32Array, dt: float,
 							sum += p[ni] * (1.0 - 1.0 / _hydro_theta(hydro_level(phi[ni]), hydro_level(phi[c])))
 							n += 1.0
 					elif air_n:
-						n += 1.0 / (hydro_rho(mass, phi, c, c) * _hydro_theta(hydro_level(phi[c]), hydro_level(phi[ni])))
+						n += 1.0 / (_cell_rho(rho, c) * _hydro_theta(hydro_level(phi[c]), hydro_level(phi[ni])))
 					else:
-						var wl := 1.0 / hydro_rho(mass, phi, c, ni)
+						var wl := 1.0 / _face_rho(rho, phi, c, ni)
 						n += wl
 						sum += wl * p[ni]
 				if solid:
@@ -1354,7 +1370,7 @@ func _body_p_sample(x: Vector2, phi: PackedVector4Array, p: PackedFloat32Array) 
 		return s
 	# Below the last row, the head of the liquid in that row's cell (ADR 0010).
 	var c := (size.y - 1) * size.x + clampi(int(x.x / hydro_cell_size()), 0, size.x - 1)
-	return s + hydro_rho(_hydro_mass, phi, c, c) * SimParams.GRAVITY * (x.y - y_last)
+	return s + _cell_rho(_hydro_rho, c) * SimParams.GRAVITY * (x.y - y_last)
 
 
 ## Position change this step of body particle i from the liquid's pressure on its wet surface

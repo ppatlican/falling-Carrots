@@ -2,7 +2,7 @@
 #version 450
 
 // Hydro 2/4: liquid, powder and body density over rest of each coarse cell (hydro_density in
-// hydro.glslinc) and its liquid mass (hydro_mass) from the splatted sums, which it zeroes for
+// hydro.glslinc) and its liquid density (hydro_rho) from the splatted sums, which it zeroes for
 // the next frame.
 // One thread per coarse cell.
 
@@ -24,7 +24,7 @@ void main() {
 		phi.w = min(phi.w / rho, phi.z);
 	}
 	hydro_phi[c] = phi;
-	hydro_mass[c] = mass;
+	hydro_rho[c] = rho;
 	for (uint k = 0u; k < HYDRO_CHANNELS; k++) {
 		hydro_acc[HYDRO_CHANNELS * c + k] = 0;
 	}

@@ -56,13 +56,13 @@ const SCAN_BLOCK := 256
 const MAX_SCAN_BLOCKS := 256
 const SCAN_SHARED_BYTES := 64 * 4
 ## hydro_solve: threads in its one workgroup, and the most coarse cells it holds in shared
-## memory (phi vec2 + p float each). Mirror: LOCAL_SIZE_X in hydro_solve.glsl,
-## HYDRO_MAX_CELLS in hydro.glslinc.
+## memory (phi vec2, p and rho floats each, plus three bits). Mirror: LOCAL_SIZE_X in
+## hydro_solve.glsl, HYDRO_MAX_CELLS in hydro.glslinc.
 const HYDRO_SOLVE_THREADS := 128
 ## body_project, body_match: threads in each body's workgroup. Mirror: LOCAL_SIZE_X in both.
 const BODY_THREADS := 128
-const HYDRO_MAX_CELLS := 1024
-const HYDRO_SHARED_BYTES := HYDRO_MAX_CELLS * 12
+const HYDRO_MAX_CELLS := 960
+const HYDRO_SHARED_BYTES := HYDRO_MAX_CELLS * 16 + HYDRO_MAX_CELLS * 3 / 8
 
 ## Brush operations (BRUSH_* in common.glslinc).
 const BRUSH_NONE := 0
@@ -248,8 +248,8 @@ func _create_resources_rt() -> String:
 	bindings.append([specs.size(), RenderingDevice.UNIFORM_TYPE_IMAGE, image])  # binding 19
 	# Liquid density projection grid (hydro.glslinc), bindings 20 to 22 and 29.
 	# [binding, name, bytes per cell]: phi and acc hold liquid, powder, body volume and weight;
-	# acc also the liquid's mass over water's, which hydro_mass holds per cell (ADR 0010).
-	for spec in [[20, "hydro_phi", 16], [21, "hydro_p", 4], [22, "hydro_acc", 20], [29, "hydro_mass", 4]]:
+	# acc also the liquid's mass over water's; hydro_rho holds each cell's liquid density (ADR 0010).
+	for spec in [[20, "hydro_phi", 16], [21, "hydro_p", 4], [22, "hydro_acc", 20], [29, "hydro_rho", 4]]:
 		var hydro_bytes: int = _hydro_cells() * spec[2]
 		var hrid: RID = _ctx.create_buffer_rt(spec[1], hydro_bytes, PackedByteArray())
 		if not hrid.is_valid():
