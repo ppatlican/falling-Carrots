@@ -1508,8 +1508,11 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 		soft_near = soft_i and _soft(nearest, mat, body)
 		var r_near := _member_rot(nearest, mat, body, bodies)
 		out = _push_out(pred[i], pred[nearest], edge[nearest], bodies[body[nearest]], r_near)
-		if soft_near and not in_lattice_cell(pred[i], pred[nearest], r_near):
-			out = Vector2.ZERO  # outside the other body: a corner's outline misfires (ADR 0008 item 1)
+		if (soft_near or (mi["class"] == POWDER and _soft(nearest, mat, body))) \
+				and not in_lattice_cell(pred[i], pred[nearest], r_near):
+			# Outside the soft body: a corner's outline misfires (ADR 0008 item 1), and a grain in a
+			# stretched gap of its bottom row let it dig into sand (ADR 0009).
+			out = Vector2.ZERO
 		if body[i] != 0 and out.dot(pred[i] - pred[nearest]) < 0.0:
 			# Past the nearest member's edge row, that pair pushes inward: the outline decides
 			# (powder.glslinc contact_delta).
@@ -1547,9 +1550,10 @@ static func _push_out(x: Vector2, x_j: Vector2, e_j: Vector2, b: Dictionary, r: 
 ## Whether x lies in the lattice cell of a body member at x_j turned by r: within SOFT_CELL
 ## spacings of it along both of the turned lattice's axes. On a square lattice a member's cell is
 ## the part of the body nearest it, so a point is inside the body only if it is in the cell of
-## its nearest member. Between two soft bodies the push-out acts only there (ADR 0008 item 1): a
-## corner member's way out is the 45-degree diagonal, so a point 1.7 px under a corner of the body
-## above, 0.6 px in from its side, read 0.22 px inside it, though 0.7 px below its bottom face. A
+## its nearest member. Between two soft bodies, and on a grain from a soft body (ADR 0009), the
+## push-out acts only there (ADR 0008 item 1): a corner member's way out is the 45-degree
+## diagonal, so a point 1.7 px under a corner of the body above, 0.6 px in from its side, read
+## 0.22 px inside it, though 0.7 px below its bottom face. A
 ## member took that push on its own and its body's shape took it back; shared over its region
 ## (_share_pushes_over_regions) it moved the patch, and a soft stack 2 px off centre crept sideways
 ## for good. Not against a rigid body: a jelly plank on two carrot pillars slid off their corners

@@ -33,6 +33,7 @@ const GROUPS := {
 	"test_cork_pressed_into_wet_sand_rises": ["bodies-water", "sand", "hydro"],
 	"test_sunk_jelly_keeps_its_shape": ["bodies-water", "soft"],
 	"test_box_dropped_on_sand_keeps_grains_out": ["sand", "rigid", "quick"],
+	"test_soft_jelly_rests_on_sand": ["sand", "soft"],
 	"test_box_dropped_on_box_stays_out": ["rigid", "quick"],
 	"test_fast_box_drop_stacks_off_centre": ["rigid"],
 	"test_fast_box_drop_on_plank_stays_on_top": ["rigid"],
@@ -591,6 +592,31 @@ func test_box_dropped_on_sand_keeps_grains_out() -> void:
 			% [inside, most, fit.theta, fit.err, _body_vel(state, id).length()])
 	expect_eq(inside, 0, "no grain inside the box after landing")
 	expect(fit.err < 0.1, "the box keeps its shape: %.4f" % fit.err)
+
+
+## ADR 0009: a jelly at the parameter panel's lowest stiffness (0.2) set on sand rests on it. A 12x4
+## jelly set on a settled 28x10 bed, 300 frames. Before ADR 0009 grains in the stretched gaps of its
+## bottom row were pushed out of its outline every iteration, nothing pushed the member back, and it
+## kept moving (a member at 39 px/s over the last 60 frames) and dug 9.4 px into the bed (owner
+## report 2026-10-14, body_probe sandjelly).
+func test_soft_jelly_rests_on_sand() -> void:
+	var world := Vector2(64, 80)
+	var sim = _sim(world, {"stiffness": 0.2})
+	var state := _bed(world, 28, 10)
+	for f in 60:
+		_frame(sim, state)
+	var top := _top_of(state, _sand)
+	var id: int = ParticleStep.make_body(state, _box(Vector2(32, top - SimParams.SPACING - 0.5), 12, 4), _jelly)
+	var speed := 0.0
+	for f in 300:
+		_frame(sim, state)
+		if f >= 240:
+			speed = maxf(speed, _max_member_speed(state, id))
+	var sunk := _lowest(state, id) - top
+	_report("12x4 jelly (stiffness 0.2) set on a sand bed, 300 frames: fastest member over the last 60 frames %.2f px/s, lowest member %.2f px below the bed's top"
+			% [speed, sunk])
+	expect(speed < 2.0 * REST_SPEED, "it rests, every member under %.1f px/s: %.2f" % [2.0 * REST_SPEED, speed])
+	expect(sunk < 3.0 * SimParams.SPACING, "it doesn't dig into the bed, lowest member under 3 spacings below its top: %.2f px" % sunk)
 
 
 ## Body-body push-out (ADR 0003 item 11): without it the dropped box ended inside the other,

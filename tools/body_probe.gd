@@ -75,13 +75,17 @@
 ##   sandjelly  as the owner reported, 2026-10-14: "+10k sand" at frame 1, then at frame 240 a level
 ##            stroke of the body brush (a capsule, as main.tscn paints it) of jelly at y 60 across the
 ##            pile, 1200 frames: members still moving (over 5 px/s) and members under the sand's top
-##            beside them. Rests at the shipped stiffness 0.95 (and 0.5, 0.8); at stiff=0.3 members
-##            jitter at 11-15 px/s for good and ~140 sink under the sand's top (STATUS Known issues)
+##            beside them. Rests at every stiffness since ADR 0009 (0.95: 72-174 members under the
+##            sand's top, 0.2: 351-499). Before it, at stiff=0.2 the strip dug down through the
+##            pile (1779 of 1780 under the top) with members at up to 55 px/s, and 0.5 and 0.8 kept
+##            a few members moving at 8-13 px/s
 ##   sandstroke the same pile; at frame 300 a jelly stroke painted level across its top, depth= px into it
 ##            (default STROKE_DEPTH) and span= px each side of the middle (default 170), with the
 ##            brush's own rules (core/body_brush.gd: occupied spots left out, pieces), so it can
 ##            leave pieces of any size: every piece and whether it keeps moving. "trace" prints the
-##            fastest member of each piece every sample
+##            fastest member of each piece every sample. With span=280 the stroke reaches the left
+##            wall, and a member in the floor corner may read 6-14 px/s while it holds within 0.1 px,
+##            so it can FAIL at any stiffness (also on main; ADR 0009 Known limits)
 ##   sandbits   the same pile; at frame 240 ten small jellies (2x2 to 5x3, as a stroke painted over
 ##            grains leaves them) dropped from y 200 along it, read as sandstroke
 ##   boxdrop  a 16x10 carrot resting on the floor, a second dropped 150 px straight onto it (frame

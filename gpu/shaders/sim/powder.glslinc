@@ -82,10 +82,10 @@ const float SOFT_CELL = 0.55;
 // Whether x lies in the lattice cell of body member j (sorted) of body `body`: within SOFT_CELL
 // spacings of it along both axes of its turned lattice (member_rot). On a square lattice a
 // member's cell is the part of the body nearest it, so a point is inside the body only if it is
-// in the cell of its nearest member. Between two soft bodies the push-out acts only there (ADR 0008
-// item 1): a corner member's way out is the 45-degree diagonal, so a point 1.7 px under a corner of
-// the body above, 0.6 px in from its side, read 0.22 px inside it, though 0.7 px below its bottom
-// face. A member took that push on its own and its body's shape took it back; shared over its
+// in the cell of its nearest member. Between two soft bodies, and on a grain from a soft body (ADR
+// 0009), the push-out acts only there (ADR 0008 item 1): a corner member's way out is the
+// 45-degree diagonal, so a point 1.7 px under a corner of the body above, 0.6 px in from its side,
+// read 0.22 px inside it, though 0.7 px below its bottom face. A member took that push on its own and its body's shape took it back; shared over its
 // region (solve_apply) it moved the patch, and a soft stack 2 px off centre crept sideways for
 // good. Not against a rigid body: a jelly plank on two carrot pillars slid off their corners into
 // the gap. Mirror: ParticleStep.in_lattice_cell.
@@ -248,8 +248,11 @@ vec2 contact_delta(uint t, out vec2 body_out, out vec2 body_share, out float reg
 	if (nearest != 0xFFFFFFFFu) {
 		soft_near = t_soft && soft_material(s_material(nearest));
 		out_push = push_out(pt, nearest, nearest_body);
-		if (soft_near && !in_lattice_cell(pt, nearest, nearest_body)) {
-			out_push = vec2(0.0);  // outside the other body: a corner's outline misfires (ADR 0008)
+		if ((soft_near || (t_powder && soft_material(s_material(nearest))))
+				&& !in_lattice_cell(pt, nearest, nearest_body)) {
+			// Outside the soft body: a corner's outline misfires (ADR 0008), and a grain in a
+			// stretched gap of its bottom row let it dig into sand (ADR 0009).
+			out_push = vec2(0.0);
 		}
 		if (t_body != 0u && dot(out_push, pt - s_pred[nearest]) < 0.0) {
 			// A member that has passed the nearest member's edge row (it lies on the inner side
