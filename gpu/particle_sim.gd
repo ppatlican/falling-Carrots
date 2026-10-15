@@ -167,7 +167,7 @@ func start() -> String:
 	for k in KERNELS:
 		spirv[k] = ComputeContext.load_spirv(SHADER_DIR + k + ".glsl", errors)
 	if not errors.is_empty():
-		return "\n".join(errors)
+		return ComputeContext.join_errors(errors)
 	RenderingServer.call_on_render_thread(_setup_rt.bind(spirv))
 	return ""
 

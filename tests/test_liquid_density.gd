@@ -13,6 +13,7 @@ const SimParams = preload("res://core/sim_params.gd")
 
 const WORLD := Vector2(32, 40)
 const FRAMES := 420
+const MIXED_FRAMES := 480
 
 
 ## Oil (0.8) on the floor under as much water: it rises through it and ends as the top layer.
@@ -31,6 +32,42 @@ func test_heavy_liquid_on_oil_sinks_under_it() -> void:
 	table.set_value(water, "density", 2.0)
 	var gap := _layer_gap(table, table.id_of("oil"), water)
 	expect(gap > 4.0, "heavy water under oil: water mean y minus oil mean y %.1f px" % gap)
+
+
+## Oil and water mixed as finely as the lattice allows (a checkerboard, 14 x 20, 40 px deep)
+## separate, oil on top. The block tests start as two layers; the owner's report (2026-10-15,
+## "oil does not float above water; they just mix") asked whether a mixed start layers too.
+## The world is 72 px tall so the floor sits at a grid cell's centre, as in the game's 360 px:
+## at 80 px the grid's push fades to 0 over the bottom 8 px and holds oil on the floor.
+func test_mixed_oil_and_water_separate() -> void:
+	var table = _table()
+	var oil: int = table.id_of("oil")
+	var water: int = table.id_of("water")
+	var world := Vector2(32, 72)
+	var sim = ParticleStep.new(world, table)
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var rows := 20
+	for y in rows:
+		for x in 14:
+			state.pos.append(Vector2(3.0 + x * SimParams.SPACING, world.y - 1.0 - y * SimParams.SPACING))
+			state.vel.append(Vector2.ZERO)
+			state.material.append(oil if (x + y) % 2 == 0 else water)
+	for f in MIXED_FRAMES:
+		sim.step(state, SimParams.DT, 4)
+	var sum := {oil: 0.0, water: 0.0}
+	var n := {oil: 0, water: 0}
+	for i in state.pos.size():
+		sum[state.material[i]] += state.pos[i].y
+		n[state.material[i]] += 1
+	var water_y: float = sum[water] / n[water]
+	var above := 0
+	for i in state.pos.size():
+		if state.material[i] == oil and state.pos[i].y < water_y:
+			above += 1
+	# Fully layered: 10 rows of each, 20 px apart; mixed: 0 and half the oil above.
+	var gap: float = water_y - sum[oil] / n[oil]
+	expect(gap > 14.0, "mixed start: water mean y minus oil mean y %.1f px (20 when layered)" % gap)
+	expect(float(above) / n[oil] > 0.85, "mixed start: %.2f of the oil above the water's mean y" % (float(above) / n[oil]))
 
 
 ## The grid's p in a pool of one liquid is its density times water's (the mass-weighted solve:

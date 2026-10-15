@@ -45,7 +45,7 @@ func start() -> String:
 	var fill := ComputeContext.load_spirv(FILL_SHADER, errors)
 	var draw := ComputeContext.load_spirv(DRAW_SHADER, errors)
 	if not errors.is_empty():
-		return "\n".join(errors)
+		return ComputeContext.join_errors(errors)
 	RenderingServer.call_on_render_thread(_setup_rt.bind(fill, draw))
 	return ""
 

@@ -59,6 +59,19 @@
 ##          cells around it (open water inside the bed, not pore water); groups: connected
 ##          pockets of 6+ 2 px cells, and the biggest. sink, sandpour and soak also print
 ##          the grid averaged from 30 s at the end (BOWLP, BOWLF, as in bowl)
+##   layers two liquids (ADR 0010) that start mixed, and whether they layer: mix=rows (default)
+##          builds a 64-row, 318-column pool at rest from the floor up, one row per frame,
+##          rows alternating oil and water (2 px layers); mix=alt clicks +10k four times 30
+##          frames apart, oil, water, oil, water (blocks at y 8, as main.gd's button); mix=pour
+##          puts 2 x +10k water (30 frames apart), then from frame 120 paints oil into the pool
+##          with the circle brush at y pour_y (default 320 here) swept across x 60..580 at 2 px
+##          per frame until 10k are in; mix=pourwater does it the other way round (oil pool,
+##          water brush). light=NAME heavy=NAME pick the liquids (default oil and water). Every
+##          sample: LAYERS, the mean y of each, their gap and the gap two flat layers of those
+##          counts would have (full), oil_above (share of light liquid above the heavy one's
+##          mean y), top (per 20 px column, the share of light liquid among the column's top
+##          k particles, k its light count: 1 is layered, ~its share is mixed), and mean speed.
+##          At the end LAYERPROF, the light liquid's share per 8 px band. Judge on plateaus.
 ##   hover  the surface pool: water particles in the loose fringe above the dense surface
 ##          (the first 2 px row at least half full), and their mean vy (> 0 is falling)
 ## Every sample (every=N frames, default 3): one line per scenario, see _analyse.
@@ -110,6 +123,12 @@ var mounds := false
 var mounds_water := 32000
 var mounds_sand := 6000
 var bowl_samples := 0
+var layer_mix := "rows"
+var light := -1
+var heavy := -1
+var layer_light_name := "oil"
+var layer_heavy_name := "water"
+var layer_poured := 0
 var bowl_avg_v := {}  # 20 px cell -> summed mean water velocity over samples from BOWL_AVG_FROM
 var bowl_avg_n := {}
 const BOWL_AVG_FROM := 30.0
@@ -146,6 +165,12 @@ func _initialize() -> void:
 			bowl_sand = false
 		if a.begins_with("move="):
 			sand_moving = int(a.substr(5))
+		if a.begins_with("mix="):
+			layer_mix = a.substr(4)
+		if a.begins_with("light="):
+			layer_light_name = a.substr(6)
+		if a.begins_with("heavy="):
+			layer_heavy_name = a.substr(6)
 		if a.begins_with("pour_y="):
 			pour_y = float(a.substr(7))
 		if a.begins_with("tag="):
@@ -166,6 +191,10 @@ func _initialize() -> void:
 		print("MATERIAL PROBLEMS: ", problems)
 	water = table.id_of("water")
 	sand = table.id_of("sand")
+	light = table.id_of(layer_light_name)
+	heavy = table.id_of(layer_heavy_name)
+	if scenario == "layers" and not Array(args).any(func(a): return a.begins_with("pour_y=")):
+		pour_y = 320.0
 	print("feel probe scenario=%s frames=%d g=%.0f dt=%.5f" % [scenario, max_frames, SimParams.GRAVITY, SimParams.DT])
 	ctx = ComputeContext.new()
 	sim = ParticleSim.new(ctx, cap, config.solver_iterations, table, config.substeps, config.body_cap)
@@ -223,6 +252,8 @@ func _process(_delta: float) -> bool:
 		brush = _soak_brush()
 	if scenario == "bowl":
 		brush = _bowl_brush()
+	if scenario == "layers":
+		brush = _layers_brush()
 	sim.frame(brush, 0)
 	if frame_i in shots:
 		RenderingServer.call_on_render_thread(_shot_rt.bind(frame_i))
@@ -248,6 +279,8 @@ func _process(_delta: float) -> bool:
 			_mounds_profile()
 	if frame_i >= max_frames and scenario in ["sink", "sandpour", "soak"]:
 		_bowl_pressure_print()
+	if frame_i >= max_frames and scenario == "layers":
+		_layers_profile()
 	if frame_i >= max_frames:
 		print("done after %d frames, live %d" % [frame_i, sim.live_count])
 		sim.shutdown()
@@ -273,6 +306,111 @@ func _pour_brush() -> Dictionary:
 		brush.cols = 40
 		brush.pos = Vector2(420.0, 20.0)
 	return brush
+
+
+func _layers_brush() -> Dictionary:
+	var brush := {"op": ParticleSim.BRUSH_NONE, "pos": Vector2.ZERO, "radius": SimParams.BRUSH_RADIUS,
+			"material": light, "count": 0, "cols": 1}
+	var f := frame_i - 1
+	if layer_mix == "rows":
+		if f < 64:
+			brush.op = ParticleSim.BRUSH_BLOCK
+			brush.material = light if f % 2 == 0 else heavy
+			brush.count = 318
+			brush.cols = 318
+			brush.pos = Vector2(2.0, SimParams.WORLD_SIZE.y - 1.0 - f * SimParams.SPACING)
+	elif layer_mix == "alt":
+		if f % 30 == 0 and f / 30 < 4:
+			brush.op = ParticleSim.BRUSH_BLOCK
+			brush.material = light if (f / 30) % 2 == 0 else heavy
+			brush.count = SimParams.BENCH_BLOCK
+			brush.cols = SimParams.BENCH_COLS
+			brush.pos = Vector2((SimParams.WORLD_SIZE.x - SimParams.BENCH_COLS * SimParams.SPACING) * 0.5, 8.0)
+	else:  # pour: the pool liquid, then the other painted into it
+		var pool := heavy if layer_mix == "pour" else light
+		var paint := light if layer_mix == "pour" else heavy
+		if f % 30 == 0 and f / 30 < 2:
+			brush.op = ParticleSim.BRUSH_BLOCK
+			brush.material = pool
+			brush.count = SimParams.BENCH_BLOCK
+			brush.cols = SimParams.BENCH_COLS
+			brush.pos = Vector2((SimParams.WORLD_SIZE.x - SimParams.BENCH_COLS * SimParams.SPACING) * 0.5, 8.0)
+		elif f >= 120 and layer_poured < SimParams.BENCH_BLOCK:
+			var span := 520.0
+			var s := fmod((f - 120) * 2.0, 2.0 * span)
+			brush.op = ParticleSim.BRUSH_CIRCLE
+			brush.material = paint
+			brush.pos = Vector2(60.0 + (s if s < span else 2.0 * span - s), pour_y)
+			brush.count = SimParams.brush_rate()
+			layer_poured += brush.count  # an upper bound: spots too close to a particle are skipped
+	return brush
+
+
+func _layers(b: Dictionary, t: float) -> void:
+	var sum := {light: 0.0, heavy: 0.0}
+	var n := {light: 0, heavy: 0}
+	var speed := 0.0
+	var cols := {}  # 20 px column -> [light count, ys (light negated)]
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		var m := fl & 0xFF
+		if (fl & 0x100) == 0 or not (m == light or m == heavy):
+			continue
+		var x: float = b.pos.decode_float(i * 8)
+		var y: float = b.pos.decode_float(i * 8 + 4)
+		sum[m] += y
+		n[m] += 1
+		speed += Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4)).length()
+		var c := int(x / 20.0)
+		if not cols.has(c):
+			cols[c] = [0, []]
+		if m == light:
+			cols[c][0] += 1
+		cols[c][1].append(-y if m == light else y)
+	if n[light] == 0 or n[heavy] == 0:
+		return
+	var heavy_y: float = sum[heavy] / n[heavy]
+	var above := 0
+	for i in cap:
+		var fl := int(b.mat_flags.decode_u32(i * 4))
+		if (fl & 0x100) != 0 and (fl & 0xFF) == light and b.pos.decode_float(i * 8 + 4) < heavy_y:
+			above += 1
+	# Per column: of its k highest particles (k = its light count), how many are light.
+	var top_light := 0
+	for c in cols:
+		var k: int = cols[c][0]
+		var ys: Array = cols[c][1]
+		ys.sort_custom(func(a, bb): return absf(a) < absf(bb))
+		for j in k:
+			if ys[j] < 0.0:
+				top_light += 1
+	# Two flat layers over the floor width: each layer's thickness is its count x spacing^2 / width.
+	var full: float = (n[light] + n[heavy]) * SimParams.SPACING * SimParams.SPACING / (SimParams.WORLD_SIZE.x - 2.0) * 0.5
+	print("LAYERS t=%.1f light_y=%.1f heavy_y=%.1f gap=%.1f full=%.1f oil_above=%.3f top=%.3f speed=%.2f n=%d/%d" % [
+			t, sum[light] / n[light], heavy_y, heavy_y - sum[light] / n[light], full, float(above) / n[light],
+			float(top_light) / n[light], speed / (n[light] + n[heavy]), n[light], n[heavy]])
+
+
+## The light liquid's share per 8 px band, from the last readback (LAYERPROF).
+func _layers_profile() -> void:
+	if not got.has("pos") or not got.has("mat_flags"):
+		return
+	var bands := {}
+	for i in cap:
+		var fl := int(got.mat_flags.decode_u32(i * 4))
+		var m := fl & 0xFF
+		if (fl & 0x100) == 0 or not (m == light or m == heavy):
+			continue
+		var band := int(got.pos.decode_float(i * 8 + 4) / 8.0)
+		var a: Array = bands.get(band, [0, 0])
+		a[0 if m == light else 1] += 1
+		bands[band] = a
+	var keys := bands.keys()
+	keys.sort()
+	var line := ""
+	for k in keys:
+		line += " y%d:%.2f(%d)" % [k * 8, float(bands[k][0]) / (bands[k][0] + bands[k][1]), bands[k][0] + bands[k][1]]
+	print("LAYERPROF light share per 8 px band:", line)
 
 
 func _sandair_brush() -> Dictionary:
@@ -976,6 +1114,9 @@ func _analyse(b: Dictionary, f: int) -> void:
 		return
 	if scenario == "hover":
 		_hover(b, t)
+		return
+	if scenario == "layers":
+		_layers(b, t)
 		return
 	if scenario == "erase":
 		_erase_stats(b, t)

@@ -47,9 +47,17 @@ static func is_available() -> bool:
 	return RenderingServer.get_rendering_device() != null
 
 
+const STALE := "is out of date (imported from an older version of the file)"
+const STALE_FIX := ("Shaders are out of date: open the project in the Godot editor once (it re-imports " +
+		"changed files on start), or delete .godot/imported/*.glsl-* and run --headless --import.")
+
+
 ## Loads a .glsl compute shader and returns its SPIR-V, or null after appending
 ## a readable message to `errors`. Safe on the main thread (no device calls).
 static func load_spirv(path: String, errors: PackedStringArray) -> RDShaderSPIRV:
+	if import_is_stale(path):
+		errors.append("shader %s %s" % [path, STALE])
+		return null
 	var file := load(path) as RDShaderFile
 	if file == null:
 		errors.append("shader %s: could not load as RDShaderFile (is it imported?)" % path)
@@ -65,6 +73,31 @@ static func load_spirv(path: String, errors: PackedStringArray) -> RDShaderSPIRV
 		errors.append("shader %s: compile error:\n%s" % [path, spirv.compile_error_compute])
 		return null
 	return spirv
+
+
+## True when the .glsl at `path` differs from the file its SPIR-V was imported from: Godot
+## re-imports only when the editor or --import runs, and running the game otherwise loads the
+## old SPIR-V without a word. The owner played oil on water with every shader imported before
+## ADR 0010 (2026-10-15): oil and water mixed as if liquids had no density. Compares the
+## source's md5 with the source_md5 Godot wrote next to the import. False when either file is
+## missing (an export carries only the imported SPIR-V), so it only checks a project folder.
+static func import_is_stale(path: String) -> bool:
+	var config := ConfigFile.new()
+	if not FileAccess.file_exists(path) or config.load(path + ".import") != OK:
+		return false
+	var md5_path := str(config.get_value("remap", "path", "")).get_basename() + ".md5"
+	var recorded := FileAccess.get_file_as_string(md5_path)
+	var key := "source_md5=\""
+	var at := recorded.find(key)
+	if at < 0:
+		return false
+	return recorded.substr(at + key.length(), 32) != FileAccess.get_md5(path)
+
+
+## load_spirv's errors as one message; with stale imports, how to fix them first, once.
+static func join_errors(errors: PackedStringArray) -> String:
+	var text := "\n".join(errors)
+	return STALE_FIX + "\n\n" + text if text.contains(STALE) else text
 
 
 ## Number of workgroups needed to cover `count` elements.

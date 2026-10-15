@@ -12,18 +12,18 @@ Pick the CPU test groups and GPU probe scenarios a change can affect, run those,
 
 | group | what it covers | tests | time (one process) |
 |---|---|---|---|
-| `@quick` | any change, first: loading, setup, one dry scene per area (no body in water: the cheapest takes ~70 s) | 36 | ~1.5 min |
-| `@setup` | materials table, config, project settings, scripts load, shaders compile, particle pool, smoke hash | 15 | ~5 s |
-| `@rigid` | rigid bodies dry: on the floor, stacks, corner drop, fast drops, body-body push-out | 15 | ~3.5 min |
-| `@soft` | soft bodies (ADR 0005) dry, a soft body resting on another (ADR 0008), and the sunk jelly | 7 | ~4 min |
+| `@quick` | any change, first: loading, setup, one dry scene per area (no body in water: the cheapest takes ~70 s) | 47 | ~1.5 min |
+| `@setup` | materials table, config, project settings, scripts load, shaders compile, stale shader imports refused, particle pool, smoke hash | 25 | ~5 s |
+| `@rigid` | rigid bodies dry: on the floor, stacks, corner drop, fast drops, body-body push-out | 14 | ~3.5 min |
+| `@soft` | soft bodies (ADR 0005) dry, a soft body resting on another (ADR 0008), and the sunk jelly | 8 | ~4 min |
 | `@erase` | erasing part of a body, splitting into pieces (ADR 0004), outlines, the GPU split plan | 7 | ~15 s |
 | `@bodies-water` | bodies in water: sinking, floating, rising, p_ref, cork in wet sand, sunk jelly | 6 | ~13 min |
-| `@sand` | sand into water, a box on sand, a cork in a wet sand bed | 3 | ~2 min |
-| `@liquids` | sand sinking through water, the grid on hand-made cells, two liquids layering by density (ADR 0010) | 6 | ~40 s |
-| `@hydro` | density projection grid: hand-made cells, p_ref under water, cork in wet sand, liquids by density | 7 | ~2.7 min |
+| `@sand` | sand into water, a box on sand, a cork in a wet sand bed | 4 | ~2 min |
+| `@liquids` | sand sinking through water, the grid on hand-made cells, two liquids layering by density, also from a mixed start (ADR 0010) | 8 | ~1 min |
+| `@hydro` | density projection grid: hand-made cells, p_ref under water, cork in wet sand, liquids by density | 9 | ~3 min |
 | `@brush` | body brush strokes (`core/body_brush.gd`) | 7 | <1 s |
 
-The whole suite (59 tests) takes ~20 min in one process, ~14 min as two in parallel: `-- @bodies-water` in one, `-- @rigid @erase @brush @setup @liquids` and the six dry `@soft` methods in the other. `test_light_box_rises_from_the_bottom` alone takes ~4-5 min.
+The whole suite (72 tests, `--list`, 2026-10-15) takes ~20 min in one process, ~14 min as two in parallel: `-- @bodies-water` in one, `-- @rigid @erase @brush @setup @liquids` and the six dry `@soft` methods in the other. `test_light_box_rises_from_the_bottom` alone takes ~4-5 min.
 
 ## Changed file → what to run
 
@@ -56,8 +56,8 @@ The whole suite (59 tests) takes ~20 min in one process, ~14 min as two in paral
 | … `body_split` | `@setup` | `body_probe erasemid,erasejelly,erasebridge,erasedrag,reuse` |
 | … `body_sweep` | `@setup` | `body_probe boxhigh,plank,boxside,boxstack,sand` |
 | … `brush_*` | `@setup` | `body_probe erase,erasemid,reuse`; `gpu_probe water 600`; `main.tscn` screenshots of the brush |
-| … `hydro.glslinc`, `hydro_*` | `@setup` | `gpu_probe water 2400 3 gap=30 every=47`; `gpu_probe oil,water 4800 2 every=47` (layering, ADR 0010); `water_feel_probe surface`, `bowl`; `body_probe watersink,waterfloat,pourfloor,sandcorks`; the sand checks |
-| … `liquid.glslinc`, `solve_lambda`, `solve_delta`, `solve_apply` | `@setup` | `gpu_probe water` (both drop patterns); `gpu_probe oil,water 4800 2 every=47`; `water_feel_probe fall,dam,surface`; `body_probe watersink,waterfloat`; `body_probe jellystack,jellydrop` and `stack3,stack5,boxstack set=carrot.stiffness=0.5 frames=1800` (the soft verdict, ADR 0008) |
+| … `hydro.glslinc`, `hydro_*` | `@setup` | `gpu_probe water 2400 3 gap=30 every=47`; `gpu_probe oil,water 4800 2 every=47` (layering, ADR 0010); `water_feel_probe layers 4800 every=47` with `mix=rows`, `mix=alt` and `mix=pourwater pour_y=150` (mixed starts); `water_feel_probe surface`, `bowl`; `body_probe watersink,waterfloat,pourfloor,sandcorks`; the sand checks |
+| … `liquid.glslinc`, `solve_lambda`, `solve_delta`, `solve_apply` | `@setup` | `gpu_probe water` (both drop patterns); `gpu_probe oil,water 4800 2 every=47`; `water_feel_probe layers 4800 every=47 mix=rows`; `water_feel_probe fall,dam,surface`; `body_probe watersink,waterfloat`; `body_probe jellystack,jellydrop` and `stack3,stack5,boxstack set=carrot.stiffness=0.5 frames=1800` (the soft verdict, ADR 0008) |
 | … `solve_pressure` | `@setup` | `body_probe watersink,waterjelly,waterfloat,waterdeep,pourfloor,sandcorks,corkstrip` |
 | … `powder.glslinc` | `@setup` | the sand checks; `water_feel_probe sandair,erase,shaft,sink`; `body_probe sand,sandlow`; `body_probe jellystack,jellydrop` and `stack3,stack5,boxstack set=carrot.stiffness=0.5 frames=1800` (the soft verdict, ADR 0008) |
 | … `predict`, `velocity_*`, `hash_*`, `scan_*` | `@setup` | the sand checks, `gpu_probe water`, `body_probe tests` |

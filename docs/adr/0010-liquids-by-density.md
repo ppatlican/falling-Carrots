@@ -133,11 +133,41 @@ The first build read each face's liquid mass and volume from global memory in `h
 - `after_water-water-oil-oil_oil2.0_*`: oil set to 2, poured onto water: it sinks under it.
 - `after_panel_*`: the same, with oil selected: the panel's new density slider at its top end, 2.0.
 
+### Mixed starts, and the owner's "they just mix" (2026-10-15)
+Owner, after playing main at fb90ccf: "oil does not float above water; they just mix." Every check above started from two thick layers (and the CPU blocks test only got about halfway, +5.2 of +11 px), so this looked like a fine mix separating weakly. It wasn't that.
+
+**Cause: stale shader imports in the owner's checkout.** All 30 `.glsl` files in the main checkout had SPIR-V imported from an older version of the file (the source md5 Godot recorded at import differs from the file on disk; most were imported 2026-10-14, before this ADR). Godot re-imports only when the editor or `--import` runs, so a game started otherwise ran shaders that ignore a liquid's density. With the owner's `.godot` copied into a tmp copy and not re-imported, `water_feel_probe layers mix=alt` (+10k oil, water, oil, water, 30 frames apart) stays mixed: oil_above 0.44, top 0.52, the oil's mean 16 px *under* the water's, every 8 px band 46–61% oil, at rest by 40 s. With fresh imports the same clicks layer (below). `main.tscn` shows the same (`C:\Users\nosed\Pictures\falling-carrots-oil-mixed\`: `before_stale-imports_alt_*`, `after_fresh-imports_alt_*`). Fix: `ComputeContext.load_spirv` refuses a shader whose source md5 differs from its import's (`import_is_stale`), so the game shows "Shaders are out of date: open the project in the Godot editor once..." instead of running old shaders (`guard_stale-imports_error.png`). Exports carry no `.glsl` source and skip the check.
+
+**Mixed starts with fresh imports** (`water_feel_probe layers 4800 every=47`, new; `top` = per 20 px column, the share of oil among its highest particles, 1 layered, ~0.5 mixed):
+| start | 10 s | 20 s | plateau | oil left on the floor |
+|---|---|---|---|---|
+| `mix=alt`: +10k oil, water, oil, water | top 0.63 | 0.80 | 1.000 from ~38 s, gap 124.9 of 125.4 px | 1% of the bottom band |
+| `mix=rows`: 64 rows of 318, alternating 2 px rows | 0.70 | 0.97 | 0.970 from ~20 s, gap 59.8 of 63.8 | ~300 particles (24% of the bottom 8 px band) |
+| `mix=pour pour_y=150`: 3.3k oil brushed onto 20k water | 0.92 | 1.00 | 1.000 from ~25 s | none |
+| `mix=pourwater pour_y=150`: 3.3k water brushed onto 20k oil | 0.87 | 0.95 | 0.995 from ~30 s | ~100 (8% of the bottom band) |
+
+The circle brush draws nothing inside a pool (a spot taken by a particle is skipped), so a pour is from above the surface.
+
+**Suspects checked on the CPU** (an oil/water checkerboard on the rest lattice, 14 × 30, judged at rest after 15 s): main reaches gap 24.7 of 30 px with 0.96 of the oil above the water's mean; the oil layer is pure and the rest is 8 oil particles on the floor.
+- (a) XSPH across liquids: off entirely, 23.6 against 23.1 px (in an 80 px world, below). Not the cause.
+- (b) buoyancy from the 16 px grid: the push over mass in the bulk is 1.04–1.12 g on oil and 0.92–1.05 g on water, so a mixed cell does separate.
+- scorr off: 23.4 against 23.1. Not the cause.
+- (d) the grid's push near the floor: what holds the floor film. `_hydro_p_sample` clamps p below the last row of cells, so the push fades over the bottom half cell: 0.79 g on oil and 0.70 g on water in the bottom 4 px. Both are under their weight, the floor carries the rest, and oil there never rises. In an 80 px CPU world (last cell centre 8 px above the floor) the push reaches 0 at the floor and 14 oil stayed down; the game's 360 px puts the last cell centre at the floor, as the new CPU test does (72 px).
+  - p continued hydrostatically below the last row for every liquid: the film is gone (1.00 of the oil above, gap 26.4), but water's own push in the bottom band goes 0.70 → 1.00 g, which changes pure water. Not shipped; the owner decides (Known limits).
+  - The same continuation only for the excess term, `(1/ρ_i − 1)`, which keeps water exact: floor oil gets 0.89 g, still under its weight, and stays.
+- (c) the mass-weighted pair split wasn't isolated: with the grid's push working, mixed starts separate.
+
+CPU `test_mixed_oil_and_water_separate` (`@liquids @hydro`): a 14 × 20 checkerboard in a 32 × 72 box, 480 frames, gap > 14 of 20 px and > 0.85 of the oil above the water's mean. Red with oil's density set to 1 (gap 0.0, 0.51 above).
+
+Nothing in the solver changed, so pure water, bodies, sand and the pass times are as above: `cpu_ref/` and every shader are byte-identical to main.
+
 ## Known limits
 - **A layered pool rocks for ~40–55 s** after a pour (the interface's slow internal wave, above), and water poured onto oil takes ~30–60 s to fully separate out of it.
 - **A thin dark line along the interface** in `main.tscn`: pixels no point covers, like the dark specks in open water (M5's renderer).
 - **A heavy body in a heavy liquid** counts at less than its weight in the grid's level (decision 5). It only matters at a surface.
 - **The p_ref floor is water's:** a floater in oil sits ~`BODY_SURFACE_DROP × (1 − 0.8)` ≈ 0.5 px off.
+- **An oil film on the floor from a fine mix:** 0.5–3% of the oil (100–300 particles of 10k) stays on the floor under the water (Results, Mixed starts). The grid's push fades over the bottom few pixels (`_hydro_p_sample` clamps below the last row), so the floor carries part of every liquid's weight there and oil gets no net lift. Continuing p hydrostatically past the floor clears it, but changes pure water's floor push (0.70 → 1.00 g in the bottom 4 px); the owner's call.
+- **Shaders are checked against their imports only where the `.glsl` is on disk.** An include (`.glslinc`) changed without the stamp bump (SPEC 2.7) still isn't caught at runtime; `test_shaders.gd` catches it.
 - **No interfacial tension:** a layer thinner than a coarse cell (16 px) is held by PBF and the mixed-cell rule only.
 - **Grains ignore the liquid's density** (above): sand sinks through liquid at 2.
 - **`HYDRO_MAX_CELLS` is 960**, so a bigger world than 640 × 360 needs fewer cells or a larger workgroup memory.

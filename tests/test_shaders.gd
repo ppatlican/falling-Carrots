@@ -37,6 +37,33 @@ func test_shader_imports_newer_than_includes() -> void:
 				failures.append("%s is older than %s: re-import the shaders" % [path, file])
 
 
+## A shader edited after its import is refused (ComputeContext.import_is_stale), so the game
+## shows an error instead of running the old SPIR-V; a fresh one, and one with no import
+## record (an export), load. Fake import files in user://.
+func test_stale_shader_import_is_refused() -> void:
+	var src := "user://stale_probe.glsl"
+	_write(src, "#[compute]\n#version 450\n// v2\n")
+	_write(src + ".import", "[remap]\n\npath=\"user://stale_probe.glsl-0.res\"\n")
+	_write("user://stale_probe.glsl-0.md5", "source_md5=\"%s\"\ndest_md5=\"0\"\n" % "#[compute]\n#version 450\n// v1\n".md5_text())
+	expect(ComputeContext.import_is_stale(src), "a source changed since its import reads as stale")
+	_write("user://stale_probe.glsl-0.md5", "source_md5=\"%s\"\ndest_md5=\"0\"\n" % FileAccess.get_md5(src))
+	expect(not ComputeContext.import_is_stale(src), "a source matching its import reads as fresh")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://stale_probe.glsl-0.md5"))
+	expect(not ComputeContext.import_is_stale(src), "no import record (an export): not stale")
+	for f in [src, src + ".import"]:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(f))
+	var errors := PackedStringArray(["shader a.glsl " + ComputeContext.STALE, "shader b.glsl " + ComputeContext.STALE])
+	var text := ComputeContext.join_errors(errors)
+	expect(text.begins_with(ComputeContext.STALE_FIX) and text.count(ComputeContext.STALE_FIX) == 1,
+			"the fix for stale shaders is shown once, first: %s" % text)
+
+
+func _write(path: String, text: String) -> void:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(text)
+	file.close()
+
+
 func _glsl_files(dir: String) -> PackedStringArray:
 	var out := PackedStringArray()
 	for sub in DirAccess.get_directories_at(dir):
