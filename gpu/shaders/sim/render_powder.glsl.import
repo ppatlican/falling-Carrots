@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://v3dc53lqqe86"
+path="res://.godot/imported/render_powder.glsl-55981933cc9ccfc08c990293541c9eef.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/render_powder.glsl"
+dest_files=["res://.godot/imported/render_powder.glsl-55981933cc9ccfc08c990293541c9eef.res"]
+
+[params]
+

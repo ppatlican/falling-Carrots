@@ -1,6 +1,6 @@
 # 0011: Stickiness, cohesion and adhesion (Milestone 3b)
 
-Date: 2026-10-15. Status: proposed. Built on the owner's go-ahead (2026-10-15: "authorised - go ahead" to the next 3b slice); the owner hasn't played it yet.
+Date: 2026-10-15. Status: accepted (owner played it, 2026-10-16). Built on the owner's go-ahead (2026-10-15: "authorised - go ahead" to the next 3b slice).
 
 ## Context
 ADR 0001 decision 5 and SPEC 2.2: stickiness is two material columns, `cohesion` (pull between touching particles of one material) and `adhesion` (pull toward other materials and walls), both capped forces so a sticky clump still breaks under enough weight. SPEC's examples: thick sticky liquids (honey), damp clumping sand, jelly that holds together, honey on a wall, batter on a carrot. With sleeping, anything that makes grains cling risks permanent mid-air clumps, so powder cohesion must pass `erase` and `shaft` (SPEC 2.2, risks table).
@@ -50,3 +50,6 @@ GPU (RTX 3080 Ti, `--disable-vsync`; screenshots in `C:\Users\nosed\Pictures\fal
 - Play: sand at cohesion 0.5 and 1 (pile, column, the eraser), water as honey (viscosity, cohesion and adhesion up), sand or water with adhesion against the walls.
 - Is cohesion 1 strong enough, or should damp sand hold taller walls (STICK_G)?
 - Should a body stick to a side wall (needs a per-body slip, not per member)?
+
+## Owner's play (2026-10-16)
+"sand looks good - nice. honey as well. carrot seems ok too? dunno if i tested it correctly." Damp sand and honey accepted as they are: cohesion 1 stays as shipped (STICK_G unchanged), and tall damp cuts caving in is accepted for now. The carrot looked OK, but the owner wasn't sure the test reached the side-wall case, so whether a body should stick to a side wall stays open; ask again if a sticky body by a wall comes up in play.
