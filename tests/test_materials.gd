@@ -30,10 +30,12 @@ func test_validator_catches_bad_rows() -> void:
 		"'color' must be": [_with(good, {"color": "sandy"})],
 		"'boil_temp' must be": [_without(good, "boil_temp")],
 		"the cap is": _many_rows(MaterialTable.MAX_MATERIALS + 1),
-		"'stiffness'=0.0 out of range": [_with(good, {"class": "cluster", "stiffness": 0.0, "region": 1.5})],
-		"'region' must be a number for a cluster": [_with(good, {"class": "cluster", "stiffness": 0.5})],
-		"'region'=1.2 out of range": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 1.2})],
-		"'region'=2.5 out of range": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 2.5})],
+		"'stiffness'=0.0 out of range": [_with(good, {"class": "cluster", "stiffness": 0.0, "region": 1.5, "plasticity": 0.0})],
+		"'region' must be a number for a cluster": [_with(good, {"class": "cluster", "stiffness": 0.5, "plasticity": 0.0})],
+		"'region'=1.2 out of range": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 1.2, "plasticity": 0.0})],
+		"'region'=2.5 out of range": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 2.5, "plasticity": 0.0})],
+		"'plasticity' must be a number for a cluster": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 1.5})],
+		"'plasticity'=1.5 out of range": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 1.5, "plasticity": 1.5})],
 	}
 	for expected in cases:
 		var problems: PackedStringArray = MaterialTable.new().load_rows(cases[expected])
@@ -45,10 +47,10 @@ func test_validator_catches_bad_rows() -> void:
 
 func test_cluster_stiffness_floor() -> void:
 	var problems: PackedStringArray = MaterialTable.new().load_rows(
-			[_with(_sand_row(), {"class": "cluster", "stiffness": 0.2, "region": 1.5})])
+			[_with(_sand_row(), {"class": "cluster", "stiffness": 0.2, "region": 1.5, "plasticity": 0.0})])
 	expect(problems.is_empty(), "cluster at stiffness 0.2: %s" % "; ".join(problems))
 	problems = MaterialTable.new().load_rows(
-			[_with(_sand_row(), {"class": "cluster", "stiffness": 0.1, "region": 1.5})])
+			[_with(_sand_row(), {"class": "cluster", "stiffness": 0.1, "region": 1.5, "plasticity": 0.0})])
 	expect(not problems.is_empty(), "a jelly at stiffness 0.1 doesn't spring back (ADR 0007)")
 
 
@@ -66,6 +68,8 @@ func test_class_ranges() -> void:
 	expect_eq(MaterialTable.range_of("stiffness", "cluster"), [0.2, 1.0], "cluster stiffness range")
 	expect_eq(MaterialTable.range_of("region", "cluster"), [1.5, 2.0], "region range")
 	expect_eq(MaterialTable.range_of("region", "powder"), [], "no region outside clusters")
+	expect_eq(MaterialTable.range_of("plasticity", "cluster"), [0.0, 1.0], "plasticity range (ADR 0012)")
+	expect_eq(MaterialTable.range_of("plasticity", "liquid"), [], "no plasticity outside clusters")
 	for cls in ["liquid", "powder", "cluster"]:
 		expect_eq(MaterialTable.range_of("cohesion", cls), [0.0, 1.0], "%s cohesion range" % cls)
 		expect_eq(MaterialTable.range_of("adhesion", cls), [0.0, 1.0], "%s adhesion range" % cls)
@@ -81,8 +85,10 @@ func test_gpu_packing_layout() -> void:
 	expect_eq(b.decode_float(o + 28), 0.25, "drag at offset 28")
 	expect_eq(b.decode_u32(o + 48), MaterialTable.CLASSES.find("powder"), "class at offset 48")
 	expect_eq(b.decode_float(o + 64), 0.0, "no region for a powder")
-	table.load_rows([_with(_sand_row(), {"id": 5, "class": "cluster", "stiffness": 0.3, "region": 1.75})])
+	expect_eq(b.decode_float(o + 76), 0.0, "no plasticity for a powder")
+	table.load_rows([_with(_sand_row(), {"id": 5, "class": "cluster", "stiffness": 0.3, "region": 1.75, "plasticity": 0.625})])
 	expect_eq(table.pack_gpu().decode_float(5 * MaterialTable.GPU_STRIDE + 64), 1.75, "region at offset 64")
+	expect_eq(table.pack_gpu().decode_float(5 * MaterialTable.GPU_STRIDE + 76), 0.625, "plasticity at offset 76 (ADR 0012)")
 	expect_eq(b.decode_float(0 + 16), 0.0, "unused id 0 stays zero")
 	table.load_rows([_with(_sand_row(), {"id": 2, "cohesion": 0.25, "adhesion": 0.75})])
 	b = table.pack_gpu()

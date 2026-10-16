@@ -11,6 +11,8 @@
 ##               bodies: contacts as powders (powder.glslinc), then shape
 ##               matching (body_match.glsl; ADR 0002), and for soft bodies over
 ##               small regions (body_region_fit.glsl, body_region_goal.glsl; ADR 0005)
+##   plastic  -> soft bodies with plasticity keep part of their deformation (body_plastic.glsl,
+##               body_outline.glsl, body_rest.glsl; ADR 0012)
 ##   velocity -> v = (pred - pos) / dt, drag, XSPH, commit   (velocity_*.glsl)
 ## Kernels are the 2D poly6 (density) and spiky (gradient) kernels.
 ## Density is normalised: rho_hat = sum(W) / rest_density, so 1.0 is rest.
@@ -41,7 +43,8 @@ enum { FACE_NONE, FACE_WALL, FACE_BED, FACE_WEIGHED, FACE_GHOST, FACE_SURFACE }
 ## World box particles are kept inside.
 var world_size: Vector2
 ## Per material id: { "class": int, "density", "friction", "viscosity", "drag", "stiffness",
-## "region" (cluster materials; 0 for the rest), "cohesion", "adhesion" (ADR 0011) }.
+## "region" (cluster materials; 0 for the rest), "cohesion", "adhesion" (ADR 0011),
+## "plasticity" (cluster materials, ADR 0012; 0 for the rest) }.
 var materials: Dictionary
 var rest_density: float
 ## Liquid density per coarse cell over water's, from the last _hydro_density (ADR 0010).
@@ -66,6 +69,12 @@ var _rho := PackedFloat64Array()
 var _mu := PackedFloat64Array()
 var _reach := PackedFloat64Array()
 var _softp := PackedByteArray()
+## 1 for a member of a soft body whose material has plasticity (ADR 0012), and whether any is.
+var _plastic := PackedByteArray()
+var _any_plastic := false
+## Per plastic member, every member of its body in the 3 x 3 hash cells around it, itself included
+## (the window the GPU's neighbour loop reads; _find_regions builds it): _plastic_flow's.
+var _window: Array = []
 ## Per particle, wall_density at its position, for the iteration's _lambda and _liquid_delta.
 var _wall := PackedVector3Array()
 ## Per neighbour pair of a liquid particle (from _pair_off[i], in neighbour-list order): the
@@ -100,6 +109,7 @@ func _init(world: Vector2, material_table) -> void:
 			"region": float(row.get("region", 0.0)),
 			"cohesion": float(row.get("cohesion", 0.0)),
 			"adhesion": float(row.get("adhesion", 0.0)),
+			"plasticity": float(row.get("plasticity", 0.0)),
 		}
 	rest_density = rest_density_for(SimParams.H, SimParams.SPACING)
 	var h := SimParams.H
@@ -300,6 +310,12 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		_match_regions(pred, mat, rest, dt, iterations)
 		_spread_body_pushes(pushed, body, bodies, members)
 
+	# Plasticity (ADR 0012): soft bodies whose material has it keep part of their deformation.
+	if _any_plastic:
+		_plastic_flow(pred, mat, body, rest, edge, bodies, dt)
+		state.rest = rest
+		state.edge = edge
+
 	# Velocity update, drag, then XSPH viscosity from the raw velocities.
 	var new_vel := PackedVector2Array()
 	new_vel.resize(n)
@@ -477,6 +493,8 @@ func _cache_particles(mat: PackedInt32Array, body: PackedInt32Array, bodies: Arr
 	_mu.resize(n)
 	_reach.resize(n)
 	_softp.resize(n)
+	_plastic.resize(n)
+	_any_plastic = false
 	var dry := true
 	for i in n:
 		var row: Dictionary = materials[mat[i]]
@@ -485,6 +503,8 @@ func _cache_particles(mat: PackedInt32Array, body: PackedInt32Array, bodies: Arr
 		_mu[i] = row.friction
 		_reach[i] = _region_reach(mat[i])
 		_softp[i] = 1 if body[i] != 0 and row.stiffness < 1.0 else 0
+		_plastic[i] = 1 if _softp[i] == 1 and row.plasticity > 0.0 else 0
+		_any_plastic = _any_plastic or _plastic[i] == 1
 		if _cls[i] == LIQUID:
 			dry = false
 	for id in range(1, bodies.size()):
@@ -810,6 +830,150 @@ func _match_regions(pred: PackedVector2Array, mat: PackedInt32Array, rest: Packe
 		pred[i] += k * (goal - pred[i])
 
 
+## Plasticity (ADR 0012), once per substep after the solver iterations, for the members of soft
+## bodies whose material has plasticity (Mueller et al. 2005, section 4.5, on the rest offsets).
+##   Flow (body_plastic.glsl): a member's offset from its body's best fit, in the rest frame,
+##   e = R^T (p - c) - (q - c0), (c, R) and c0 as _match_shapes left them. Past PLASTIC_YIELD
+##   spacings its rest offset moves toward where it is by the plasticity's share of the excess per
+##   1/60 s (the stiffness formula), at most PLASTIC_STEP spacings per 1/60 s, cut short where it
+##   would take a rest neighbour (_plastic_room) out of the lattice's band.
+##   Outline (body_outline.glsl, body_rest.glsl): where a member of its window moved, a member is
+##   sorted again on the new rest shape as rest_outline does: fewer than 8 rest neighbours within
+##   1.5 spacings is a boundary member, its way out half a spacing along the sum of the directions
+##   from its neighbours; an inner member takes the nearest boundary member's outline point in its
+##   window, and with none there (2 or more rows in) keeps its way out.
+## A body's regions and contacts read the moved rest offsets from the next substep on.
+func _plastic_flow(pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
+		rest: PackedVector2Array, edge: PackedVector2Array, bodies: Array, dt: float) -> void:
+	var n := pred.size()
+	var sp := SimParams.SPACING
+	var step := SimParams.PLASTIC_STEP * sp * dt * 60.0
+	var yield_px := SimParams.PLASTIC_YIELD * sp
+	var dq := PackedVector2Array()
+	dq.resize(n)
+	var k_of := {}  # per material: the plasticity's share per substep
+	for i in n:
+		if _plastic[i] == 0:
+			continue
+		var b: Dictionary = bodies[body[i]]
+		var r: Vector2 = b.rot
+		var c: Vector2 = b.centroid
+		var c0: Vector2 = b.rest_centroid
+		var e := _rotate(Vector2(r.x, -r.y), pred[i] - c) - (rest[i] - c0)
+		var len := e.length()
+		if len <= yield_px:
+			continue
+		if not k_of.has(mat[i]):
+			k_of[mat[i]] = 1.0 - pow(1.0 - materials[mat[i]].plasticity, dt * 60.0)
+		var k: float = k_of[mat[i]]
+		var d := (e * (k * (len - yield_px) / len)).limit_length(step)
+		dq[i] = d * _plastic_room(i, d, rest, step)
+	_plastic_outline(dq, rest, edge, bodies, body)
+
+
+## Largest share (0 to 1) of a move d of member i's rest offset that keeps every rest neighbour j
+## (rest offsets less than PLASTIC_LINK spacings apart) in the band [PLASTIC_GAP, PLASTIC_LINK],
+## whatever j's own move this substep (at most a step), checked against j's rest offset before
+## the moves:
+##   - more than a step inside the band: the move stops a step short of either end, so j's move
+##     can't take the pair out;
+##   - within a step of the near end: i may not move toward j at all (u.d >= 0); then the pair's
+##     distance can't shrink, |u + d_i - d_j|^2 = |u|^2 + 2 u.(d_i - d_j) + |d_i - d_j|^2;
+##   - within a step of the far end: i must move toward j by at least |d|^2 (u.d <= -|d|^2); then
+##     it can't grow, as 2 u.(d_i - d_j) + |d_i - d_j|^2 <= 2 (u.d_i + |d_i|^2) - 2 (u.d_j - |d_j|^2).
+## Checked only against j's old rest offset, two neighbours sliding the same way could each pass and
+## still close on each other by ~step^2 / distance a substep, which added up: a dough's floor row
+## crept to 0.62 spacing (GPU squash). Mirror: plastic_room in body_plastic.glsl.
+func _plastic_room(i: int, d: Vector2, rest: PackedVector2Array, step: float) -> float:
+	var sp := SimParams.SPACING
+	var a := d.dot(d)
+	if a < 1e-12:
+		return 0.0
+	var near := SimParams.PLASTIC_GAP * sp + step
+	var far := SimParams.PLASTIC_LINK * sp - step
+	var share := 1.0
+	for j in _window[i]:
+		if j == i:
+			continue
+		var u := rest[i] - rest[j]
+		var dist := u.length()
+		if dist >= SimParams.PLASTIC_LINK * sp:
+			continue
+		var b := u.dot(d)
+		if dist <= near:
+			if b < 0.0:
+				return 0.0
+		else:
+			# |u + t d|^2 = a t^2 + 2 b t + |u|^2: the share t where it first comes to near.
+			var disc := b * b - a * (dist * dist - near * near)
+			if disc > 0.0:
+				var t := (-b - sqrt(disc)) / a
+				if t >= 0.0:
+					share = minf(share, t)
+		if dist >= far:
+			if b >= 0.0:
+				return 0.0
+			share = minf(share, -b / a)
+		else:
+			share = minf(share, (-b + sqrt(maxf(b * b - a * (dist * dist - far * far), 0.0))) / a)
+	return maxf(share, 0.0)
+
+
+## The outline after this substep's moves dq (see _plastic_flow), then the moves themselves.
+## Mirror: body_outline.glsl (the boundary members' points) and body_rest.glsl (the rest).
+func _plastic_outline(dq: PackedVector2Array, rest: PackedVector2Array,
+		edge: PackedVector2Array, bodies: Array, body: PackedInt32Array) -> void:
+	var n := dq.size()
+	var sp := SimParams.SPACING
+	# Boundary points an inner member may take: within PLASTIC_REACH spacings of it on the rest
+	# shape. The window holds the members near it where they are now, which in a crumpled body can
+	# be far apart on the rest shape: an inner member took a point 30 px across the body (GPU softcap).
+	var reach2 := pow(SimParams.PLASTIC_REACH * sp, 2.0)
+	# A boundary member's outline point on the new rest shape; (INF, INF) for an inner member.
+	var point := PackedVector2Array()
+	point.resize(n)
+	for i in n:
+		if _plastic[i] == 0:
+			continue
+		var q := rest[i] + dq[i]
+		var count := 0
+		var normal := Vector2.ZERO
+		for j in _window[i]:
+			var qj := rest[j] + dq[j]
+			if j != i and q.distance_squared_to(qj) < 2.25 * sp * sp:
+				count += 1
+				normal += (q - qj).normalized()
+		if count >= 8:
+			point[i] = Vector2(INF, INF)
+			continue
+		if normal.length() < 1e-4:
+			normal = q - bodies[body[i]].rest_centroid
+		normal = normal.normalized() if normal.length() > 1e-6 else Vector2(0.0, -1.0)
+		point[i] = q + 0.5 * sp * normal
+	var new_edge := edge.duplicate()
+	for i in n:
+		if _plastic[i] == 0:
+			continue
+		var moved := false
+		for j in _window[i]:
+			moved = moved or dq[j] != Vector2.ZERO
+		if not moved:
+			continue
+		var q := rest[i] + dq[i]
+		if point[i].x != INF:
+			new_edge[i] = point[i] - q
+			continue
+		var best := reach2
+		for j in _window[i]:
+			if point[j].x != INF and q.distance_squared_to(point[j]) < best:
+				best = q.distance_squared_to(point[j])
+				new_edge[i] = point[j] - q
+	for i in n:
+		if _plastic[i] == 1:
+			rest[i] += dq[i]
+			edge[i] = new_edge[i]
+
+
 ## Between two soft bodies a contact moves a patch, not one member (ADR 0008 item 1): each member
 ## of a soft body hands what it gets from other soft bodies this iteration (body_push: their
 ## contacts, the push-out and their friction) out in equal parts to the members of its region,
@@ -887,8 +1051,10 @@ func _find_regions(pred: PackedVector2Array, mat: PackedInt32Array, body: Packed
 		var c := (key[2 * i + 1] - lo.y) * gw + key[2 * i] - lo.x
 		sorted[fill[c]] = i
 		fill[c] += 1
+	_window.resize(n)
 	for i in soft:
 		var list := PackedInt32Array()
+		var window := PackedInt32Array()
 		var reach := _reach[i]
 		var cx := key[2 * i] - lo.x
 		var cy := key[2 * i + 1] - lo.y
@@ -903,9 +1069,14 @@ func _find_regions(pred: PackedVector2Array, mat: PackedInt32Array, body: Packed
 				var c := y * gw + x
 				for k in range(start[c], start[c + 1]):
 					var j := sorted[k]
-					if body[j] == body[i] and rest[i].distance_squared_to(rest[j]) <= reach * reach:
+					if body[j] != body[i]:
+						continue
+					if _plastic[i] == 1:
+						window.append(j)
+					if rest[i].distance_squared_to(rest[j]) <= reach * reach:
 						list.append(j)
 		out[i] = list
+		_window[i] = window
 	return out
 
 

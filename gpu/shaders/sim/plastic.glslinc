@@ -1,0 +1,30 @@
+// Plasticity (docs/adr/0012-plasticity.md): shared by body_plastic, body_outline and body_rest,
+// which run in that order after each substep's last solver iteration, while a body of a soft
+// material with plasticity exists. Included after common.glslinc.
+//   body_plastic  each member's rest offset move, into body_push (free after the last iteration)
+//   body_outline  each boundary member's outline point on the moved rest shape, into scratch
+//                 (free until velocity_xsph)
+//   body_rest     the moved rest offset and way out, into rest_offset
+// Each pass reads its neighbours' data from the pass before, so no member reads another's
+// half-written rest offset. Mirror: cpu_ref/particle_step.gd _plastic_flow, _plastic_room,
+// _plastic_outline.
+
+// Mirror: SimParams.PLASTIC_* (in spacings; the step per 1/60 s).
+const float PLASTIC_YIELD = 0.5;
+const float PLASTIC_STEP = 0.1;
+const float PLASTIC_LINK = 1.5;
+const float PLASTIC_GAP = 0.7;
+const float PLASTIC_REACH = 3.0;
+// body_outline's scratch for an inner member (not a boundary member): no outline point.
+const float PLASTIC_INNER = 1e30;
+
+// A member of a soft body whose material has plasticity (Material.more.w). Sorted index.
+bool plastic_member(uint t) {
+	uint m = s_material(t);
+	return s_body(t) != 0u && soft_material(m) && materials[m].more.w > 0.0;
+}
+
+// The most a rest offset moves in a substep, in px.
+float plastic_step() {
+	return PLASTIC_STEP * params.spacing * params.dt * 60.0;
+}

@@ -5,7 +5,7 @@
 // (powder_liquid_drag, body_liquid_drag), and stickiness while any material has it (stick.glslinc,
 // ADR 0011), written to scratch so every particle reads its neighbours' unmodified velocities.
 
-// common.glslinc stamp: Params 128 B, v21. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v22. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "liquid.glslinc"
 #include "powder.glslinc"

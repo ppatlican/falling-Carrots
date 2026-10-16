@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cosu44pe2hv3o"
+path="res://.godot/imported/body_outline.glsl-33c2f7fdb656fab18768b0867dd3bb4c.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/body_outline.glsl"
+dest_files=["res://.godot/imported/body_outline.glsl-33c2f7fdb656fab18768b0867dd3bb4c.res"]
+
+[params]
+

@@ -49,8 +49,11 @@ const TEMP_FIELDS := ["ignition_temp", "boil_temp", "melt_temp"]
 ##   region: a soft body's region radius in spacings (ADR 0005): each member is shape-matched
 ##   with the members whose rest offsets lie within it. 1.5 takes its 8 lattice neighbours (the
 ##   floppiest), 2.0 (H) also the 4 two spacings out. Read only at stiffness < 1.
+##   plasticity: how much of a soft body's deformation past the yield it keeps, per 1/60 s (ADR
+##   0012): 0 springs back (jelly), 1 keeps all of it at once (dough). Read only at stiffness < 1.
 const CLUSTER_FIELDS := [
 	["region", 1.5, 2.0],
+	["plasticity", 0.0, 1.0],
 ]
 ## Narrower ranges of NUMBER_FIELDS columns for one class: { class: [[name, min, max], ...] }.
 ## Each end was checked on the GPU probe (ADR 0001 decision 4, ADR 0007).
@@ -72,7 +75,7 @@ const CLASS_RANGES := {
 const PANEL_FIELDS := {
 	"liquid": ["density", "viscosity", "drag", "cohesion", "adhesion"],
 	"powder": ["density", "friction", "drag", "cohesion", "adhesion"],
-	"cluster": ["density", "friction", "drag", "stiffness", "region", "cohesion", "adhesion"],
+	"cluster": ["density", "friction", "drag", "stiffness", "region", "plasticity", "cohesion", "adhesion"],
 	"gas": [],
 	"static": [],
 }
@@ -82,7 +85,7 @@ const PANEL_FIELDS := {
 ##   vec4  density, friction, viscosity, drag           offset 16
 ##   vec4  wind_coupling, stiffness, conductivity, heat_capacity  offset 32
 ##   uvec4 class, 0, 0, 0                               offset 48
-##   vec4  region (0 for non-clusters), cohesion, adhesion, 0 (plasticity later)  offset 64
+##   vec4  region, cohesion, adhesion, plasticity (region and plasticity 0 for non-clusters)  offset 64
 const GPU_STRIDE := 80
 
 ## Rows keyed by material id (int). Each row is the Dictionary from the file.
@@ -249,6 +252,7 @@ func pack_row(id: int) -> PackedByteArray:
 	b.encode_float(64, float(row.get("region", 0.0)))
 	b.encode_float(68, float(row.cohesion))
 	b.encode_float(72, float(row.adhesion))
+	b.encode_float(76, float(row.get("plasticity", 0.0)))
 	return b
 
 

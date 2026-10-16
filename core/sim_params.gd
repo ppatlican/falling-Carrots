@@ -101,6 +101,21 @@ const BODY_KICK := 4.0
 ## Mirror: SWEEP_DEPTH in body_sweep.glsl.
 const SWEEP_DEPTH := 0.25
 
+## Plasticity (ADR 0012; body_plastic.glsl, ParticleStep._plastic_flow). A member of a soft body
+## whose material has plasticity keeps the part of its offset from the body's best fit (the body
+## frame) past PLASTIC_YIELD spacings: its rest offset moves toward where it is, by at most
+## PLASTIC_STEP spacings per 1/60 s. Rest offsets less than PLASTIC_LINK spacings apart (the rest
+## lattice's neighbours, as rest_outline and body_pieces count them) stay within it and at least
+## PLASTIC_GAP apart, so the rest lattice can't tear or collapse onto itself.
+## Mirror: body_plastic.glsl.
+const PLASTIC_YIELD := 0.5
+const PLASTIC_STEP := 0.1
+const PLASTIC_LINK := 1.5
+const PLASTIC_GAP := 0.7
+## An inner member takes a boundary member's outline point within PLASTIC_REACH spacings of it on
+## the rest shape (ParticleStep._plastic_outline); deeper, it keeps its way out.
+const PLASTIC_REACH := 3.0
+
 ## Liquid density projection on a coarse grid (gpu/shaders/sim/hydro.glslinc): cell size
 ## in hash cells, the density (over rest) below which a cell is air, the SOR
 ## over-relaxation, the share of a cell's compression removed per 1/60 s, the density from

@@ -42,7 +42,7 @@ Read only the section for the problem at hand. Fetch one paper section at a time
 
 ## Soft & rigid bodies, ropes (OE-CAKE-style features; ADR 0001)
 - **Meshless Deformations Based on Shape Matching** (Müller et al. 2005): https://graphics.stanford.edu/courses/cs468-05-fall/Papers/p471-muller.pdf
-  Core of the cluster-solid class: rigid blocks (R only), jelly (linear/quadratic blend), overlapping clusters, plasticity for dough.
+  Core of the cluster-solid class: rigid blocks (R only), jelly (linear/quadratic blend), overlapping clusters, plasticity for dough. Section 4.5 (plasticity: a yield c_yield on the deformation S - I, creep c_creep, a cap c_max on the plastic state S_p, det S_p = 1 to keep volume) is what ADR 0012 adapts to rest offsets: yield and creep as written, the cap as a band on the rest lattice's links; the volume part isn't built (ADR 0012 Known limits).
 - **FastLSM: Fast Lattice Shape Matching for Robust Real-Time Deformation** (Rivers & James, SIGGRAPH 2007): https://doi.org/10.1145/1275808.1276480
   Shape matching over small overlapping regions of a lattice, one region per particle: bodies bend locally, region size sets how stiff. The basis of ADR 0005 (soft bodies bend). It splits each particle's mass over the regions that hold it, which keeps a body's momentum; we fit regions unweighted, the likely cause of a lopsided soft body creeping sideways (STATUS Known issues). ADR 0008 shares a soft member's push from another soft body over its region the same way (each member hands out equal shares), so the push is kept. Built with Jacobi averaging and 8 iterations a frame, a long or big body slumps: a pull crosses it in about (length / region)² iterations (ADR 0005 Known limits).
 - **Hierarchical Position Based Dynamics** (Müller, VRIPHYS 2008; on Matthias Müller's publications page): solves on coarser particle levels too, so a constraint's effect crosses a big body in few iterations. The lead for stiffer long jellies if the owner wants them (ADR 0005, Decided with the owner).
@@ -64,7 +64,7 @@ Read only the section for the problem at hand. Fetch one paper section at a time
 
 ## Stickiness & thick liquids (cohesion, adhesion, viscosity range)
 - **Particle-based Viscoelastic Fluid Simulation** (Clavet, Beaudoin, Poulin 2005): http://www.ligum.umontreal.ca/Clavet-2005-PVFS/pvfs.pdf
-  Sticky and stringy fluids from a particle model: viscosity impulses that go well past XSPH, springs between neighbours for elasticity and plasticity, stickiness to objects.
+  Sticky and stringy fluids from a particle model: viscosity impulses that go well past XSPH, springs between neighbours for elasticity and plasticity, stickiness to objects. (Its plastic springs, rest lengths that yield past a ratio, were the other model for ADR 0012; not used: the cluster solids have no springs.)
 - **Versatile Surface Tension and Adhesion for SPH Fluids** (Akinci, Akinci, Teschner 2013): https://cg.informatik.uni-freiburg.de/publications/2013_SIGGRAPH_surfaceTensionAdhesion.pdf
   Separate cohesion and adhesion terms that stay stable; maps onto the `cohesion` and `adhesion` columns.
 

@@ -10,7 +10,8 @@
 ## Which groups to run for a change: docs/agents/testing.md.
 ##
 ## Parallel: with more than one test selected, each test runs in its own child Godot process,
-## up to -j N at once (default: half the logical cores, at least 1; -j 1 runs them one after
+## up to -j N at once, each at below normal priority (default: a quarter of the logical cores,
+## 1 to 4; -j 1 runs them one after
 ## another in this process). The longest run first, by the times the last runs took
 ## (user://test_durations.json; a test with no time yet counts as the longest), so the suite
 ## takes about as long as its slowest test. Each test's output is printed as one block when it
@@ -38,7 +39,8 @@ func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
 	var list_only := args.has("--list")
 	var child := args.has("--child")
-	var jobs := maxi(1, OS.get_processor_count() / 2)
+	# A quarter of the logical cores, at most 4: more made the owner's PC hang (2026-10-16).
+	var jobs := clampi(OS.get_processor_count() / 4, 1, 4)
 	var only := PackedStringArray()
 	var k := 0
 	while k < args.size():
@@ -101,14 +103,16 @@ func _initialize() -> void:
 		return
 	if child or jobs == 1 or selected.size() <= 1:
 		for t in selected:
-			if child:
+			if child:  # on both streams, so the parent reads only this test's errors
 				print(BEGIN)
+				printerr(BEGIN)
 			if _run_one(t[0], t[1]):
 				passed += 1
 			else:
 				failed += 1
 			if child:
 				print(END)
+				printerr(END)
 	else:
 		var r := _run_parallel(selected, jobs)
 		passed += r.x
@@ -150,8 +154,17 @@ func _run_parallel(selected: Array, jobs: int) -> Vector2i:
 		while running.size() < jobs and not queue.is_empty():
 			var t: Array = queue.pop_front()
 			var id: String = t[0] + "::" + t[1]
-			var p := OS.execute_with_pipe(exe, PackedStringArray(["--headless", "--path", project,
-					"--script", "res://tests/run_tests.gd", "--", "--child", id]), false)
+			var args := PackedStringArray(["--headless", "--path", project,
+					"--script", "res://tests/run_tests.gd", "--", "--child", id])
+			var p := {}
+			if OS.get_name() == "Windows":
+				# Below normal priority, so the desktop and the owner's own windows come first.
+				var line := PackedStringArray(["/c", "start", "\"\"", "/b", "/wait", "/belownormal", exe])
+				line.append_array(args)
+				p = OS.execute_with_pipe("cmd.exe", line, false)
+			else:
+				args.insert(0, exe)
+				p = OS.execute_with_pipe("nice", args, false)
 			if p.is_empty():
 				print("FAIL %s: could not start a test process" % id)
 				failed += 1
@@ -210,19 +223,25 @@ func _report_child(c: Dictionary, times: Dictionary) -> Vector2i:
 	return Vector2i(1, 0) if result.begins_with("PASS ") and not crashed else Vector2i(0, 1)
 
 
-## A child's stderr without what the MCP toolkit addon (an autoload, so it starts in every
-## process) prints: its log lines, and the warnings it raises when many processes start at once
-## and race on its registry file. A message is a line and the indented lines under it.
+## What a child wrote to stderr while its test ran (between BEGIN and END: a broken test file
+## every child loads is reported once by the parent, not by every test), without what the MCP
+## toolkit addon (an autoload, so it starts in every process) prints: its log lines, and the
+## warnings it raises when many processes start at once and race on its registry file. A message
+## is a line and the indented lines under it.
 static func _test_errors(err: String) -> PackedStringArray:
 	var out := PackedStringArray()
 	var block := PackedStringArray()
-	for line in (err.replace("\r", "") + "\nend").split("\n"):
-		if line != "" and line[0] != " " and line[0] != "\t":
+	var inside := false
+	for line in err.replace("\r", "").split("\n"):
+		var starts := line == BEGIN or line == END or (line != "" and line[0] != " " and line[0] != "\t")
+		if starts:  # the block so far is a whole message
 			var text := "\n".join(block)
-			if not block.is_empty() and text.find("godot_mcp_toolkit") < 0 and text.find("[MCP") < 0:
+			if inside and not block.is_empty() and text.find("godot_mcp_toolkit") < 0 and text.find("[MCP") < 0:
 				out.append_array(block)
 			block = PackedStringArray()
-		if line.strip_edges() != "":
+		if line == BEGIN or line == END:
+			inside = line == BEGIN
+		elif line.strip_edges() != "":
 			block.append(line)
 	return out
 

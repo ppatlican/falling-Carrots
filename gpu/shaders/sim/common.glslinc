@@ -49,7 +49,8 @@ struct Material {
 	vec4 phys;   // density, friction, viscosity, drag
 	vec4 extra;  // wind_coupling, stiffness, conductivity, heat_capacity (later milestones)
 	uvec4 info;  // class, unused x3
-	vec4 more;   // region (cluster materials, in spacings; ADR 0005), cohesion, adhesion (ADR 0011), unused
+	vec4 more;   // region (cluster materials, in spacings; ADR 0005), cohesion, adhesion (ADR 0011),
+	             // plasticity (cluster materials; ADR 0012, plastic.glslinc)
 };
 layout(set = 0, binding = 14, std430) buffer Materials { Material materials[]; };
 

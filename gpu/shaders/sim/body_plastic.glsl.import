@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bjfeyrfu0iwgb"
+path="res://.godot/imported/body_plastic.glsl-0759ddb7eaa0e22cbc57e8a401d1657b.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/body_plastic.glsl"
+dest_files=["res://.godot/imported/body_plastic.glsl-0759ddb7eaa0e22cbc57e8a401d1657b.res"]
+
+[params]
+

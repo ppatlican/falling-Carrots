@@ -17,6 +17,8 @@ const WIDTH := 132
 ## Columns whose range spans orders of magnitude (density 0.01-100, drag 0-60 per second) move
 ## along a power curve, so the shipped values sit away from the left end of the track.
 const CURVED := ["density", "drag"]
+## Columns shown only below stiffness 1, where they are read.
+const SOFT_ONLY := ["region", "plasticity"]
 const CURVE_POWER := 3.0
 ## Slider positions run 0..1 in this many steps.
 const STEPS := 1000
@@ -91,9 +93,14 @@ func show_material(id: int, row: Dictionary) -> void:
 		r.slider.value = to_slider(float(row[column]), r.range, column in CURVED)
 		r.value.text = _format(float(row[column]))
 	_syncing = false
-	# A region is read only below stiffness 1 (ADR 0005).
-	if _rows.has("region"):
-		_rows.region.box.visible = float(row.stiffness) < 1.0
+	_show_soft_rows(float(row.get("stiffness", 1.0)) < 1.0)
+
+
+## A region and plasticity are read only below stiffness 1 (ADR 0005, ADR 0012).
+func _show_soft_rows(soft: bool) -> void:
+	for column in SOFT_ONLY:
+		if _rows.has(column):
+			_rows[column].box.visible = soft
 
 
 func _build_sliders(cls: String) -> void:
@@ -129,8 +136,8 @@ func _on_slider(s: float, column: String) -> void:
 	var r: Dictionary = _rows[column]
 	var v := from_slider(s, r.range, column in CURVED)
 	r.value.text = _format(v)
-	if column == "stiffness" and _rows.has("region"):
-		_rows.region.box.visible = v < 1.0
+	if column == "stiffness":
+		_show_soft_rows(v < 1.0)
 	value_changed.emit(_id, column, v)
 
 

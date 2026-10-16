@@ -260,8 +260,8 @@ func _initialize() -> void:
 			stroke_depth = float(a.substr(6))
 		elif a.begins_with("span="):
 			stroke_span = float(a.substr(5))
-		elif a in ["grid", "bare", "trace", "refs"]:
-			pass  # debug: water scenarios print grid columns
+		elif a in ["grid", "bare", "trace", "refs", "ptrace"]:
+			pass  # debug: water scenarios print grid columns; ptrace: plastic bodies' tightest rest pair
 		else:
 			names = a
 	for nm in names.split(","):
@@ -724,6 +724,7 @@ func _scenario_brush(brush: Dictionary) -> void:
 
 func _sample(f: int, b: Dictionary) -> void:
 	var bodies := _bodies_of(b)
+	_sample_plastic(f, bodies)
 	if sc.name in SOFT_STACKS:
 		_sample_soft_stack(f, bodies)
 	match sc.name:
@@ -1111,6 +1112,76 @@ func _members_in_lattice(a: Dictionary, b: Dictionary) -> int:
 		if q_p.x > lo.x and q_p.x < hi.x and q_p.y > lo.y and q_p.y < hi.y:
 			n += 1
 	return n
+
+
+## Plasticity (ADR 0012), in any scenario: for each soft body whose material has plasticity, at
+## the end a PLASTIC line with its rest shape's height and width (the rest lattice it was made
+## with is upright, so they read the dent or flattening), the most a rest offset moved over the
+## last 120 frames about their mean (creep), the tightest pair of rest offsets (the lattice band,
+## from 0.7 spacing), and how far its boundary members' way out (fewer than 8 rest neighbours
+## within 1.5 spacings) is from half a spacing out on the rest shape now (the outline following).
+func _sample_plastic(f: int, bodies: Dictionary) -> void:
+	if OS.get_cmdline_user_args().has("ptrace") and f % 30 == 0:
+		for id in bodies:
+			var r: PackedVector2Array = bodies[id].rest
+			var best := INF
+			var pa := Vector2i(-1, -1)
+			for a in r.size():
+				for b in range(a + 1, r.size()):
+					if r[a].distance_to(r[b]) < best:
+						best = r[a].distance_to(r[b])
+						pa = Vector2i(a, b)
+			if pa.x >= 0:
+				print("  ptrace f=%d body %d tightest %.3f px: %s %s pos %s %s" % [f, id, best, r[pa.x], r[pa.y], bodies[id].pos[pa.x], bodies[id].pos[pa.y]])
+	var late: bool = f >= sc.frames - 120 and not sc.has("plastic_rest") and f < sc.frames
+	if not late and f != sc.frames:
+		return
+	if late:
+		sc.plastic_rest = {}
+	for id in bodies:
+		var m: int = sim._bodies[id].get("material", -1) if id < sim._bodies.size() else -1
+		if m < 0 or float(table.materials[m].stiffness) >= 1.0 or float(table.materials[m].get("plasticity", 0.0)) <= 0.0:
+			continue
+		var rest: PackedVector2Array = bodies[id].rest
+		if late:
+			sc.plastic_rest[id] = rest
+			continue
+		var sp := SimParams.SPACING
+		var lo := Vector2(INF, INF)
+		var hi := -lo
+		var mean := Vector2.ZERO
+		for q in rest:
+			lo = lo.min(q)
+			hi = hi.max(q)
+			mean += q
+		mean /= rest.size()
+		var moved := -1.0
+		var before: PackedVector2Array = sc.get("plastic_rest", {}).get(id, PackedVector2Array())
+		if before.size() == rest.size():
+			var mean0 := Vector2.ZERO
+			for q in before:
+				mean0 += q
+			mean0 /= before.size()
+			moved = 0.0
+			for k in rest.size():
+				moved = maxf(moved, (rest[k] - mean).distance_to(before[k] - mean0))
+		var tight := INF
+		var off := 0.0
+		var boundary := 0
+		for i in rest.size():
+			var n := 0
+			var normal := Vector2.ZERO
+			for j in rest.size():
+				var d2 := rest[i].distance_squared_to(rest[j])
+				if j != i and d2 < 2.25 * sp * sp:
+					n += 1
+					normal += (rest[i] - rest[j]).normalized()
+					tight = minf(tight, sqrt(d2))
+			if n < 8 and normal.length() > 1e-4:
+				boundary += 1
+				off = maxf(off, bodies[id].e[i].distance_to(0.5 * sp * normal.normalized()))
+		print("PLASTIC %s body %d: %d members, rest shape %.2f x %.2f px, rest moved over the last 120 frames %.4f px, tightest rest pair %.2f px, %d boundary members' way out off by %.4f px"
+				% [sc.name, id, rest.size(), hi.x - lo.x, hi.y - lo.y, moved, tight, boundary, off])
 
 
 func _sample_soft(f: int, bodies: Dictionary) -> void:

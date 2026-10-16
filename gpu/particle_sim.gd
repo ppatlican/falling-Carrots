@@ -24,6 +24,10 @@
 ##   regions   soft bodies bend (ADR 0005): after each body pass, every member of a soft body
 ##             fits its region (body_region_fit) and moves toward its regions' goals
 ##             (body_region_goal), one thread per particle; skipped while no soft body exists
+##   plastic   plasticity (ADR 0012): after a substep's last iteration, members of soft bodies
+##             whose material has plasticity move their rest offsets toward their shape
+##             (body_plastic) and the outline follows (body_outline, body_rest); skipped while
+##             no such body exists
 ##   velocity  update, XSPH, commit
 ##   render    clear image, draw liquid points, then powder points on top
 ##
@@ -46,6 +50,7 @@ const KERNELS := [
 	"hash_clear", "hash_count", "scan_local", "scan_blocks", "scan_add", "hash_scatter",
 	"hydro_splat", "hydro_phi", "hydro_solve", "body_sweep", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
 	"body_project", "body_match", "body_region_fit", "body_region_goal",
+	"body_plastic", "body_outline", "body_rest",
 	"velocity_update", "velocity_xsph", "velocity_commit",
 	"render_clear", "render_points", "render_gap", "render_powder",
 ]
@@ -124,6 +129,11 @@ var _soft_materials := {}
 ## Materials with cohesion or adhesion (ADR 0011): while any is, Params.sticky is 1 and
 ## velocity_xsph runs the stickiness loop (stick.glslinc); otherwise it costs nothing.
 var _sticky_materials := {}
+## Material ids with plasticity over 0 (ADR 0012): while a body of one that is also soft exists,
+## the plastic pass runs. _ever_plastic keeps every id that had any this session: their bodies'
+## rest offsets may differ from the copy made at their spawn, so a split reads them back.
+var _plastic_materials := {}
+var _ever_plastic := {}
 ## Bodies waiting to spawn, one per frame: { "id", "material", "spawn" (bytes), "mean", "count" }.
 var _pending_bodies: Array = []
 ## Ids found empty, whose GPU records are zeroed next frame.
@@ -157,6 +167,7 @@ func _init(ctx, particle_cap: int, solver_iterations: int, material_table, subst
 		if float(material_table.materials[id].stiffness) < 1.0:
 			_soft_materials[id] = true
 		_note_sticky(material_table, id)
+		_note_plastic(material_table, id)
 	_grid = SimParams.grid_size()
 	_n_cells = _grid.x * _grid.y
 	_rest_density = ParticleStep.rest_density_for(SimParams.H, SimParams.SPACING)
@@ -301,6 +312,7 @@ func _build_passes_rt() -> void:
 			_ctx.add_pass("bodies", [d.call("body_match", 0)])
 			_ctx.add_pass("regions", [d.call("body_region_fit", 0), d.call("body_region_goal", 0)])
 			solve = []
+		_ctx.add_pass("plastic", [d.call("body_plastic", 0), d.call("body_outline", 0), d.call("body_rest", 0)])
 		_ctx.add_pass("velocity", [d.call("velocity_update", all), d.call("velocity_xsph", all), d.call("velocity_commit", all)])
 	_ctx.add_pass("render", [d.call("render_clear", pixels), d.call("render_points", all), d.call("render_gap", all),
 			d.call("render_powder", all)])
@@ -372,12 +384,17 @@ func frame(brush: Dictionary, view_flags: int) -> void:
 		_split_ids = PackedInt32Array()
 		if not ids.is_empty():
 			_split_in_flight = true
-			_split_data = {"ids": ids, "first": split_range.x, "frame": _frame, "clears": _clears}
+			# A body of a material that had plasticity: its rest offsets are the GPU's (ADR 0012).
+			var need_rest := false
+			for id in ids:
+				need_rest = need_rest or _ever_plastic.has(_bodies[id].get("material", -1))
+			_split_data = {"ids": ids, "first": split_range.x, "frame": _frame, "clears": _clears, "need_rest": need_rest}
+	var split_rest: bool = split_range.y > split_range.x and _split_data.get("need_rest", false)
 	var freed := _freed_ids
 	_freed_ids = PackedInt32Array()
 	RenderingServer.call_on_render_thread(_frame_rt.bind(_push(brush, view_flags), int(brush.op), int(brush.count),
 			float(brush.get("radius", SimParams.BRUSH_RADIUS)), clear, spawn, split_count, freed, _body_max_id(),
-			check_bytes, split_range, _frame, _any_soft()))
+			check_bytes, split_range, _frame, _any_soft(), _any_plastic(), split_rest))
 
 
 ## Empties the pool at the start of the next frame. Bodies are forgotten now, so bodies
@@ -458,6 +475,7 @@ func update_material(material_table, id: int) -> void:
 	for k in row.size():
 		_material_bytes[id * MaterialTable.GPU_STRIDE + k] = row[k]
 	_note_sticky(material_table, id)
+	_note_plastic(material_table, id)
 	var became_soft := false
 	if float(material_table.materials[id].stiffness) < 1.0:
 		became_soft = not _soft_materials.has(id)
@@ -475,6 +493,15 @@ func _note_sticky(material_table, id: int) -> void:
 		_sticky_materials[id] = true
 	else:
 		_sticky_materials.erase(id)
+
+
+## Keeps _plastic_materials and _ever_plastic up to date with a material's row.
+func _note_plastic(material_table, id: int) -> void:
+	if float(material_table.materials[id].get("plasticity", 0.0)) > 0.0:
+		_plastic_materials[id] = true
+		_ever_plastic[id] = true
+	else:
+		_plastic_materials.erase(id)
 
 
 func _update_material_rt(id: int, row: PackedByteArray, became_soft: bool) -> void:
@@ -524,6 +551,15 @@ func _any_soft() -> bool:
 	return false
 
 
+## True while a body of a soft material with plasticity is in use: the plastic pass runs then.
+func _any_plastic() -> bool:
+	for id in range(1, _bodies.size()):
+		var m: int = _bodies[id].get("material", -1)
+		if _bodies[id].count > 0 and _soft_materials.has(m) and _plastic_materials.has(m):
+			return true
+	return false
+
+
 ## Highest body id in use: the body pass runs one workgroup per id up to it.
 func _body_max_id() -> int:
 	for id in range(_bodies.size() - 1, 0, -1):
@@ -534,7 +570,7 @@ func _body_max_id() -> int:
 
 func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear: bool, spawn: PackedByteArray,
 		split_count: int, freed: PackedInt32Array, body_groups: int, check_bytes: int, split_range: Vector2i,
-		frame_number: int, soft: bool) -> void:
+		frame_number: int, soft: bool, plastic: bool, split_rest: bool) -> void:
 	if not _gpu_ready:
 		return
 	if clear:
@@ -559,6 +595,9 @@ func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear:
 	var region_groups := ComputeContext.groups_for(cap) if soft else 0
 	_ctx.set_groups_rt("regions", 0, region_groups)
 	_ctx.set_groups_rt("regions", 1, region_groups)
+	var plastic_groups := ComputeContext.groups_for(cap) if plastic else 0
+	for k in 3:
+		_ctx.set_groups_rt("plastic", k, plastic_groups)
 	_ctx.set_push_all_rt(push)
 	_ctx.record_frame_rt()
 	if not _counter_in_flight:
@@ -572,7 +611,8 @@ func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear:
 		var e1: Error = _ctx.readback_async_rt("body_members", _on_split_data_rt.bind("members"),
 				split_range.x * 4, (split_range.y - split_range.x) * 4)
 		var e2: Error = _ctx.readback_async_rt("mat_flags", _on_split_data_rt.bind("flags"))
-		if e1 != OK or e2 != OK:
+		var e3: Error = _ctx.readback_async_rt("rest_offset", _on_split_data_rt.bind("rest")) if split_rest else OK
+		if e1 != OK or e2 != OK or e3 != OK:
 			_on_split_data_rt(PackedByteArray(), "failed")
 
 
@@ -602,14 +642,17 @@ func _on_split_data_rt(data: PackedByteArray, what: String) -> void:
 	_on_split_data.call_deferred(data, what)
 
 
-## Plans the split of the bodies in _split_data once both readbacks are in: one entry per
+## Plans the split of the bodies in _split_data once its readbacks are in (members, flags, and
+## for a body of a material that had plasticity the rest offsets, ADR 0012): one entry per
 ## member still live (its slot alive with the body's id), at most cap - 1 (body_spawn holds a
 ## header and 2 x cap - 2 entry rows); a body that doesn't fit waits for the next check.
 func _on_split_data(data: PackedByteArray, what: String) -> void:
 	if _split_data.is_empty():
 		return
 	_split_data[what] = data
-	if what != "failed" and not (_split_data.has("members") and _split_data.has("flags")):
+	var waiting: bool = not (_split_data.has("members") and _split_data.has("flags")) \
+			or (_split_data.need_rest and not _split_data.has("rest"))
+	if what != "failed" and waiting:
 		return
 	var job := _split_data
 	_split_data = {}
@@ -640,6 +683,8 @@ func _on_split_data(data: PackedByteArray, what: String) -> void:
 		if n + n_live > cap - 1:
 			_split_ids.append(id)
 			continue
+		if job.has("rest") and _ever_plastic.has(b.get("material", -1)):
+			b.rest = rest_from_readback(slots, job.rest)  # its rest shape as plasticity left it
 		var plan: Dictionary = plan_split(_bodies, id, slots, live, body_cap, cap)
 		entries.append_array(plan.entries)
 		n += plan.count
@@ -727,6 +772,19 @@ static func plan_split(bodies: Array, id: int, slots: PackedInt32Array, live: Pa
 			rows.encode_u32(at + 28, SPLIT_FIRST if j == 0 else 0)
 			count += 1
 	return {"entries": rows, "count": count, "new_ids": new_ids}
+
+
+## Rest offsets (xy of rest_offset, 16 bytes per slot) of these slots from a readback of the
+## whole buffer; a slot past its end reads (0, 0). A plastic body's rest shape is the GPU's, not
+## the copy made at its spawn (ADR 0012 item 5).
+static func rest_from_readback(slots: PackedInt32Array, data: PackedByteArray) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	out.resize(slots.size())
+	for k in slots.size():
+		var at := slots[k] * 16
+		if slots[k] >= 0 and at + 8 <= data.size():
+			out[k] = Vector2(data.decode_float(at), data.decode_float(at + 4))
+	return out
 
 
 ## Circle brush threads: the rest-spacing lattice over the brush's bounding square

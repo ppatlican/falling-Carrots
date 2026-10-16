@@ -23,8 +23,9 @@ Pick the CPU test groups and GPU probe scenarios a change can affect, run those,
 | `@hydro` | density projection grid: hand-made cells, p_ref under water, cork in wet sand, liquids by density | 9 | 22 s |
 | `@brush` | body brush strokes (`core/body_brush.gd`) | 7 | 2 s |
 | `@stick` | stickiness (ADR 0011): hanging from the ceiling, tearing, sticky clumps falling freely, a damp column, a liquid and a body sticking | 9 | 4 s |
+| `@plastic` | plasticity (ADR 0012): a dent and a drop kept, no creep at rest, a soft dough on sand, plasticity 0 changes nothing, the split's rest readback | 6 | ~100 s |
 
-The whole suite (81 tests) takes ~2.3 min (135 s on the owner's PC, 20 logical cores, 2026-10-16; it took ~20 min in one process before). The runner runs each selected test in its own child process, up to `-j N` at once (default half the logical cores; `-j 1` runs them one after another in one process, as before), longest first by the times the last run took (`user://test_durations.json`), and prints each test's lines as one block when it ends; a test that hits a script error fails (in one process it used to pass, since GDScript carries on). So a group takes about as long as its slowest test: the full suite's is `test_light_box_rises_from_the_bottom`, ~80 s alone and ~135 s beside nine others (~7 min before the speed-up below).
+Times above are with 10 processes. The default is now 4 at below normal priority (more made the owner's PC hang, 2026-10-16): the whole suite (87 tests) takes ~3.2 min (190 s), `@bodies-water` 100 s; earlier it took ~20 min in one process. The runner runs each selected test in its own child process, up to `-j N` at once (default a quarter of the logical cores, 1 to 4, each below normal priority so the desktop comes first; `-j 1` runs them one after another in one process, as before). Don't run a test suite and a GPU probe at the same time. It runs them longest first by the times the last run took (`user://test_durations.json`), and prints each test's lines as one block when it ends; a test that hits a script error fails (in one process it used to pass, since GDScript carries on). So a group takes about as long as its slowest test: the full suite's is `test_light_box_rises_from_the_bottom`, ~80 s alone and ~135 s beside nine others (~7 min before the speed-up below).
 
 **Speed of the CPU reference (2026-10-16).** Made ~2-5x faster without changing what it computes: all 81 tests print exactly the numbers they printed before (checked against a run of the code before). What was changed, so later edits keep it: per-substep caches of each particle's class, density, friction, region reach and soft flag (`_cache_particles`) instead of a material row lookup per neighbour pair; kernel constants worked out once (`_poly6_k`, `_spiky_k`, `_w6`); `_lambda`'s kernel values per pair kept for `_liquid_delta` in the same iteration (`_pair_g`, `_pair_w`); no `_contact_delta` call for a liquid particle with only liquid neighbours (it returns exactly zero); neighbour and region lists from a flat counting-sort grid, in the same order as before; `_hydro_solve`'s per-cell tests worked out once per solve instead of in each of its 32 sweeps; and no density projection grid in a dry step (no liquid, no wet body), where its pressure pushes nothing. Keep sums in the same order when editing these loops: floats added in another order give other last digits, and the printed numbers stop matching.
 
@@ -36,7 +37,7 @@ The whole suite (81 tests) takes ~2.3 min (135 s on the owner's PC, 20 logical c
 | a test file | the tests you changed | — |
 | `tests/run_tests.gd`, `test_case.gd` | `-- --list`, then `@quick` | — |
 | `tools/*_probe.gd` | — | the scenarios you changed, once |
-| `data/materials.json` | `@setup`, plus the groups of the material's class: water or oil `@liquids @hydro @bodies-water`, sand `@sand`, carrot or cork `@rigid @bodies-water`, jelly `@soft` | that material's scenarios at both ends of the parameter's range (ADR 0001, `gpu-probe.md`) |
+| `data/materials.json` | `@setup`, plus the groups of the material's class: water or oil `@liquids @hydro @bodies-water`, sand `@sand`, carrot or cork `@rigid @bodies-water`, jelly `@soft`, dough `@soft @plastic` | that material's scenarios at both ends of the parameter's range (ADR 0001, `gpu-probe.md`) |
 | `config.json` | `@setup` (CPU tests fix substeps and iterations themselves) | the scenarios the setting touches |
 | `core/sim_params.gd` | by constant: `HYDRO_*` `@hydro @liquids @bodies-water`; `BODY_*`, `STACK_K` `@rigid @soft @bodies-water`; powder constants `@sand @liquids`; `STICK_*` `@stick`; `SPACING`, `H`, `DT`, `GRAVITY`, `MAX_STEP` the full suite | as the matching shader rows |
 | `core/body_brush.gd` | `@brush` | `main.tscn` screenshots of a stroke |
@@ -46,7 +47,8 @@ The whole suite (81 tests) takes ~2.3 min (135 s on the owner's PC, 20 logical c
 | `tools/probe_params.gd` | — | any one probe with `set=` |
 | `cpu_ref/reactions.gd`, `conduction.gd` | none exist yet | — |
 | `cpu_ref/particle_step.gd`, `_match_shapes`, `make_body`, `_member_rot` | `@rigid @soft @erase @bodies-water` | — |
-| … `_match_regions`, `_find_regions`, `_soft`, `_region_reach`, `_self_contact`, `_share_pushes_over_regions` | `@soft` | — |
+| … `_match_regions`, `_find_regions`, `_soft`, `_region_reach`, `_self_contact`, `_share_pushes_over_regions` | `@soft @plastic` | — |
+| … `_plastic_flow`, `_plastic_room`, `_plastic_outline` | `@plastic` | — |
 | … `rest_outline`, `body_pieces`, `split_body`, `erase_particles`, `_first_fit` | `@erase @brush @rigid` | — |
 | … `_sweep_bodies`, `_contact_delta`, `_push_out`, `in_lattice_cell`, `stack_weight`, `body_stack_weight`, `stop_not_launch`, `limit_separation` | `@rigid @soft @sand @bodies-water` | — |
 | … `_hydro_*`, `hydro_*`, `_cradled` | `@hydro @liquids @bodies-water` | — |
@@ -58,6 +60,7 @@ The whole suite (81 tests) takes ~2.3 min (135 s on the owner's PC, 20 logical c
 | `gpu/shaders/sim/body_match`, `body_project` | `@setup` | `body_probe tests,boxdrop,boxhigh,plank,boxside,boxstack,waterjelly`; `body_project` also `corkstrip` and the `solve_pressure` row |
 | … `body_region_fit`, `body_region_goal` | `@setup` | `body_probe jelly,droop,wobble,squash,erasejelly,waterjelly` |
 | … `body_split` | `@setup` | `body_probe erasemid,erasejelly,erasebridge,erasedrag,reuse` |
+| … `body_plastic`, `body_outline`, `body_rest`, `plastic.glslinc` | `@setup` | `body_probe squash,wobble,sandjelly,waterjelly,jellystack,jellydrop,erasejelly,fold,softcap set=jelly.stiffness=S,jelly.plasticity=P` at P 0 and 1 and S 0.2, 0.8, 0.95; read the PLASTIC lines (ADR 0012 Results); `main.tscn` shots of dough |
 | … `body_sweep` | `@setup` | `body_probe boxhigh,plank,boxside,boxstack,sand` |
 | … `brush_*` | `@setup` | `body_probe erase,erasemid,reuse`; `gpu_probe water 600`; `main.tscn` screenshots of the brush |
 | … `hydro.glslinc`, `hydro_*` | `@setup` | `gpu_probe water 2400 3 gap=30 every=47`; `gpu_probe oil,water 4800 2 every=47` (layering, ADR 0010); `water_feel_probe layers 4800 every=47` with `mix=rows`, `mix=alt` and `mix=pourwater pour_y=150` (mixed starts); `water_feel_probe surface`, `bowl`; `body_probe watersink,waterfloat,pourfloor,sandcorks`; the sand checks |

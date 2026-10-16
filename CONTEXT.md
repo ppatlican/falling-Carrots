@@ -34,6 +34,13 @@ _Avoid_: Deformable
 **Jelly**:
 The springy soft-body material, as in OE-Cake.
 
+**Dough**:
+The soft-body material with plasticity: it keeps dents and flattening instead of springing back (ADR 0012).
+
+**Plasticity**:
+The cluster-solid parameter (0–1, soft bodies only): the share of a member's deformation past the yield (half a spacing, in its body's frame) that its rest shape takes on per 1/60 s. 0 springs back fully (jelly); 1 keeps all of it at once. Its rest lattice can't be squeezed below 0.7 of a spacing or torn, so a hard press stays partly elastic.
+_Avoid_: Memory, creep (creep is the slow drift it must not have)
+
 **Stiffness**:
 The cluster-solid parameter: the share of a body's shape error removed per 1/60 s (for a soft body, of each region's). 1 is a rigid body; lower is a soft body.
 
@@ -88,7 +95,7 @@ One group of cluster-solid particles, all of one material, that shape matching h
 _Avoid_: Cluster (for one body), object
 
 **Rest shape**:
-How a body's particles sit when nothing deforms it, stored as each particle's rest offset. Shape matching pulls the body back toward it, moved and turned to fit where the particles are now.
+How a body's particles sit when nothing deforms it, stored as each particle's rest offset. Shape matching pulls the body back toward it, moved and turned to fit where the particles are now. Plasticity edits it, and the outline follows.
 
 **Outline**:
 The edge of a body's rest shape, half a spacing outside its edge particles. A grain or water particle inside a body's outline is pushed out toward its nearest edge (the push-out).

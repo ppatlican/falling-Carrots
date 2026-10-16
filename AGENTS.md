@@ -18,7 +18,7 @@ When a task needs a subagent, delegate it through `/grok-cc:rescue` (the Grok CL
 
 ## Project docs
 
-- `CONTEXT.md`: the glossary. Use its terms (grain, pile, block fill, churn, slosh, squeezing, pudding, sleeping, density projection grid, rigid body, soft body, parameter, stickiness, CPU reference, GPU probe).
+- `CONTEXT.md`: the glossary. Use its terms (grain, pile, block fill, churn, slosh, squeezing, pudding, sleeping, density projection grid, rigid body, soft body, plasticity, dough, parameter, stickiness, CPU reference, GPU probe).
 - `docs/adr/`: decisions. `0001-oe-cake-direction.md` sets the direction (OE-Cake-style, rigid and soft bodies as cluster solids, per-material parameters the player adjusts) and lists what in the code still works against it.
 - `docs/SPEC.md`: what we're building and the rules the code must keep, including the GPU plumbing rules in 2.7. Read 2.7 before touching a shader.
 - `docs/STATUS.md`: what works, what's verified, open bugs with everything already tried, and what's next. Read Known issues before tuning the solver.
@@ -51,7 +51,7 @@ When a task needs a subagent, delegate it through `/grok-cc:rescue` (the Grok CL
 
 ### Running tests
 - Before running anything, pick what the change can affect from `docs/agents/testing.md`: changed file → CPU test groups and GPU probe scenarios. Name what you skipped and why in the report.
-- CPU tests: `--headless --script res://tests/run_tests.gd -- @quick @soft test_bodies.gd <method>` runs those groups, files and methods (`--list` prints them without running). Each test runs in its own child process, up to `-j N` at once (default half the logical cores; `-j 1` for one process). `@quick` (~20 s) suits any change; the full suite takes ~2.5 min, so run it before the final commit whenever the change reaches the CPU reference.
+- CPU tests: `--headless --script res://tests/run_tests.gd -- @quick @soft test_bodies.gd <method>` runs those groups, files and methods (`--list` prints them without running). Each test runs in its own child process at below normal priority, up to `-j N` at once (default 4 here; `-j 1` for one process); never run a test suite and a GPU probe at the same time, or more than ~4 Godot processes in all: more made the owner's PC hang. `@quick` (~30 s) suits any change; the full suite takes ~3 min, so run it before the final commit whenever the change reaches the CPU reference.
 - GPU probes: pass `--disable-vsync` (a third faster, same results).
 
 ### GDScript pitfalls seen here
