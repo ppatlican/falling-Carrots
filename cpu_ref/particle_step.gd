@@ -281,8 +281,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 				delta[i] = _body_pressure_delta(i, pred, mat, body, edge, bodies[body[i]], neighbours[i], phi, hydro_p, dt)
 			elif _cls[i] == MOCHI:
 				# Mochi in liquid (ADR 0018): as a liquid, over its mass, where the grid holds liquid, at most
-				# MOCHI_PRESSURE_MAX gravities over its mass (ADR 0019).
-				var gate := smoothstep(0.0, SimParams.MOCHI_WET_FILL, _body_liquid_fill(pred[i], phi))
+				# MOCHI_PRESSURE_MAX gravities over its mass (ADR 0019), only where liquid is round it (ADR 0021).
+				var gate := smoothstep(0.0, SimParams.MOCHI_WET_FILL, _body_liquid_fill(pred[i], phi)) 						* mochi_share_gate(_hydro_liquid_share(_hydro_cell_of(pred[i]), phi, _hydro_mochi))
 				delta[i] = mochi_pressure_push(_hydro_delta(pred[i], phi, hydro_p, dt) * gate, _rho[i], dt) if gate > 0.0 else Vector2.ZERO
 			else:
 				delta[i] = Vector2.ZERO
@@ -2082,6 +2082,33 @@ func _body_liquid_fill(x: Vector2, phi: PackedVector4Array) -> float:
 		var c := (c0 + Vector2i(k & 1, k >> 1)).clamp(Vector2i.ZERO, size - Vector2i.ONE)
 		v.append(phi[c.y * size.x + c.x].x)
 	return lerpf(lerpf(v[0], v[1], f.x), lerpf(v[2], v[3], f.x), f.y)
+
+
+## Liquid share of the liquid and mochi volume (mochi: each cell's, _hydro_mochi) in the 3 x 3 grid
+## cells round coarse cell c (ADR 0021): about 1 in open liquid, low inside a dough bed, pockets of
+## liquid caught in it included; 1 with neither. Mirror: hydro_liquid_share in hydro.glslinc.
+func _hydro_liquid_share(c: Vector2i, phi: PackedVector4Array, mochi: PackedFloat32Array) -> float:
+	var size := hydro_size(world_size)
+	var liquid := 0.0
+	var m := 0.0
+	for y in range(maxi(c.y - 1, 0), mini(c.y + 1, size.y - 1) + 1):
+		for cx in range(maxi(c.x - 1, 0), mini(c.x + 1, size.x - 1) + 1):
+			liquid += phi[y * size.x + cx].x
+			if mochi.size() > 0:
+				m += mochi[y * size.x + cx]
+	return liquid / (liquid + m) if liquid + m > 1e-4 else 1.0
+
+
+## The cell of the grid holding x (as solve_pressure picks it for hydro_mochi_open).
+func _hydro_cell_of(x: Vector2) -> Vector2i:
+	return Vector2i(x / hydro_cell_size()).clamp(Vector2i.ZERO, hydro_size(world_size) - Vector2i.ONE)
+
+
+## 1 where liquid is round a cell of the grid, 0 where dough closes it in, by its liquid share
+## (_hydro_liquid_share; ADR 0021): there mochi takes the grid's push.
+## Mirror: hydro_mochi_open in hydro.glslinc.
+static func mochi_share_gate(share: float) -> float:
+	return smoothstep(SimParams.MOCHI_SHARE_LO, SimParams.MOCHI_SHARE_HI, share)
 
 
 ## Grid pressure at x for a body's surface (body_p_sample): the bilinear sample, continued

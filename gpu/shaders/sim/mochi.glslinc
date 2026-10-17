@@ -24,9 +24,10 @@
 // mochi (mochi_enclosed) and its mochi neighbours trade momentum along gravity, the liquid up
 // (mochi_expel), so water caught inside a dough rises out of it. A mochi particle where the grid holds
 // liquid takes the grid's pressure push over its density, as a liquid does (solve_pressure), so a
-// dough floats, hangs or sinks in water by its density. A mochi particle's wet density and a liquid
-// particle's enclosure sums are kept in rest_offset of its slot, which only body members use otherwise
-// (neither is ever one): no new buffer.
+// dough floats, hangs or sinks in water by its density, unless dough is all round it (a pocket caught
+// inside a dough, ADR 0021). A mochi particle's wet density and a liquid particle's enclosure sums are
+// kept in rest_offset of its slot, which only body members use otherwise (neither is ever one): no new
+// buffer.
 
 const float MOCHI_REACH = 4.0 / 3.0;
 const float MOCHI_KE = 0.1;
@@ -59,6 +60,7 @@ const float MOCHI_WET_FILL = 0.05;
 // like a lid over the water: it bounced there and burst open again and again for ~20 s
 // (doughsandwich, ADR 0019). Mirror: SimParams.MOCHI_PRESSURE_MAX.
 const float MOCHI_PRESSURE_MAX = 1.25;
+// MOCHI_SHARE_LO, _HI (ADR 0021): in hydro.glslinc, beside hydro_mochi_open.
 
 bool mochi_material(uint m) { return materials[m].info.x == CLASS_MOCHI; }
 

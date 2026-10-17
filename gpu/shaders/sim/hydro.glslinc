@@ -187,6 +187,39 @@ float hydro_mochi_density(ivec2 ci) {
 	return sum * params.spacing * params.spacing / (a * a * inside);
 }
 
+// Liquid share of the liquid and mochi volume in the 3 x 3 cells (48 px) round coarse cell c (ADR 0021):
+// about 1 in open liquid, low inside a dough bed, pockets of liquid caught in it included; 1 with
+// neither. Mirror: ParticleStep._hydro_liquid_share.
+float hydro_liquid_share(ivec2 c) {
+	ivec2 size = hydro_size();
+	float liquid = 0.0;
+	float mochi = 0.0;
+	for (int y = max(c.y - 1, 0); y <= min(c.y + 1, size.y - 1); y++) {
+		for (int x = max(c.x - 1, 0); x <= min(c.x + 1, size.x - 1); x++) {
+			uint i = hydro_index(ivec2(x, y));
+			liquid += hydro_phi[i].x;
+			mochi += hydro_mochi[i];
+		}
+	}
+	return liquid + mochi > 1e-4 ? liquid / (liquid + mochi) : 1.0;
+}
+
+// Liquid share (hydro_liquid_share) from which liquid counts as round a dough rather than closed in by
+// it, and at which it fully does (ADR 0021): mochi there takes the grid's pressure push (solve_pressure),
+// round a pocket caught inside a dough bed it doesn't. Lifted there, the dough round a pocket was light
+// under the dry dough over it and turned over in bursts: the pops of "+10k oil" then "+10k dough"
+// (doughfall: dough faster than 30 px/s summed over 5-20 s after the drop, 9-12k with 2-3 burst seconds;
+// 0.3-5k, mostly none, with this). A dough dropped into a pool reads ~0.9 round it, a pocket ~0.03; from
+// 0.4 a 0.9 dough on the floor under water no longer rose. Mirror: SimParams.MOCHI_SHARE_LO, _HI.
+const float MOCHI_SHARE_LO = 0.2;
+const float MOCHI_SHARE_HI = 0.45;
+
+// 1 where liquid is round coarse cell c, 0 where dough closes it in (ADR 0021). Mirror:
+// ParticleStep.mochi_share_gate.
+float hydro_mochi_open(ivec2 c) {
+	return smoothstep(MOCHI_SHARE_LO, MOCHI_SHARE_HI, hydro_liquid_share(c));
+}
+
 // Liquid density over water's from a liquid mass m and volume x: m / x, and exactly 1 where they
 // are equal (water alone: Vulkan's division needn't be exact, and 0.9999999 would change water)
 // or there is no liquid.

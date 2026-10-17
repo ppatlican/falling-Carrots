@@ -233,6 +233,7 @@
 ##            where the dough ends against the water's surface (with set=dough.density=0.9 it should rise
 ##            and float, at 1.1 stay down), and water inside it
 ## liquid=NAME: the dough scenarios' "water" is that liquid instead (liquid=oil: the owner's oil and dough).
+## drop_y=Y: doughfall's dough has its bottom row at y Y (default 86: it lands at ~300 px/s).
 ## stiff=S region=W replace the jelly row's stiffness and region for this run (tuning).
 ## frames=N runs every scenario for N frames instead of its own count (checks over "the last 60
 ## frames" move with it), e.g. to see whether a soft stack that leans over comes to rest.
@@ -321,6 +322,7 @@ var param_frame := 0  # from "setat=N"
 var stroke_depth := STROKE_DEPTH  # from "depth=D" (sandstroke)
 var stroke_span := 170.0  # from "span=S" (sandstroke): half the stroke's length, px
 var liquid_name := "water"  # from "liquid=NAME": the dough scenarios' liquid
+var drop_y := 0.0  # from "drop_y=Y": doughfall's dough bottom row (0: its own)
 var drop_dx := 4.0  # from "drop_dx=D" (carrotjelly): the carrot's offset right of the jelly's centre, px
 
 
@@ -354,6 +356,8 @@ func _initialize() -> void:
 			drop_dx = float(a.substr(8))
 		elif a.begins_with("liquid="):
 			liquid_name = a.substr(7)
+		elif a.begins_with("drop_y="):
+			drop_y = float(a.substr(7))
 		elif a in ["grid", "bare", "trace", "refs", "ptrace"]:
 			pass  # debug: water scenarios print grid columns; ptrace: plastic bodies' tightest rest pair
 		else:
@@ -709,7 +713,8 @@ func _start(name: String) -> void:
 				"doughhuge":
 					sc.blocks = {1: [Vector2(X, 8.0 + 39.0 * sp), 250, 40]}
 				"doughfall":
-					sc.blocks = {240: [Vector2(X, 8.0 + 39.0 * sp), 250, 40]}  # "+10k water" (or oil), then "+10k dough"
+					# "+10k water" (or oil), then "+10k dough"; drop_y= sets its bottom row lower (a slower landing)
+					sc.blocks = {240: [Vector2(X, drop_y if drop_y > 0.0 else 8.0 + 39.0 * sp), 250, 40]}
 					sc.slots = SimParams.BENCH_BLOCK
 				"doughbed":
 					sc.blocks = {1: [Vector2(X, 8.0 + 39.0 * sp), 250, 40]}  # "+10k dough", then "+10k water"
@@ -1319,6 +1324,8 @@ func _sample_dough(f: int, b: Dictionary, bodies: Dictionary) -> void:
 		return
 	if sc.name in ["doughsandwich", "doughtwice"]:
 		_sample_sandwich(f, b, d)
+	if sc.name == "doughfall":
+		_sample_pops(f, b, d)
 	var fastest := 0.0
 	var fast_at := Vector2.ZERO
 	var c := Vector2.ZERO
@@ -1486,8 +1493,11 @@ func _sample_dough(f: int, b: Dictionary, bodies: Dictionary) -> void:
 					% [sc.name, pc.sizes.size(), under, n, deep, late, late_max],
 					late < 5.0 and (deep < n / 20 if sc.name == "doughsandlow" else big >= 0.9 * n))
 		"doughfall":
-			_result("doughfall: %d water inside the dough, %d under its top; gap median %.2f px, p90 %.2f, max %.2f, over 3 px %.0f%%; %d piece(s), 99%% under %.2f px/s (last 60; fastest %.2f)"
-					% [wet.inside, wet.under, wet.gap_med, wet.gap_p90, wet.gap_max, 100.0 * wet.gap_over3, pc.sizes.size(), late, late_max],
+			_result("doughfall: %d water inside the dough, %d under its top; gap median %.2f px, p90 %.2f, max %.2f, over 3 px %.0f%%; %d piece(s), 99%% under %.2f px/s (last 60; fastest %.2f); pops %d-%d s after the dough: liquid rising %d, dough fast %d (sample sums); from %d s: dough fast %d, %d burst second(s) (over %d), busiest to f=%d (%d); holes %d, %d sample(s) over %d"
+					% [wet.inside, wet.under, wet.gap_med, wet.gap_p90, wet.gap_max, 100.0 * wet.gap_over3, pc.sizes.size(), late, late_max,
+					POP_FROM / 60, POP_TO / 60, sc.get("pops_liq", 0), sc.get("pops_dough", 0), POP_LATE / 60, sc.get("pops_late", 0),
+					sc.get("pop_bursts", 0), POP_BURST, sc.get("pop_peak_at", -1), sc.get("pop_peak", 0),
+					sc.get("pops_holes", 0), sc.get("pop_hole_samples", 0), POP_HOLE],
 					wet.gap_med < 2.5 * sp and wet.gap_over3 < 0.05)  # liquid caught in the fall is not judged here
 		"doughbed":
 			_result("doughbed: %d water inside the dough, %d under its top; gap median %.2f px, p90 %.2f; %d piece(s), 99%% under %.2f px/s (last 60; fastest %.2f)"
@@ -2404,6 +2414,83 @@ func _water_inside(b: Dictionary, d: Dictionary) -> int:
 		if over and under:
 			water_in += 1
 	return water_in
+
+
+## doughfall: pops (ADR 0021), liquid caught in the dough at its landing bursting out through its top.
+## Every sample: liquid rising faster than POP_LIQUID_VY anywhere under the dough's top or within
+## POP_ABOVE spacings over it (per 4 px column, as _dough_wet), and dough faster than POP_DOUGH_V (a burst
+## throws dough too). A POP line every 60 frames sums the last 60 frames' samples; the result line sums
+## the samples from POP_FROM to POP_TO frames after the dough (4-20 s) and names the busiest second.
+const POP_LIQUID_VY := 60.0
+const POP_DOUGH_V := 30.0
+const POP_ABOVE := 3.0
+const POP_FROM := 240
+const POP_TO := 1200
+# The landing's splash still throws dough until ~5 s after it (3000-6000 a second at 4-5 s): the dough
+# sum from POP_LATE on, and the seconds from then whose dough sum is over POP_BURST, count pops alone.
+const POP_LATE := 300
+const POP_BURST := 1000
+# Samples from POP_LATE on with more holes than this count as holed.
+const POP_HOLE := 20
+
+func _sample_pops(f: int, b: Dictionary, d: Dictionary) -> void:
+	var ncol := int(SimParams.WORLD_SIZE.x / 4.0)
+	var dtop := PackedFloat32Array()
+	dtop.resize(ncol)
+	dtop.fill(INF)
+	for k in d.pos.size():
+		var col := clampi(int(d.pos[k].x / 4.0), 0, ncol - 1)
+		dtop[col] = minf(dtop[col], d.pos[k].y)
+	var liq := 0
+	for i in b.mat_flags.size() / 4:
+		var fl: int = b.mat_flags.decode_u32(i * 4)
+		if (fl & 0x100) == 0 or (fl & 0xFF) != water or b.vel.decode_float(i * 8 + 4) > -POP_LIQUID_VY:
+			continue
+		var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		if p.y > dtop[clampi(int(p.x / 4.0), 0, ncol - 1)] - POP_ABOVE * SimParams.SPACING:
+			liq += 1
+	var fast := 0
+	for v in d.vel:
+		if v.length() > POP_DOUGH_V:
+			fast += 1
+	# Holes: empty 4 x 4 px blocks (no particle of any kind) from POP_ABOVE spacings over the dough's
+	# top down to the floor, which a pop leaves as it empties a pocket and rises (the dark holes in the
+	# shots). The landing's splash leaves some to ~5 s.
+	var occ := {}
+	for i in b.mat_flags.size() / 4:
+		if (b.mat_flags.decode_u32(i * 4) & 0x100) != 0:
+			occ[Vector2i(int(b.pos.decode_float(i * 8) / 4.0), int(b.pos.decode_float(i * 8 + 4) / 4.0))] = true
+	var holes := 0
+	for col in ncol:
+		if dtop[col] == INF:
+			continue
+		for y in range(int((dtop[col] - POP_ABOVE * SimParams.SPACING) / 4.0), int(SimParams.WORLD_SIZE.y / 4.0) - 1):
+			if not occ.has(Vector2i(col, y)):
+				holes += 1
+	var t: int = f - 240  # the "+10k dough" (sc.blocks)
+	sc.pop_holes = sc.get("pop_holes", 0) + holes
+	if t > POP_LATE and t <= POP_TO:
+		sc.pops_holes = sc.get("pops_holes", 0) + holes
+		if holes > POP_HOLE:
+			sc.pop_hole_samples = sc.get("pop_hole_samples", 0) + 1
+	sc.pop_liq = sc.get("pop_liq", 0) + liq
+	sc.pop_dough = sc.get("pop_dough", 0) + fast
+	if t > POP_FROM and t <= POP_TO:
+		sc.pops_liq = sc.get("pops_liq", 0) + liq
+		sc.pops_dough = sc.get("pops_dough", 0) + fast
+	if t > POP_LATE and t <= POP_TO:
+		sc.pops_late = sc.get("pops_late", 0) + fast
+	if f % 60 == 0:
+		if t > POP_LATE and t <= POP_TO and sc.pop_dough > sc.get("pop_peak", -1):
+			sc.pop_peak = sc.pop_dough
+			sc.pop_peak_at = f
+		if t > POP_LATE and t <= POP_TO and sc.pop_dough > POP_BURST:
+			sc.pop_bursts = sc.get("pop_bursts", 0) + 1
+		print("  POP f=%d liquid rising over %.0f px/s in or %.0f spacings over the dough's top %d, dough over %.0f px/s %d, 4 px holes in or %.0f spacings over the dough %d (summed over the last 60 frames' samples)"
+				% [f, POP_LIQUID_VY, POP_ABOVE, sc.pop_liq, POP_DOUGH_V, sc.pop_dough, POP_ABOVE, sc.pop_holes])
+		sc.pop_holes = 0
+		sc.pop_liq = 0
+		sc.pop_dough = 0
 
 
 ## doughsandwich: the jitter of each dough by slot (the bed: slots live before the second fill), every

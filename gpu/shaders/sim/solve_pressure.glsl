@@ -5,7 +5,7 @@
 // the density projection grid's pressure (hydro_delta in hydro.glslinc) over their mass, into scratch,
 // clamped like solve_delta. solve_apply then applies it.
 // Body particles are pushed by the pressure on their wet surface (body_pressure_delta, ADR 0003); mochi
-// where the grid holds liquid as a liquid is (ADR 0018).
+// where the grid holds liquid as a liquid is (ADR 0018), unless dough is all round it (ADR 0021).
 
 // common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
@@ -176,8 +176,11 @@ void main() {
 		// (MOCHI_WET_FILL), so a dough floats, hangs or sinks by its density. Ungated, a dry dough bed's
 		// grid pressure (continued hydrostatically, though no water is in it) would hold it up. At most
 		// MOCHI_PRESSURE_MAX gravities over its mass (ADR 0019): the push that removes the water's
-		// compression would hold a dough up on its wet bottom rows.
-		float gate = smoothstep(0.0, MOCHI_WET_FILL, body_liquid_fill(s_pred[t]));
+		// compression would hold a dough up on its wet bottom rows. Only where liquid is round it at the
+		// scale of 3 x 3 cells (hydro_mochi_open, ADR 0021): dough round a pocket caught inside a dough
+		// bed, lifted, was light under the dry dough over it and turned over in bursts (the pops).
+		float gate = smoothstep(0.0, MOCHI_WET_FILL, body_liquid_fill(s_pred[t]))
+				* hydro_mochi_open(clamp(ivec2(s_pred[t] / hydro_cell_size()), ivec2(0), hydro_size() - ivec2(1)));
 		if (gate > 0.0) {
 			float rho = materials[s_material(t)].phys.x;
 			d = hydro_delta(s_pred[t]) * (gate / rho);

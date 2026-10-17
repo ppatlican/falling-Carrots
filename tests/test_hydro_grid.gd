@@ -81,6 +81,33 @@ func test_room_beside_mochi_is_pulled_beside_a_body_not() -> void:
 			"beside a body: p %.0f, open water %.0f (head %.0f)" % [p_body[6 * COLS + 1], p_body[open_row], head])
 
 
+## Where a mochi particle takes the grid's push (ADR 0021): a dough lump in open water reads mostly
+## liquid round it (the 3 x 3 cells) and takes it all; dough round a pocket of water caught deep in a
+## dough bed reads mostly mochi and takes none.
+func test_mochi_lifted_in_open_water_not_round_a_pocket() -> void:
+	var table = MaterialTable.new()
+	table.load_file()
+	var sim = ParticleStep.new(WORLD, table)
+	var cell := Vector2i(1, 4)
+	var phi := _pool()
+	var mochi := PackedFloat32Array()
+	mochi.resize(phi.size())
+	phi[4 * COLS + 1] = Vector4(0.4, 0.0, 0.6, 0.0)  # a lump in the pool
+	mochi[4 * COLS + 1] = 0.6
+	var lump: float = sim._hydro_liquid_share(cell, phi, mochi)
+	for y in range(1, ROWS):
+		for x in COLS:
+			phi[y * COLS + x] = Vector4(0.0, 0.0, 1.0, 0.0)  # a dough bed under one row of water
+			mochi[y * COLS + x] = 1.0
+	phi[4 * COLS + 1] = Vector4(0.3, 0.0, 0.7, 0.0)  # a pocket of water in it
+	mochi[4 * COLS + 1] = 0.7
+	var pocket: float = sim._hydro_liquid_share(cell, phi, mochi)
+	print("    liquid share round a lump in water %.2f (gate %.2f), round a pocket in a dough bed %.2f (gate %.2f)"
+			% [lump, ParticleStep.mochi_share_gate(lump), pocket, ParticleStep.mochi_share_gate(pocket)])
+	expect(ParticleStep.mochi_share_gate(lump) == 1.0, "a lump in open water takes the whole push")
+	expect(ParticleStep.mochi_share_gate(pocket) == 0.0, "dough round a pocket in a bed takes none")
+
+
 ## Air in the top row, water at rest density below.
 func _pool() -> PackedVector4Array:
 	var phi := PackedVector4Array()
