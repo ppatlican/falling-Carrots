@@ -142,6 +142,22 @@ func test_wet_pair_rule() -> void:
 	expect_eq(sim.mochi_enclosed(2), 0.0, "no dough near")
 
 
+## The grid's push on a wet dough particle (ADR 0019): the push that holds water up at rest (one
+## gravity) moves a dough of density 1.1 by 1 / 1.1 of it, as before, so it still sinks, floats or hangs
+## by its density; the push that removes the water's compression (up to half a spacing a step) is cut
+## to MOCHI_PRESSURE_MAX gravities over its density, so it can't hold a dough up on its wet rows.
+func test_wet_pressure_push_is_capped() -> void:
+	var dt := 1.0 / 120.0
+	var g := SimParams.GRAVITY * dt * dt
+	var rest := ParticleStep.mochi_pressure_push(Vector2(0.0, -g), 1.1, dt)
+	expect(absf(rest.y + g / 1.1) < 1e-6, "buoyancy at rest unchanged: %.5f against %.5f" % [rest.y, -g / 1.1])
+	var light := ParticleStep.mochi_pressure_push(Vector2(0.0, -g), 0.9, dt)
+	expect(absf(light.y + g / 0.9) < 1e-6, "a light dough still floats: %.5f" % light.y)
+	var squeezed := ParticleStep.mochi_pressure_push(Vector2(0.0, -0.5 * SimParams.SPACING), 1.1, dt)
+	expect(absf(squeezed.length() - SimParams.MOCHI_PRESSURE_MAX * g / 1.1) < 1e-6,
+			"compression push capped: %.4f px against %.4f" % [squeezed.length(), 0.5 * SimParams.SPACING / 1.1])
+
+
 ## Water caught in a dough under water rises out of it (ADR 0018): a 14 x 6 dough on the floor with one
 ## of its particles in the third row swapped for water, under a 4-row pool; after 2 s the water particle
 ## is over the dough's top and the dough is one piece on the floor.

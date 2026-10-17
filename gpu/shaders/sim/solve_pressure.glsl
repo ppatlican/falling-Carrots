@@ -174,10 +174,17 @@ void main() {
 	} else if (s_class(t) == CLASS_MOCHI) {
 		// Mochi in liquid (ADR 0018): as a liquid, over its mass, where the grid holds liquid at it
 		// (MOCHI_WET_FILL), so a dough floats, hangs or sinks by its density. Ungated, a dry dough bed's
-		// grid pressure (continued hydrostatically, though no water is in it) would hold it up.
+		// grid pressure (continued hydrostatically, though no water is in it) would hold it up. At most
+		// MOCHI_PRESSURE_MAX gravities over its mass (ADR 0019): the push that removes the water's
+		// compression would hold a dough up on its wet bottom rows.
 		float gate = smoothstep(0.0, MOCHI_WET_FILL, body_liquid_fill(s_pred[t]));
 		if (gate > 0.0) {
-			d = hydro_delta(s_pred[t]) * (gate / materials[s_material(t)].phys.x);
+			float rho = materials[s_material(t)].phys.x;
+			d = hydro_delta(s_pred[t]) * (gate / rho);
+			float most = MOCHI_PRESSURE_MAX * params.gravity * params.dt * params.dt / rho;
+			if (length(d) > most) {
+				d *= most / length(d);
+			}
 		}
 	}
 	// A body's pushes are capped after body_project has taken their rigid part, not here.

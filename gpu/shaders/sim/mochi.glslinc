@@ -52,6 +52,13 @@ const float MOCHI_EXPEL = 60.0;
 // pressure pushes it (solve_pressure). Inside a dry dough bed the grid continues the pressure
 // hydrostatically all the same, and that push would hold a dry dough up. Mirror: SimParams.MOCHI_WET_FILL.
 const float MOCHI_WET_FILL = 0.05;
+// Most the grid's pressure moves a mochi particle per step, in gravities (g dt^2) over its density: a
+// little over what the water it displaces holds up at rest (1 / density, so a dough of any density
+// still floats, hangs or sinks as before). Without it the push that removes the water's compression,
+// up to half a spacing a step (~36 g), held a dough that landed on a pool up on its wet bottom rows
+// like a lid over the water: it bounced there and burst open again and again for ~20 s
+// (doughsandwich, ADR 0019). Mirror: SimParams.MOCHI_PRESSURE_MAX.
+const float MOCHI_PRESSURE_MAX = 1.25;
 
 bool mochi_material(uint m) { return materials[m].info.x == CLASS_MOCHI; }
 
