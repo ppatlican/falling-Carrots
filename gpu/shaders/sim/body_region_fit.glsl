@@ -19,6 +19,11 @@
 // and 0.06). Written per slot as t = c - R c0 and R (region_frame), so
 // body_region_goal can turn any member's rest offset q into this region's goal t + R q.
 // p and q are summed relative to the member's own, to keep the sums small.
+// A member of a soft body held by pair joints (ADR 0016) takes instead the best rotation of its joint
+// vectors about itself: atan2 of the unweighted sum over its region of q x p and q . p, p and q
+// relative to its own. With that rotation each member's joints turn it with no net torque, and
+// joint_error's mean of the two ends' rotations then keeps the body's angular momentum as well as
+// its momentum. Its translation (xy) isn't used.
 // Mirror: cpu_ref/particle_step.gd _match_regions (the fit) and _find_regions.
 
 // common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
@@ -47,6 +52,7 @@ void main() {
 	vec2 sp = vec2(0.0);
 	vec2 sq = vec2(0.0);
 	vec2 sa = vec2(0.0);
+	vec2 star = vec2(0.0);  // joints: unweighted sum of (q . p, q x p) about the member
 	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
 		if (s_body(j) != body) continue;
@@ -59,10 +65,11 @@ void main() {
 		sp += w * p;
 		sq += w * q;
 		sa += w * vec2(dot(p, q), q.x * p.y - q.y * p.x);
+		star += vec2(dot(p, q), q.x * p.y - q.y * p.x);
 	} END_NEIGHBOURS
 	// Weighted sums about the weighted centroids: sum w (p - P/W).(q - Q/W) = sum w p.q - P.Q/W,
 	// and likewise for x.
-	vec2 a = sa - vec2(dot(sp, sq), sq.x * sp.y - sq.y * sp.x) / ws;
+	vec2 a = joint_material(m) ? star : sa - vec2(dot(sp, sq), sq.x * sp.y - sq.y * sp.x) / ws;
 	vec2 rot = region_frame[slot].zw;
 	if (dot(rot, rot) < 0.25) {
 		rot = vec2(1.0, 0.0);

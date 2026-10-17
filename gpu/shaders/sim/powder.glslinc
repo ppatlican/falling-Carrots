@@ -164,13 +164,16 @@ vec2 keep_order(uint t, uint j, uint body) {
 }
 
 // Error of the pair joint between members t and j of a soft body held by joints (ADR 0016): their
-// current vector p_j - p_t less their rest vector q_j - q_t turned by the normalized sum of both
-// ends' region rotations (the body's when that sum is ~0), clamped to JOINT_MAX_ERR spacings. From
-// j's side the same values give exactly the negated error, so with one share for both ends the
-// pair's moves are equal and opposite and the body's momentum is kept. Mirror: ParticleStep._joint_error.
+// current vector p_j - p_t less their rest vector q_j - q_t turned by each end's rotation, half each
+// (Phyzios' form; member_rot, the best rotation of each member's own joints, body_region_fit),
+// clamped to JOINT_MAX_ERR spacings. From j's side the same values give exactly the negated error,
+// so with one share for both ends the pair's moves are equal and opposite and the body's momentum is
+// kept. Summed over the body, the torques are each member's joints' about itself under its own
+// rotation, 0 for the best one, so its angular momentum is kept too. A normalized mean of the two
+// rotations broke that, and a jelly plank on two carrot pillars pushed the whole set sideways at
+// 1.2 px/s (body_probe droop at 0.95). Mirror: ParticleStep._joint_error.
 vec2 joint_error(uint t, uint j, uint body) {
-	vec2 r = member_rot(t, body) + member_rot(j, body);
-	r = dot(r, r) > 1e-6 ? normalize(r) : bodies[body].frame.zw;
+	vec2 r = 0.5 * (member_rot(t, body) + member_rot(j, body));
 	vec2 q = rest_offset[sorted_ids[j]].xy - rest_offset[sorted_ids[t]].xy;
 	vec2 e = (s_pred[j] - s_pred[t]) - vec2(r.x * q.x - r.y * q.y, r.y * q.x + r.x * q.y);
 	float len = length(e);
@@ -344,10 +347,13 @@ vec2 contact_delta(uint t, out vec2 body_out, out vec2 body_share, out float reg
 	if (nearest != 0xFFFFFFFFu) {
 		soft_near = t_soft && soft_material(s_material(nearest));
 		out_push = push_out(pt, nearest, nearest_body);
-		if ((soft_near || (t_powder && soft_material(s_material(nearest))))
+		if ((soft_near || t_joints || (t_powder && soft_material(s_material(nearest))))
 				&& !in_lattice_cell(pt, nearest, nearest_body)) {
 			// Outside the soft body: a corner's outline misfires (ADR 0008), and a grain in a
-			// stretched gap of its bottom row let it dig into sand (ADR 0009).
+			// stretched gap of its bottom row let it dig into sand (ADR 0009). A member of a body
+			// held by pair joints is gated so against a rigid body too (ADR 0016): the misfire at a
+			// carrot pillar's corners, one-sided, pushed a joint plank and its pillars sideways at
+			// 1.2 px/s (body_probe droop at 0.95), where a regions body's goals take it back.
 			out_push = vec2(0.0);
 		}
 		if (t_body != 0u && dot(out_push, pt - s_pred[nearest]) < 0.0) {

@@ -980,10 +980,18 @@ func _match_regions(pred: PackedVector2Array, mat: PackedInt32Array, rest: Packe
 		c /= ws
 		c0 /= ws
 		var a := Vector2.ZERO
-		for m in list:
-			var p := pred[m] - c
-			var q := rest[m] - c0
-			a += Vector2(p.dot(q), q.cross(p)) / _regions[m].size()
+		if _joint_a[r] > 0.0:
+			# Pair joints (ADR 0016): the best rotation of the member's joints about itself, unweighted
+			# (body_region_fit's star), so its joints turn it with no net torque.
+			for m in list:
+				var p := pred[m] - pred[r]
+				var q := rest[m] - rest[r]
+				a += Vector2(p.dot(q), q.cross(p))
+		else:
+			for m in list:
+				var p := pred[m] - c
+				var q := rest[m] - c0
+				a += Vector2(p.dot(q), q.cross(p)) / _regions[m].size()
 		var rot := _region_rot[r]
 		if rot.length_squared() < 0.25:
 			rot = Vector2(1.0, 0.0)  # a fresh slot (make_body writes (1, 0), as brush_spawn does)
@@ -1298,15 +1306,15 @@ func _keep_order(i: int, j: int, pred: PackedVector2Array, mat: PackedInt32Array
 
 
 ## Error of the pair joint between members i and j of a soft body held by joints (ADR 0016): their
-## current vector p_j - p_i less their rest vector q_j - q_i turned by the normalized sum of both
-## ends' region rotations (the body's when that sum is ~0), clamped to JOINT_MAX_ERR spacings. The
-## same values from j's side give exactly the negated error, so with one share for both ends
-## (_joint_share) the pair's moves are equal and opposite and the body's momentum is kept.
-## Mirror: joint_error in powder.glslinc.
+## current vector p_j - p_i less their rest vector q_j - q_i turned by each end's rotation, half each
+## (_member_rot: the best rotation of each member's own joints, _match_regions), clamped to
+## JOINT_MAX_ERR spacings. The same values from j's side give exactly the negated error, so with one
+## share for both ends (_joint_share) the pair's moves are equal and opposite and the body's momentum
+## is kept; summed over the body the torques are each member's joints' about itself under its own
+## rotation, 0 for the best one, so its angular momentum is kept too. Mirror: joint_error in powder.glslinc.
 func _joint_error(i: int, j: int, pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
 		bodies: Array) -> Vector2:
-	var r := _member_rot(i, mat, body, bodies) + _member_rot(j, mat, body, bodies)
-	r = r.normalized() if r.length_squared() > 1e-6 else bodies[body[i]].rot
+	var r := 0.5 * (_member_rot(i, mat, body, bodies) + _member_rot(j, mat, body, bodies))
 	var e := (pred[j] - pred[i]) - _rotate(r, _rest_now[j] - _rest_now[i])
 	return e.limit_length(SimParams.JOINT_MAX_ERR * SimParams.SPACING)
 
@@ -2278,10 +2286,11 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 		soft_near = soft_i and _softp[nearest] == 1
 		var r_near := _member_rot(nearest, mat, body, bodies)
 		out = _push_out(pred[i], pred[nearest], edge[nearest], bodies[body[nearest]], r_near)
-		if (soft_near or (c_i == POWDER and _softp[nearest] == 1)) \
+		if (soft_near or _joint_a[i] > 0.0 or (c_i == POWDER and _softp[nearest] == 1)) \
 				and not in_lattice_cell(pred[i], pred[nearest], r_near):
 			# Outside the soft body: a corner's outline misfires (ADR 0008 item 1), and a grain in a
-			# stretched gap of its bottom row let it dig into sand (ADR 0009).
+			# stretched gap of its bottom row let it dig into sand (ADR 0009). A member of a body held
+			# by pair joints is gated so against a rigid body too (ADR 0016; powder.glslinc).
 			out = Vector2.ZERO
 		if body[i] != 0 and out.dot(pred[i] - pred[nearest]) < 0.0:
 			# Past the nearest member's edge row, that pair pushes inward: the outline decides
@@ -2327,7 +2336,8 @@ static func _push_out(x: Vector2, x_j: Vector2, e_j: Vector2, b: Dictionary, r: 
 ## member took that push on its own and its body's shape took it back; shared over its region
 ## (_share_pushes_over_regions) it moved the patch, and a soft stack 2 px off centre crept sideways
 ## for good. Not against a rigid body: a jelly plank on two carrot pillars slid off their corners
-## into the gap (test_jelly_plank_bends_over_a_gap). Mirror: in_lattice_cell in powder.glslinc.
+## into the gap (test_jelly_plank_bends_over_a_gap); except for a body held by pair joints (ADR
+## 0016), which has no region goals to take the misfire back. Mirror: in_lattice_cell in powder.glslinc.
 static func in_lattice_cell(x: Vector2, x_j: Vector2, r: Vector2) -> bool:
 	var q := x - x_j
 	q = Vector2(r.x * q.x + r.y * q.y, -r.y * q.x + r.x * q.y)  # into j's turned frame
