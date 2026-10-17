@@ -130,7 +130,41 @@ Solve dominates once particles are settled and packed, so measure the settled st
 ### Lopsided soft body creeps sideways (open)
 - **A lopsided soft body creeps sideways on its own** (found 2026-10-14 while fixing the soft-soft contact; the same on main). A 16 × 10 jelly at stiffness 0.2 let go tilted on the floor slides at 0.047 px/s for good (CPU); on the GPU two jellies at 0.2 that had slid off each other crept apart at 0.5–0.6 px/s, not touching. Not looked into; the likely cause is that each member moves toward the mean of its regions' goals, which doesn't keep a body's momentum when its regions differ in size (FastLSM splits each particle's mass over the regions that hold it, `docs/papers.md`). At the shipped 0.95 it hasn't been seen.
 
+- **2026-10-17, measured on the GPU** (ADR 0014): `body_probe creep` (a 16 x 10 jelly let go turned 30 deg) at 0.2 slides 0.151 px/s on main (ADR 0013), 0.046 before ADR 0013, 1.7-1.8 px/s on both with no floor friction; none at 0.5 or 0.95. The drive is the region goals (each member takes the plain mean of its regions' goals, so edge members count for more); friction holds most of it back, and ADR 0013's `keep_order` leaves the jelly more strained, so more gets past. FastLSM weights in the region fit cut it to 0.028 px/s (0.057 without friction), but loaded soft bodies then give more (squash at 0.95 15-17% flatter, main 9%; a carrot dropped on a 0.95 jelly slid off in 2 of 3 runs): the old leak was holding loads up. Built on branch `fastlsm-region-fit`, not merged: owner's call (ADR 0014).
+- STATUS entry as it stood, 2026-10-17:
+  - **A lopsided soft body creeps sideways on its own** (0.047 px/s at stiffness 0.2 on the CPU, 0.5–0.6 px/s on the GPU; not seen at the shipped 0.95). Tried: FastLSM weighting of the region fit (ADR 0013, CPU: a tilted jelly at 0.2 from 0.20 to 0.14 px/s; not kept), so the unweighted region fit (FastLSM splits each particle's mass over its regions, `docs/papers.md`) is only part of it. → archive § Lopsided soft body creeps sideways; ADR 0008.
+
+### Known issues moved from STATUS (2026-10-17)
+Moved verbatim to keep STATUS near 12 kB; still open.
+- **MCP runtime tools fail** with "registry entry ... has no token path; relaunch the editor". Suspected cause: headless test runs also start the MCP addon's runtime autoload. If it recurs, the test runner should keep that autoload from starting.
+- **Headless `--import` in the main checkout** drops `window/stretch/aspect` and `rendering_device/driver.windows` from `project.godot`. If `git status` shows it modified, `git checkout project.godot`.
+- **Sand under water somewhat compressed** (measured before the 2026-10-09 changes; not re-measured). Tried: stiffer sand–water pairs, `STACK_K` 0.7. → archive § Sand under water somewhat compressed.
+- **Sleeping trade-off:** a grain sliding slower than ~6 px/s on a slope stops, so piles freeze instead of creeping. Tried (for the old churn): softer contacts crushed the 50k pile; friction, iterations up to 32, `CONTACT_RELAX`, dt 1/120 and `MAX_SEPARATION` 15 weren't the cause. → archive § Sleeping trade-off.
+- **The top 20 px of 50k water moves at ~1.2 px/s** instead of ~0.3 since the ghost-fluid surface (not visible as tilt, roughness or spray). → archive § Hovering drops above a resting surface.
+- **Water looks noisy** as plain 2×2 points, with dark gaps and some spray when blocks land. Metaball rendering is M5. A working 2D screen-space fluid renderer to read first: SunaEngine's `render.js` (`docs/papers.md`, Rendering).
+- The fixed 1/60 s step per frame means a slow device runs the sim in slow motion rather than unstably. That's intended.
+- No keyboard shortcuts for materials (the toolbar only), so input stays inside the action layer.
+
 ## Known issues: resolved, with experiment logs
+
+### ADR 0013 follow-ups: droop, waterjelly and boxstack at 0.2 (2026-10-17)
+ADR 0013 Known limits listed three checks at stiffness 0.2 that read worse after it, one run each. Repeated on main (bd01492) and the commit before ADR 0013 (0d18f25), RTX 3080 Ti, `--disable-vsync`:
+- **`droop` (300 frames, 5-6 runs each):** the plank's middle falls to the floor in every run on both. Ends slid -6.6 to -57 px here (-21.8, -29.3, -57.2, -6.6, -56.5, -17.3), -23 to -33 on 0d18f25; fastest member over the last 60 frames 16-92 px/s here, 1.3-88 there. Over 1800 frames (3 runs each) neither settles; here the crumpled plank crawled 185 and 226 px in 2 of 3 runs (0d18f25: 13-41).
+- **Variants, `droop` 1800 frames at 0.2, per run from frame 600 on (median fastest member / share of samples over 5 px/s / how far the left end wandered):**
+
+| variant | run 1 | run 2 | run 3 | runs 4-6 |
+|---|---|---|---|---|
+| 0d18f25 | 7.3 / 60% / 17 | 6.3 / 68% / 3 | 3.1 / 36% / 11 | |
+| main | 4.2 / 43% / 25 | 10.0 / 82% / 4 | 9.6 / 97% / 129 | |
+| `keep_order` off | 8.5 / 56% / 7 | 2.6 / 7% / 4 | 2.0 / 4% / 34 | |
+| shortfall capped at 0.7 q (pairs that passed push no harder than pairs on top of each other) | 2.1 / 21% / 0 | 0.5 / 21% / 2 | 0.3 / 4% / 4 | 10.0 / 75% / 0; 6.2 / 75% / 45; 0.1 / 2% / 1 |
+| FastLSM weights (ADR 0014) | 20 / 92% / 0 | 1.1 / 24% / 2 | 7.7 / 95% / 0 | |
+| cap + FastLSM | 6.0 / 82% / 9 | 0.3 / 0% / 0 | 3.2 / 31% / 0 | 19.4 / 87% / 0; 2.3 / 36% / 5; 11.7 / 70% / 65 |
+
+  Every variant spans "nearly still" to "restless": run-to-run noise. The cap kept `sandjelly` (0.2: 26 under, 0.95: 0) but wasn't kept, having shown nothing beyond the noise.
+- **What happens in `droop` at 0.2** (shots every few frames; `body_probe droop inv` prints members whose local det F is ≤ 0): the plank sags into the gap, and the bottom-row member on each pillar's inner top corner (rest offset (±11, 5)) is crushed, det F 0.80, 0.45, 0.05 at frames 5, 10, 15, inside out from frame 20 (0d18f25: frame 10), 16-19 members inside out from frame 40 on, det F down to -8. The jelly over each pillar swells into a mushroom of radial rays, the plank wedges the pillars apart and knocks them over, and the carrots keep tumbling on the torn jelly for 30 s. At 0.5 it blows up the same way at frame 20 and pulls back by frame 60; 0.95 holds (det F ≥ 0.49, none inside out). With no push-out of a soft member from a rigid body (diagnostic) the corner member keeps det F 0.27 at frame 15, but the plank inverts later anyway (23-33 members, det F to -48): the push-out isn't the root.
+- **`waterjelly`, dough at 0.2 (3 runs each, twice):** most water inside the outline box at a sample 9 / 9 / 6 and 4 / 8 / 8 here, 10 / 6 / 9 and 10 / 15 / 10 on 0d18f25; none more than a spacing in (0d18f25: 1 once); 0-2 at the end here, 0-4 there. Water in the dented edge of a squished dough.
+- **`boxstack` at 0.2 (4 runs each, 1800 frames):** here 0 / 9 / 0 / 0 members inside another body at the end (most 40 / 22 / 1 / 6), 0-2 of 3 standing, fastest member 2.3-31 px/s; 0d18f25 0 / 0 / 46 / 4 (most 2 / 3 / 61 / 15), 0 of 3 standing in all, 2.7-28 px/s. Not worse.
 
 ### Jelly on sand at low stiffness (fixed, ADR 0013)
 - **Fixed 2026-10-17** (ADR 0013, proposed; owner to play it): a grain and a soft member touch at 1.25 spacings, and members of one region keep their order. Digging started below ~0.9 and happened at the landing (GPU sweep in ADR 0013 Context); now the strip stays on top at every stiffness. The entries below are as they stood.

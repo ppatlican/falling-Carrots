@@ -53,7 +53,7 @@ our symptoms.
   0.52). We probe both slider ends (ADR 0001); also probe an awkward **middle** value.
 
 ## Best candidates, in order (2026-10-17)
-1. Pair-joint jelly, as a timeboxed experiment against jelly on sand and the creep (two open issues).
+1. Pair-joint jelly, as a timeboxed experiment against the creep (jelly on sand is fixed, ADR 0013). Since 2026-10-17 (ADR 0014): fixing the creep inside regional shape matching (FastLSM weights) works, but loaded jellies then give more, as the leak was holding them up; and a soft plank wedged into a gap turns inside out, which region fits don't undo. Joints conserve momentum by construction and have no fit to invert.
 2. Never-sleeping sand contacts on the CPU reference, then see whether `SLEEP_SPEED` can drop.
 3. Drag by density deficit, as an alternative to raising water drag to 0.3/s (the owner's call on feel).
 
