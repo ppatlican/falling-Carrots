@@ -108,6 +108,10 @@
 ##   boxstack as boxhigh onto a stack of three 16x10 carrots: the top one stays on, the stack
 ##            stays standing (lower boxes under 0.05 rad at the end)
 ##            All box scenarios print the largest |rotation| any box reached (the impact tilt).
+##            With "vtrace" (also jellydrop) they read back every frame and print the falling body's
+##            centroid fall and speed beside free fall with drag 0.6/s, to 60 frames after it touches
+##            (VT lines): a body that stops dead at the touch and then speeds up from rest was rewound
+##            whole by the swept contact (status-archive § A body dropped onto another freezes)
 ##   erasemid a 16x10 carrot at rest on the floor, at frame 61 a 10 px eraser at its centroid
 ##            (it takes a lens of 4 to 10 columns), 240 frames: the two parts left become two
 ##            bodies (ADR 0004; how many frames that takes), each with its record's live count,
@@ -234,6 +238,10 @@ var jelly_stiff := -1.0  # from "stiff=S"; -1 = the shipped table's
 var jelly_region := -1.0  # from "region=W"
 var run_frames := 0  # from "frames=N"
 var inverted_trace := false  # from "inv": droop and drape print every sample to frame 60
+## From "vtrace": the drop scenarios (VTRACE) read back every frame and print the falling body's
+## centroid speed beside free fall with drag 0.6/s, from its spawn to 60 frames after it touches.
+var velocity_trace := false
+const VTRACE := ["boxdrop", "boxtilt", "boxhigh", "plank", "boxstack", "jellydrop"]
 var inverted_at := Vector4.ZERO  # _inverted: the most squeezed member's rest offset, then x from the middle and height over the floor
 var shots := PackedInt32Array()
 var ready := false
@@ -262,6 +270,8 @@ func _initialize() -> void:
 			jelly_region = float(a.substr(7))
 		elif a == "inv":
 			inverted_trace = true
+		elif a == "vtrace":
+			velocity_trace = true
 		elif a.begins_with("frames="):
 			run_frames = int(a.substr(7))
 		elif a.begins_with("depth="):
@@ -344,7 +354,8 @@ func _process(_delta: float) -> bool:
 				sc.times[t.name] = [acc[0] + t.gpu_us, acc[1] + 1]
 	if frame_i in shots:
 		RenderingServer.call_on_render_thread(_shot_rt.bind(sc.name, frame_i))
-	if frame_i % sc.every == 0 or frame_i == sc.frames or frame_i == sc.get("hold", -1):
+	if frame_i % sc.every == 0 or frame_i == sc.frames or frame_i == sc.get("hold", -1) \
+			or (velocity_trace and sc.name in VTRACE):
 		if frame_i == sc.get("hold", -1):
 			waiting = true
 		RenderingServer.call_on_render_thread(_request_rt.bind(frame_i, sc.slots))
@@ -744,6 +755,10 @@ func _scenario_brush(brush: Dictionary) -> void:
 
 func _sample(f: int, b: Dictionary) -> void:
 	var bodies := _bodies_of(b)
+	if velocity_trace and sc.name in VTRACE:
+		_sample_vtrace(f, bodies)
+		if f % 5 != 0 and f != sc.frames:
+			return  # the scenario's own checks keep their 5-frame samples
 	_sample_plastic(f, bodies)
 	if sc.name in SOFT_STACKS:
 		_sample_soft_stack(f, bodies)
@@ -1047,6 +1062,48 @@ func _sample(f: int, b: Dictionary) -> void:
 ## sit closer than rigid boxes) and the fastest member over the last 60 frames. Passes with
 ## nothing inside at the end and every member under 1 px/s; standing is reported, not required
 ## (below ~0.8 a stack of soft bodies may lean over, ADR 0008 Known limits).
+## "vtrace": the falling body (the last made) each frame: its centroid's fall and speed beside a
+## model of free fall with drag 0.6/s stepped as the sim steps (gravity in predict, then
+## exp(-drag dt) in velocity_update, per substep), the speed of the body under it and the gap.
+func _sample_vtrace(f: int, bodies: Dictionary) -> void:
+	if bodies.size() < 2:
+		return
+	var ids: Array = bodies.keys()
+	ids.sort()
+	var top: int = ids[-1]
+	var c := Vector2.ZERO
+	for p in bodies[top].pos:
+		c += p
+	c /= bodies[top].pos.size()
+	if sc.get("vt_id", -1) != top:
+		# First seen one frame after it was made.
+		sc.vt_id = top
+		sc.vt_y0 = c.y
+		sc.vt_v = 0.0
+		sc.vt_y = 0.0
+		sc.vt_touch = -1
+	var h := SimParams.DT / 2.0  # config.json's 2 substeps
+	for _s in 2:
+		var moved: float = sc.vt_v + SimParams.GRAVITY * h
+		sc.vt_y += moved * h
+		sc.vt_v = moved * exp(-0.6 * h)
+	var gap := INF
+	for p in bodies[top].pos:
+		for id in ids:
+			if id == top:
+				continue
+			for q in bodies[id].pos:
+				gap = minf(gap, p.distance_to(q))
+	if sc.vt_touch < 0 and gap < SimParams.SPACING:
+		sc.vt_touch = f
+	if sc.vt_touch >= 0 and f > sc.vt_touch + 60:
+		return
+	var v := _mean_vel(bodies[top])
+	print("  VT f=%d fall %.1f px (model %.1f) vy %.1f px/s (model %.1f) vx %.1f, body under vy %.1f, gap %.2f px%s"
+			% [f, c.y - sc.vt_y0, sc.vt_y, v.y, sc.vt_v, v.x, _mean_vel(bodies[ids[-2]]).y, gap,
+			" TOUCH" if f == sc.vt_touch else ""])
+
+
 func _sample_soft_stack(f: int, bodies: Dictionary) -> void:
 	var m: int = jelly if sc.name.begins_with("jelly") else carrot
 	var n: int = {"stack3": 3, "stack5": 5, "boxstack": 4}.get(sc.name, 2)

@@ -134,6 +134,23 @@ Solve dominates once particles are settled and packed, so measure the settled st
 - STATUS entry as it stood, 2026-10-17:
   - **A lopsided soft body creeps sideways on its own** (0.047 px/s at stiffness 0.2 on the CPU, 0.5–0.6 px/s on the GPU; not seen at the shipped 0.95). Tried: FastLSM weighting of the region fit (ADR 0013, CPU: a tilted jelly at 0.2 from 0.20 to 0.14 px/s; not kept), so the unweighted region fit (FastLSM splits each particle's mass over its regions, `docs/papers.md`) is only part of it. → archive § Lopsided soft body creeps sideways; ADR 0008.
 
+### A body dropped onto another freezes at the hit (open, 2026-10-17)
+Owner: "there's a noticeable slowdown of the bodies when a soft/rigid body is dropped from high up onto another soft/rigid body." Measured on the GPU (RTX 3080 Ti, `--disable-vsync` unless noted; the drops are deterministic, one run each).
+- **Not the frame time.** `main.tscn` driven by a throwaway script (a 16 x 10 body on the floor, 16 x 10 bodies let go at y 20 onto it, ~390 px/s at the hit), wall time per frame: carrot on carrot 1.3 ms mean, at most 3.0 ms, the same in the frames of the hits as anywhere else; jelly on jelly 2.4-2.8 ms at 0.95, 2.8-3.6 ms at 0.2 (it grows with the bodies, not at the hits). With vsync a flat 6.05 ms (165 Hz) through the hits. No pass spikes at the hit.
+- **Not the fall.** `body_probe ... vtrace` (new) prints the falling body's centroid speed every frame: `boxhigh` hits at 385.8 px/s, as free fall with drag 0.6/s predicts (~387).
+- **It stops dead at the first touch, then moves on from rest.** `boxtilt` (turned 30 deg, a corner hits at 281 px/s): vy goes to 0 in the frame of the touch, then rises as from rest under gravity (6, 12, 17, 20, 23 ... 43 px/s) while it turns flat, settling 18 frames (0.3 s) later. A rigid 16 x 10 box hitting on that corner keeps ~40% of its speed and spins flat in ~2-3 frames (impulse at the corner: 1 / (1 + m r^2 / I) of the approach taken off the centroid). `jellydrop` at 0.95: 277 → 22, 19, 14, 10 px/s: the jelly doesn't squash and spring, it creeps down for 6 frames.
+- **Cause: the swept contact (ADR 0003 item 14) fires again in every substep while the bodies touch.** After the first rewind a member sits on the face (d0 ≈ 0), and any member still going in faster than `SWEEP_DEPTH` (0.5 px a substep, 60 px/s at 2 substeps) gets share 1, so `body_project` rewinds the whole body by its whole move: translation and spin. The body can only tip or squash at under ~60 px/s per member until it rests (boxtilt's centroid stays under 43 px/s while its far corner falls).
+- **Not new.** 029d413 (before FastLSM) gives the same traces; the sweep is from 2026-10-13. Flat hits (`boxhigh`, `boxdrop`, `boxstack`) stopping in a frame is right for an inelastic hit; what reads as slow motion is everything that should keep moving after the hit: a corner landing, a body tipping off, a jelly squashing.
+- **Tried (GPU only, not merged):**
+
+| | boxtilt vy after touch, settle | jellydrop 0.95 | boxhigh tilt | boxside rebound, gap | boxstack rebound, tilt | plank |
+|---|---|---|---|---|---|---|
+| main | 0, 6, 12, 17 ...; 18 frames | 277 → 22, 19, 14 | 0.008 rad | 0.5 px/s, 2.36 px | 0.8 px/s, 0.009 rad | 0 in |
+| F1: sweep only past 0.75 spacing a substep | 273 → 1, 3, 7 ...; 15 frames | 277 → 201, 121, 38, then -12 | 0.082 (28 members in, 2 px, 2 samples) | 0.5, 2.36 | 0.8, 0.009 | 0 in |
+| F2: no sweep for a member already on the face (d0 > -0.25 spacing) | 150, 75, 66, 54 ...; 10 frames | 277 → 71, 54, 36, then -7 | 0.025 | **5.3**, 5.69 | **6.0**, 0.059 | 6 in 1.35 px for 1 sample |
+
+  F1 keeps the re-firing for fast approaches and lets contacts take the rest, which stop the body almost as hard. F2 sweeps once per hit and leaves the rest of the approach to contacts and shape matching: corner hits and jellies keep moving, but the contacts' push-out then rebounds a few px/s, what item 14 had stopped. All scenarios still PASS. Owner's call (STATUS Known issues). The physically right response (rewind to the touch, then the rigid impulse at the touching members, divided by their count as in Phyzios, `docs/phyzios.md` rigid-stacks row, write-up § 12) needs the face normal per member and a per-body solve in `body_project`; not started.
+
 ### Known issues moved from STATUS (2026-10-17)
 Moved verbatim to keep STATUS near 12 kB; still open.
 - **MCP runtime tools fail** with "registry entry ... has no token path; relaunch the editor". Suspected cause: headless test runs also start the MCP addon's runtime autoload. If it recurs, the test runner should keep that autoload from starting.
@@ -144,6 +161,9 @@ Moved verbatim to keep STATUS near 12 kB; still open.
 - **Water looks noisy** as plain 2×2 points, with dark gaps and some spray when blocks land. Metaball rendering is M5. A working 2D screen-space fluid renderer to read first: SunaEngine's `render.js` (`docs/papers.md`, Rendering).
 - The fixed 1/60 s step per frame means a slow device runs the sim in slow motion rather than unstably. That's intended.
 - No keyboard shortcuts for materials (the toolbar only), so input stays inside the action layer.
+- **A sinking sand slab holds together ~1 s** before breaking up: sleeping counts water holding a slab up the same as sand. Tried: support only from grains that slept last step or the floor (50k sand at rest never settled), and that support remembered for 15 steps (1600 grains still moving). → archive § Sand sinking through water.
+- **The water brush pours ~4× slower** than before the lattice brush. Options if it feels weak: a bigger brush, an initial downward speed, spawning part of each spot's clearance. → archive § Water feel.
+- **Gravity is 400 px/s²**, so the 360 px tank behaves like one ~9 m tall; real-size water needs ~1000 px/s² and 3–4 substeps, and it changes sand too: the owner's call. → archive § Sand sinking through water.
 
 ## Known issues: resolved, with experiment logs
 
