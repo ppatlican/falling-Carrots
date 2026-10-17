@@ -383,8 +383,8 @@ func _sweep_bodies(pos: PackedVector2Array, pred: PackedVector2Array, mat: Packe
 
 
 ## Body member i's swept contact with other bodies (body_sweep.glsl): if it started this substep
-## outside another body's outline (at most SWEEP_DEPTH inside) and is predicted to end inside
-## it, at least SWEEP_DEPTH further in, the share of the substep after it first touched: its
+## outside another body's outline, not on its face (at least SWEEP_DEPTH outside), and is
+## predicted to end inside it, at least SWEEP_DEPTH in, the share of the substep after it first touched: its
 ## depth past the face it came through, less any it started with, over how far the two came
 ## together along the face's normal (0 if it didn't go in). Both bodies rewind that share of
 ## their paths, so together they undo the overlap. Along the face's normal instead, a carrot
@@ -425,7 +425,7 @@ func _sweep_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, mat
 	var d0 := len - normal.dot(pos[i] - pos[near0])
 	var d1 := len - normal.dot(pred[i] - pred[near0])
 	var gone_in := d1 - maxf(d0, 0.0)
-	if d0 > SimParams.SWEEP_DEPTH * SimParams.SPACING or gone_in < SimParams.SWEEP_DEPTH * SimParams.SPACING:
+	if d0 > -SimParams.SWEEP_DEPTH * SimParams.SPACING or gone_in < SimParams.SWEEP_DEPTH * SimParams.SPACING:
 		return 0.0
 	# How far they came together along N: d1 - d0, at least gone_in.
 	return minf(gone_in / (d1 - d0), 1.0)

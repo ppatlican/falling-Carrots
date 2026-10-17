@@ -104,9 +104,10 @@ const LIQUID_KICK := 2.0
 ## Shape matching still moves the particles; only the speed it leaves them is capped.
 ## Mirror: BODY_KICK in velocity_update.glsl.
 const BODY_KICK := 4.0
-## Swept contacts between bodies (ADR 0003 item 14), in spacings: the deepest a member may
-## already be inside another body's outline at the start of a substep and still count as coming
-## from outside, and the least it must go further in that substep. Slower approaches are left to
+## Swept contacts between bodies (ADR 0003 item 14), in spacings: how far outside another body's
+## face a member must start a substep to count as coming from outside (one already on the face is
+## left to the contacts, so a body is swept once per hit), and the least it must go in that
+## substep. Slower approaches are left to
 ## the contacts and push-out (without the least depth a 5-box stack leaned and never rested).
 ## Mirror: SWEEP_DEPTH in body_sweep.glsl.
 const SWEEP_DEPTH := 0.25

@@ -3,8 +3,8 @@
 
 // Bodies, once per substep after the hash and before solve_pressure: each body member's swept
 // contact with other bodies (ADR 0003 item 14; SunaEngine's swept contacts, docs/papers.md).
-// A member that started this substep outside another body's outline and is predicted to end
-// inside it has gone in this substep. The other body's member nearest it at the start (s_pos)
+// A member that started this substep outside another body's outline, not touching it, and is
+// predicted to end inside it has gone in this substep. The other body's member nearest it at the start (s_pos)
 // gives the face it came through: that member's way out of the rest shape, turned by its
 // body's rotation, is the face's normal N and its distance |e| (push_out). The member's depth
 // past that face at the predicted positions, less any it started with, over how far the two
@@ -31,10 +31,17 @@
 #include "common.glslinc"
 #include "powder.glslinc"
 
-// In spacings: the deepest a member may already be inside the other body's outline at the start
-// and still count as coming from outside (members resting in contact sit at -0.5 on a flat face
-// and at 0 over a corner, whose outline runs diagonally), and the least it must go further in
-// this substep (60 px/s at 2 substeps). Slower approaches are left to the contacts and the
+// In spacings: how far outside the other body's face a member must start to count as coming
+// from outside (members resting in contact sit at -0.5 on a flat face and at 0 over a corner,
+// whose outline runs diagonally), and the least it must go in this substep (60 px/s at 2
+// substeps). A member already on the face (d0 > -SWEEP_DEPTH) is left to the contacts and
+// shape matching: the first rewind leaves the touching members there, and counting them again
+// rewound the whole body by its whole move in every later substep while any member went in
+// over 60 px/s, so a carrot landing on a corner stopped dead and took 18 frames to tip flat
+// (a rigid box: ~3), and a jelly didn't squash (status-archive § A body dropped onto another
+// freezes at the hit, body_probe boxtilt and jellydrop vtrace). Then the contacts take the rest
+// of the approach, and bodies rebound off each other at 5-6 px/s (boxside, boxstack; 0.5-0.8
+// when the sweep re-fired). Slower approaches are left to the contacts and the
 // push-out, which held stacks before: with no least depth, the members over a corner of the box
 // below, on its outline, went in by ~0.01 px now and then, and each move back pushed sideways,
 // so a 5-box stack leaned 1 px a box and never came to rest (test_bodies). Mirror:
@@ -95,7 +102,7 @@ void main() {
 	float d0 = len - dot(normal, x0 - s_pos[near0]);
 	float d1 = len - dot(normal, x1 - s_pred[near0]);
 	float gone_in = d1 - max(d0, 0.0);
-	if (d0 > SWEEP_DEPTH * params.spacing || gone_in < SWEEP_DEPTH * params.spacing) {
+	if (d0 > -SWEEP_DEPTH * params.spacing || gone_in < SWEEP_DEPTH * params.spacing) {
 		return;
 	}
 	// How far they came together along N: d1 - d0, at least gone_in (>= SWEEP_DEPTH spacings).
