@@ -21,6 +21,7 @@ const GROUPS := {
 	"test_jelly_squashes_under_a_carrot_and_springs_back": ["soft"],
 	"test_jelly_strip_folds_without_passing_through_itself": ["soft"],
 	"test_soft_body_rests_on_a_soft_body": ["soft"],
+	"test_joint_jelly_does_not_creep": ["soft"],
 	"test_three_rigid_boxes_stack_and_settle": ["rigid"],
 	"test_five_aligned_boxes_hold_without_sinking": ["rigid"],
 	"test_half_erased_box_keeps_shape_without_drifting": ["rigid", "erase"],
@@ -652,6 +653,37 @@ func test_lopsided_soft_jelly_does_not_creep() -> void:
 	expect(absf(rate) < 0.3, "it doesn't creep, under 0.3 px/s: %.3f" % rate)
 
 
+## Pair-joint jelly (ADR 0016): the same lopsided jelly held by joints, whose corrections are equal and
+## opposite at a pair's two ends, so its momentum is kept and it can't push itself sideways (regions
+## before ADR 0014: 2.34 px/s here; FastLSM weights 0.061). What the landing leaves it (a sideways
+## drift from the per-member speed caps) dies out by drag alone, so it is read over the last second.
+func test_joint_jelly_does_not_creep() -> void:
+	var world := Vector2(80, 60)
+	var sim = _sim(world, {"stiffness": 0.2, "friction": 0.0, "soft_model": "joints"})
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var pts := _box(Vector2(40, 20), 16, 10, deg_to_rad(30.0))
+	var lowest := -INF
+	for p in pts:
+		lowest = maxf(lowest, p.y)
+	for i in pts.size():
+		pts[i].y += _floor_y(world) - 1.0 - lowest
+	var id: int = ParticleStep.make_body(state, pts, _jelly)
+	var x0 := 0.0
+	for f in 300:
+		_frame(sim, state)
+		if f == 239:
+			x0 = _fit(state, id).c.x
+	var fit: Dictionary = _fit(state, id)
+	var rate: float = fit.c.x - x0
+	var top := INF
+	for p in state.pos:
+		top = minf(top, p.y)
+	_report("16x10 joint jelly (stiffness 0.2, no friction) let go turned 30 deg, 300 frames: centroid moved %.4f px/s sideways over the last second, turned %.3f rad, shape error %.2f px, %.1f px tall"
+			% [rate, fit.theta, fit.err, _floor_y(world) - top])
+	expect(absf(rate) < 0.05, "it doesn't creep, under 0.05 px/s: %.4f" % rate)
+	expect(fit.err < 25.0, "it holds together, shape error under 25 px: %.2f" % fit.err)
+
+
 ## Body-body push-out (ADR 0003 item 11): without it the dropped box ended inside the other,
 ## the ordinary contacts balanced among the interleaved lattices (body_probe boxdrop).
 func test_box_dropped_on_box_stays_out() -> void:
@@ -959,7 +991,10 @@ func _sim(world := WORLD, jelly := {}):
 	_carrot = table.id_of("carrot")
 	_jelly = table.id_of("jelly")
 	for column in jelly:
-		table.set_value(_jelly, column, jelly[column])
+		if column == "soft_model":
+			table.set_soft_model(_jelly, jelly[column])
+		else:
+			table.set_value(_jelly, column, jelly[column])
 	_cork = table.id_of("cork")
 	_water = table.id_of("water")
 	_sand = table.id_of("sand")

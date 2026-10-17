@@ -9,7 +9,7 @@
 // index), PLASTIC_INNER for an inner member, for body_rest.
 // Mirror: cpu_ref/particle_step.gd _plastic_outline (the points).
 
-// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "plastic.glslinc"
 

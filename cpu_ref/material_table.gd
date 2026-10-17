@@ -55,6 +55,12 @@ const CLUSTER_FIELDS := [
 	["region", 1.5, 2.0],
 	["plasticity", 0.0, 1.0],
 ]
+## How a soft body (cluster, stiffness < 1) keeps its shape: the optional cluster column
+## `soft_model`, one of these names; a row without it is "regions". Its index goes to the GPU
+## (Material.info.y) and to the CPU reference (materials[id].soft_model).
+##   regions: regional shape matching (ADR 0005).
+##   joints: pair joints between region pairs, equal and opposite (ADR 0016, an experiment).
+const SOFT_MODELS := ["regions", "joints"]
 ## Narrower ranges of NUMBER_FIELDS columns for one class: { class: [[name, min, max], ...] }.
 ## Each end was checked on the GPU probe (ADR 0001 decision 4, ADR 0007).
 ##   liquid drag: below 0.1 a pool never comes to rest (gpu_probe water: at 0, 11 px/s of
@@ -84,7 +90,7 @@ const PANEL_FIELDS := {
 ##   vec4  color                                        offset 0
 ##   vec4  density, friction, viscosity, drag           offset 16
 ##   vec4  wind_coupling, stiffness, conductivity, heat_capacity  offset 32
-##   uvec4 class, 0, 0, 0                               offset 48
+##   uvec4 class, soft_model (SOFT_MODELS index), 0, 0  offset 48
 ##   vec4  region, cohesion, adhesion, plasticity (region and plasticity 0 for non-clusters)  offset 64
 const GPU_STRIDE := 80
 
@@ -170,6 +176,11 @@ func _check_row(row: Dictionary, label: String) -> PackedStringArray:
 				p.append("%s: '%s' must be a number for a cluster material" % [label, f[0]])
 			elif float(v) < f[1] or float(v) > f[2]:
 				p.append("%s: '%s'=%s out of range [%s, %s]" % [label, f[0], v, f[1], f[2]])
+	if row.has("soft_model"):
+		if row.get("class") != "cluster":
+			p.append("%s: 'soft_model' is only for cluster materials" % label)
+		elif not row.get("soft_model") in SOFT_MODELS:
+			p.append("%s: unknown soft_model '%s' (known: %s)" % [label, row.get("soft_model"), ", ".join(SOFT_MODELS)])
 	for f in TEMP_FIELDS:
 		if not row.has(f) or (row[f] != null and not _is_number(row[f])):
 			p.append("%s: '%s' must be a number or null" % [label, f])
@@ -197,6 +208,24 @@ func id_of(material_name: String) -> int:
 ## Class number (index into CLASSES) of a material id.
 func class_of(id: int) -> int:
 	return CLASSES.find(materials[id]["class"])
+
+
+## SOFT_MODELS index of a material id: 0 (regions) for a row without the column.
+func soft_model_of(id: int) -> int:
+	return maxi(0, SOFT_MODELS.find(materials[id].get("soft_model", "regions")))
+
+
+## Sets a loaded cluster material's soft_model (a SOFT_MODELS name, or its index as text, for
+## the probes' set=jelly.soft_model=joints). Returns the name stored, or "" if it isn't one.
+## The caller uploads the row (ParticleSim.update_material).
+func set_soft_model(id: int, model: String) -> String:
+	var model_name := model
+	if model.is_valid_int() and int(model) >= 0 and int(model) < SOFT_MODELS.size():
+		model_name = SOFT_MODELS[int(model)]
+	if materials[id]["class"] != "cluster" or not model_name in SOFT_MODELS:
+		return ""
+	materials[id].soft_model = model_name
+	return model_name
 
 
 ## The validator's [min, max] for a column on rows of a class ("liquid", "cluster", ...), as
@@ -249,6 +278,7 @@ func pack_row(id: int) -> PackedByteArray:
 	for k in floats.size():
 		b.encode_float(k * 4, floats[k])
 	b.encode_u32(48, class_of(id))
+	b.encode_u32(52, soft_model_of(id))
 	b.encode_float(64, float(row.get("region", 0.0)))
 	b.encode_float(68, float(row.cohesion))
 	b.encode_float(72, float(row.adhesion))

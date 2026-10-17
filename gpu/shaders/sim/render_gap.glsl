@@ -11,7 +11,7 @@
 // painted and always in the liquid's plain colour, so the draw order among threads can't
 // make it flicker, and grains drawn next still cover their own pixels.
 
-// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
 

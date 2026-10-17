@@ -26,7 +26,7 @@
 // Mirror: cpu_ref/particle_step.gd _match_shapes.
 
 #define LOCAL_SIZE_X 128
-// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Keeps the last rotation when |A_pq| is below this, per live member, in px^2.

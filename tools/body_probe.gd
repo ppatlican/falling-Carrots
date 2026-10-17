@@ -169,6 +169,11 @@
 ##            also print the soft verdict (ADR 0008): members inside another body's lattice by a
 ##            local fit, how many bodies still stand on the one below, the fastest member over the
 ##            last 60 frames; PASS with nothing inside at the end and every member under 1 px/s
+##   carrotjelly a 16x10 jelly on the floor, at frame 60 a 16x10 carrot dropped 60 px onto it, drop_dx= px
+##            right of its centre (default 4; ADR 0014 saw one slide off a shipped jelly in main.tscn), 600
+##            frames: whether the carrot stays on (its centre above the jelly's by a quarter of their rest
+##            heights and within half the jelly's width), the most it tilted, the jelly's height under it
+##            against its rest height, and the fastest member over the last 60 frames (ADR 0016)
 ##   softcap  one 50x40 jelly (2000 particles, as brushcap) dropped, 900 frames, timed from 300
 ##   softmany 256 8x6 jellies (as many), 1500 frames, timed from 900
 ## stiff=S region=W replace the jelly row's stiffness and region for this run (tuning).
@@ -255,6 +260,7 @@ var param_sets: Array = []  # from "set=" (tools/probe_params.gd)
 var param_frame := 0  # from "setat=N"
 var stroke_depth := STROKE_DEPTH  # from "depth=D" (sandstroke)
 var stroke_span := 170.0  # from "span=S" (sandstroke): half the stroke's length, px
+var drop_dx := 4.0  # from "drop_dx=D" (carrotjelly): the carrot's offset right of the jelly's centre, px
 
 
 func _initialize() -> void:
@@ -283,6 +289,8 @@ func _initialize() -> void:
 			stroke_depth = float(a.substr(6))
 		elif a.begins_with("span="):
 			stroke_span = float(a.substr(5))
+		elif a.begins_with("drop_dx="):
+			drop_dx = float(a.substr(8))
 		elif a in ["grid", "bare", "trace", "refs", "ptrace"]:
 			pass  # debug: water scenarios print grid columns; ptrace: plastic bodies' tightest rest pair
 		else:
@@ -529,6 +537,12 @@ func _start(name: String) -> void:
 			sc.every = 5
 			for k in 2:
 				_body(_box(Vector2(X, FLOOR - k * 10.0 * SimParams.SPACING), 16, 10), jelly)
+		"carrotjelly":
+			sc.frames = 600
+			sc.every = 5
+			sc.max_tilt = 0.0
+			sc.late_speed = 0.0
+			sc.target = _body(_box(Vector2(X, FLOOR), 16, 10), jelly)
 		"jellydrop":
 			sc.frames = 360
 			sc.every = 5
@@ -736,6 +750,8 @@ func _scenario_brush(brush: Dictionary) -> void:
 		var at := Vector2(X + dx, FLOOR - under * SimParams.SPACING - fall)
 		# An upright rest shape, so _members_inside's box is the body's own.
 		_body(_box(at, 16, 10, tilt), carrot, _box(at, 16, 10))
+	elif sc.name == "carrotjelly" and frame_i == 60:
+		sc.load = _body(_box(Vector2(X + drop_dx, FLOOR - 10.0 * SimParams.SPACING - 60.0), 16, 10), carrot)
 	elif sc.name == "squash" and frame_i > sc.hold and frame_i <= sc.hold + 5:
 		# Circles of radius 20 whose bottom is half a pixel under the carrot's bottom row, 8 px
 		# apart: together they take the carrot and none of the jelly under it.
@@ -1055,6 +1071,8 @@ func _sample(f: int, b: Dictionary) -> void:
 						sc.count_after_erase == 1 and sc.new_id == 1 and sc.new_first == 0 and live1 == 48 and live2 == 48 and err < 0.1)
 		"droop", "drape", "wobble", "squash", "fold":
 			_sample_soft(f, bodies)
+		"carrotjelly":
+			_sample_carrot_jelly(f, bodies)
 		"many", "big", "huge", "brushcap", "softcap", "softmany":
 			var max_err := 0.0
 			var max_speed := 0.0
@@ -1130,6 +1148,44 @@ func _sample_vtrace(f: int, bodies: Dictionary) -> void:
 	print("  VT f=%d fall %.1f px (model %.1f) vy %.1f px/s (model %.1f) vx %.1f, rot %.3f spin %.2f rad/s, body under vy %.1f, gap %.2f px%s"
 			% [f, c.y - sc.vt_y0, sc.vt_y, v.y, sc.vt_v, v.x, theta, spin, _mean_vel(bodies[ids[-2]]).y if ids.size() > 1 else 0.0, gap,
 			" TOUCH" if f == sc.vt_touch else ""])
+
+
+## carrotjelly (ADR 0016): the carrot dropped on the jelly, every sample from its first readback.
+func _sample_carrot_jelly(f: int, bodies: Dictionary) -> void:
+	if not bodies.has(sc.target) or not bodies.has(sc.get("load", -1)):
+		return
+	var jb: Dictionary = bodies[sc.target]
+	var cb: Dictionary = bodies[sc.load]
+	var cf := _fit(cb)
+	sc.max_tilt = maxf(sc.max_tilt, absf(cf.theta))
+	if f > sc.frames - 60:
+		for id in [sc.target, sc.load]:
+			for v in bodies[id].vel:
+				sc.late_speed = maxf(sc.late_speed, v.length())
+	if f % 60 != 0 and f != sc.frames:
+		return
+	var jc := Vector2.ZERO
+	var top := INF
+	var bottom := -INF
+	for p in jb.pos:
+		jc += p
+		top = minf(top, p.y)
+		bottom = maxf(bottom, p.y)
+	jc /= jb.pos.size()
+	var rest_lo := INF
+	var rest_hi := -INF
+	for q in jb.rest:
+		rest_lo = minf(rest_lo, q.y)
+		rest_hi = maxf(rest_hi, q.y)
+	var rest_h := rest_hi - rest_lo
+	var cc: Vector2 = cf.c
+	var on := jc.y - cc.y > 0.5 * rest_h and absf(cc.x - jc.x) < 0.5 * 15.0 * SimParams.SPACING
+	print("  f=%d carrot at (%.1f, %.1f) tilt %.3f rad, jelly centre (%.1f, %.1f), %.2f px tall (rest %.2f), carrot %s"
+			% [f, cc.x, cc.y, cf.theta, jc.x, jc.y, bottom - top, rest_h, "on" if on else "OFF"])
+	if f == sc.frames:
+		_result("carrot dropped 60 px onto a jelly %.0f px right of its centre: %s at the end, carrot %.1f px right of the jelly, most tilt %.3f rad, jelly %.1f%% flatter, fastest member (last 60 frames) %.3f px/s"
+				% [drop_dx, "stays on" if on else "SLID OFF", cc.x - jc.x, sc.max_tilt, 100.0 * (1.0 - (bottom - top) / rest_h), sc.late_speed],
+				on and sc.late_speed < 1.0)
 
 
 func _sample_soft_stack(f: int, bodies: Dictionary) -> void:

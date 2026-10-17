@@ -11,7 +11,7 @@
 // A thread writes only its own s_pred and reads no other particle's position, so no thread sees
 // another's move. Mirror: cpu_ref/particle_step.gd _match_regions (the goal).
 
-// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {
@@ -21,8 +21,8 @@ void main() {
 	}
 	uint body = s_body(t);
 	uint m = s_material(t);
-	if (body == 0u || !soft_material(m)) {
-		return;
+	if (body == 0u || !soft_material(m) || joint_material(m)) {
+		return;  // a joints member moves by its joints (solve_delta, ADR 0016), not by goals
 	}
 	vec2 q_t = rest_offset[sorted_ids[t]].xy;
 	float reach = region_reach(m);

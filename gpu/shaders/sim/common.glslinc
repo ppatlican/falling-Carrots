@@ -48,7 +48,7 @@ struct Material {
 	vec4 color;
 	vec4 phys;   // density, friction, viscosity, drag
 	vec4 extra;  // wind_coupling, stiffness, conductivity, heat_capacity (later milestones)
-	uvec4 info;  // class, unused x3
+	uvec4 info;  // class, soft_model (MaterialTable.SOFT_MODELS: 0 regions, 1 joints; ADR 0016), unused x2
 	vec4 more;   // region (cluster materials, in spacings; ADR 0005), cohesion, adhesion (ADR 0011),
 	             // plasticity (cluster materials; ADR 0012, plastic.glslinc)
 };
@@ -186,6 +186,10 @@ bool soft_material(uint m) { return materials[m].extra.y < 1.0; }
 // lattice that differ by float rounding. At most H (region 2.0), so a region lies in the 3 x 3
 // hash cells FOR_EACH_NEIGHBOUR reads. Mirror: ParticleStep._region_reach.
 float region_reach(uint m) { return materials[m].more.x * params.spacing + 1e-3; }
+
+// A soft material held by pair joints between its region pairs (soft_model "joints", ADR 0016)
+// instead of region goals. Mirror: ParticleStep.JOINTS.
+bool joint_material(uint m) { return materials[m].info.y == 1u; }
 
 // Rotation a body member's way out of the rest shape is turned by (ADR 0005 item 6): in a soft
 // body its region's from the last fit, so the outline bends with the body; else its body's.

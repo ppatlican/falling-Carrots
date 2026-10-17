@@ -47,6 +47,13 @@ const SOFT_GRAIN_REACH := 1.25
 ## Mirror: SOFT_ORDER, SOFT_ORDER_PUSH in powder.glslinc.
 const SOFT_ORDER := 0.7
 const SOFT_ORDER_PUSH := 0.25
+## Pair joints (soft_model "joints", ADR 0016): each joined pair's error, its current vector less its
+## rest vector turned by the mean of both ends' region rotations, is clamped to JOINT_MAX_ERR
+## spacings, and each end moves by JOINT_GAIN x k / 2 of it (k the stiffness formula), at most 1 / N
+## (N the lattice neighbours within the region radius), equal and opposite. Mirror: JOINT_* in
+## powder.glslinc.
+const JOINT_GAIN := 1.0
+const JOINT_MAX_ERR := 1.0
 ## Share of a liquid's density one powder grain counts for, its solid volume: sand under
 ## water packs to ~1.1 and is ~60% grain, 40% pore, so 0.6 x HYDRO_POWDER_FULL (see
 ## liquid.glslinc).

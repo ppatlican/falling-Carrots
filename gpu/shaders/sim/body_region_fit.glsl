@@ -21,7 +21,7 @@
 // p and q are summed relative to the member's own, to keep the sums small.
 // Mirror: cpu_ref/particle_step.gd _match_regions (the fit) and _find_regions.
 
-// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Keeps the last rotation when |A_pq| is below this, per unit of the members' weights, in px^2.

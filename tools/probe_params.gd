@@ -1,6 +1,7 @@
 ## Parameter edits for the GPU probes (ADR 0007), through the parameter panel's path: the
 ## table clamps the value to the validator range and the sim uploads the row while it runs.
 ##   set=<material>.<column>=<value>[,...]   e.g. set=water.drag=60,sand.friction=0
+##                                           (soft_model takes a name: set=jelly.soft_model=joints)
 ##   setat=N                                 apply at frame N (default: right after setup)
 ## Prints one PARAM line per edit with the value actually stored.
 extends RefCounted
@@ -18,7 +19,7 @@ static func parse(args: PackedStringArray) -> Array:
 			if col_val.size() != 2:
 				print("PARAM bad set item '%s' (want material.column=value)" % item)
 				continue
-			sets.append([mat_rest[0], col_val[0], float(col_val[1])])
+			sets.append([mat_rest[0], col_val[0], col_val[1]])
 	return sets
 
 
@@ -41,9 +42,18 @@ static func apply(table, sim, sets: Array) -> void:
 		if id < 0:
 			print("PARAM unknown material '%s'" % s[0])
 			continue
+		if s[1] == "soft_model":
+			var model: String = table.set_soft_model(id, s[2])
+			if model == "":
+				print("PARAM %s.soft_model: '%s' isn't a soft model of a cluster material" % [s[0], s[2]])
+				continue
+			sim.update_material(table, id)
+			print("PARAM %s.soft_model = %s" % [s[0], model])
+			continue
 		if table.range_of(s[1], table.materials[id]["class"]).is_empty():
 			print("PARAM %s has no column '%s' with a range" % [s[0], s[1]])
 			continue
-		var v: float = table.set_value(id, s[1], s[2])
+		var asked := float(s[2])
+		var v: float = table.set_value(id, s[1], asked)
 		sim.update_material(table, id)
-		print("PARAM %s.%s = %s%s" % [s[0], s[1], v, "" if v == s[2] else " (asked %s, clamped)" % s[2]])
+		print("PARAM %s.%s = %s%s" % [s[0], s[1], v, "" if v == asked else " (asked %s, clamped)" % asked])

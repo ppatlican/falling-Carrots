@@ -20,7 +20,8 @@
 // particles of other bodies. Same-body pairs are skipped (shape matching holds a body
 // together, body_match.glsl), except in a soft body, where members further apart in the rest
 // shape than the region radius collide (self_contact, ADR 0005), and members of one region are
-// kept from passing each other (keep_order, ADR 0013). In a contact with a body, the lower side is heavier by STACK_K
+// kept from passing each other (keep_order, ADR 0013); in a soft body held by pair joints
+// (ADR 0016) those pairs are its joints, whose errors this loop sums (joint_error). In a contact with a body, the lower side is heavier by STACK_K
 // over the height between the body centroids (a grain counts at its own height), on the
 // friction as well as the push-out: with mass-weighted friction a 3-box stack swayed for good
 // (CPU reference, ADR 0002). Body-liquid pairs (ADR 0003) touch at a full spacing and share
@@ -61,6 +62,11 @@ const float SOFT_GRAIN_REACH = 1.25;
 // Mirror: SimParams.SOFT_ORDER, SimParams.SOFT_ORDER_PUSH.
 const float SOFT_ORDER = 0.7;
 const float SOFT_ORDER_PUSH = 0.25;
+// Pair joints (soft_model "joints", ADR 0016): a joint's error is clamped to JOINT_MAX_ERR
+// spacings (|e| is the same from both ends, so the clamp keeps them opposite), and each end moves by
+// joint_share of it. Mirror: SimParams.JOINT_GAIN, SimParams.JOINT_MAX_ERR.
+const float JOINT_GAIN = 1.0;
+const float JOINT_MAX_ERR = 1.0;
 
 // Share of a contact's push-out that particle t takes, for rv = p_t - p_j (y down).
 float stack_weight(float m_t, float m_j, float rv_y) {
@@ -157,6 +163,48 @@ vec2 keep_order(uint t, uint j, uint body) {
 	return short_by > 0.0 ? SOFT_ORDER_PUSH * short_by * n : vec2(0.0);
 }
 
+// Error of the pair joint between members t and j of a soft body held by joints (ADR 0016): their
+// current vector p_j - p_t less their rest vector q_j - q_t turned by the normalized sum of both
+// ends' region rotations (the body's when that sum is ~0), clamped to JOINT_MAX_ERR spacings. From
+// j's side the same values give exactly the negated error, so with one share for both ends the
+// pair's moves are equal and opposite and the body's momentum is kept. Mirror: ParticleStep._joint_error.
+vec2 joint_error(uint t, uint j, uint body) {
+	vec2 r = member_rot(t, body) + member_rot(j, body);
+	r = dot(r, r) > 1e-6 ? normalize(r) : bodies[body].frame.zw;
+	vec2 q = rest_offset[sorted_ids[j]].xy - rest_offset[sorted_ids[t]].xy;
+	vec2 e = (s_pred[j] - s_pred[t]) - vec2(r.x * q.x - r.y * q.y, r.y * q.x + r.x * q.y);
+	float len = length(e);
+	float most = JOINT_MAX_ERR * params.spacing;
+	return len > most ? e * (most / len) : e;
+}
+
+// Members of a square lattice of this spacing within reach of one of them, itself left out: 8 at
+// region 1.5, 12 at 2. Mirror: ParticleStep.lattice_joints.
+float lattice_joints(float reach) {
+	float count = 0.0;
+	for (int y = -2; y <= 2; y++) {
+		for (int x = -2; x <= 2; x++) {
+			if ((x != 0 || y != 0) && float(x * x + y * y) * params.spacing * params.spacing <= reach * reach) {
+				count += 1.0;
+			}
+		}
+	}
+	return count;
+}
+
+// Share of each joint's error a member of a soft body held by joints moves by per iteration (ADR
+// 0016): JOINT_GAIN x k / 2, k the stiffness formula (body_region_goal), so a joint on its own loses
+// the stiffness's share of its error per 1/60 s; at most 1 / N, N the lattice neighbours within
+// the region radius, where the Jacobi sum over a member's joints stays stable. 0 for anything else.
+// Mirror: ParticleStep._joint_share.
+float joint_share(uint m) {
+	if (!joint_material(m)) {
+		return 0.0;
+	}
+	float k = 1.0 - pow(1.0 - materials[m].extra.y, params.dt * 60.0 / float(params.iterations));
+	return min(JOINT_GAIN * 0.5 * k, 1.0 / lattice_joints(region_reach(m)));
+}
+
 // Height used for STACK_K in a contact with a body: the body's centroid from the last body
 // pass, or the particle's own height when it is in no body.
 float stack_height(uint t, uint body) {
@@ -170,12 +218,15 @@ float stack_height(uint t, uint body) {
 // anything else), what solve_apply shares over its region.
 // region_n: for a member of a soft body, how many members its region holds, itself included (the
 // same-body pairs this loop skips). Both for solve_delta (ADR 0008 item 1).
-vec2 contact_delta(uint t, out vec2 body_out, out vec2 body_share, out float region_n) {
+// joint_sum: for a member of a soft body held by pair joints, the sum of its joints' errors
+// (joint_error, ADR 0016; 0 for anything else), which solve_delta moves it by joint_share of.
+vec2 contact_delta(uint t, out vec2 body_out, out vec2 body_share, out float region_n, out vec2 joint_sum) {
 	Material mt = materials[s_material(t)];
 	bool t_powder = mt.info.x == CLASS_POWDER;
 	bool t_liquid = mt.info.x == CLASS_LIQUID;
 	uint t_body = s_body(t);
 	bool t_soft = t_body != 0u && soft_material(s_material(t));
+	bool t_joints = t_soft && joint_material(s_material(t));
 	float t_height = stack_height(t, t_body);
 	vec2 pt = s_pred[t];
 	vec2 move_t = pt - s_pos[t];
@@ -193,6 +244,7 @@ vec2 contact_delta(uint t, out vec2 body_out, out vec2 body_share, out float reg
 	uint nearest_body = 0u;
 	float nearest_d = params.spacing;
 	region_n = 1.0;
+	joint_sum = vec2(0.0);
 	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
 		if (j == t) continue;
@@ -207,6 +259,9 @@ vec2 contact_delta(uint t, out vec2 body_out, out vec2 body_share, out float reg
 			region_n += 1.0;
 			if (t_soft) {
 				sum += keep_order(t, j, t_body);
+				if (t_joints) {
+					joint_sum += joint_error(t, j, t_body);  // ADR 0016
+				}
 			}
 			continue;  // same body: shape matching
 		}

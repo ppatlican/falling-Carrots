@@ -36,6 +36,8 @@ const IMPULSE_FIXED := 0.5
 ## middle of a lattice square, half a spacing from four members, is still in one of their cells.
 ## Mirror: SOFT_CELL in powder.glslinc.
 const SOFT_CELL := 0.55
+## materials[m].soft_model of a soft material held by pair joints (MaterialTable.SOFT_MODELS, ADR 0016).
+const JOINTS := 1
 ## _hydro_solve's cells (bed, air, liquid) and what a face adds to a cell's sweep: nothing; to the
 ## walls' sum (the floor, a body); p of a bed neighbour less the hydrostatic rise; p weighed by
 ## 1 / the face's liquid density, and that weight to the cells' sum; p through the free surface
@@ -47,7 +49,8 @@ enum { FACE_NONE, FACE_WALL, FACE_BED, FACE_WEIGHED, FACE_GHOST, FACE_SURFACE }
 var world_size: Vector2
 ## Per material id: { "class": int, "density", "friction", "viscosity", "drag", "stiffness",
 ## "region" (cluster materials; 0 for the rest), "cohesion", "adhesion" (ADR 0011),
-## "plasticity" (cluster materials, ADR 0012; 0 for the rest) }.
+## "plasticity" (cluster materials, ADR 0012; 0 for the rest), "soft_model" (MaterialTable.SOFT_MODELS
+## index: 0 regions, JOINTS pair joints; ADR 0016) }.
 var materials: Dictionary
 var rest_density: float
 ## Liquid density per coarse cell over water's, from the last _hydro_density (ADR 0010).
@@ -59,6 +62,9 @@ var _body_out := Vector2.ZERO
 ## bodies (their contacts, the push-out and friction; 0 for anything else): what
 ## _share_pushes_over_regions shares over its region (ADR 0008 item 1).
 var _body_share := Vector2.ZERO
+## For a member of a soft body held by pair joints, the sum of its joints' errors from _contact_delta
+## (_joint_error; 0 for anything else): step() moves it by _joint_a of it after the contact clamp.
+var _joint_sum := Vector2.ZERO
 ## This substep's soft-body regions (_find_regions), each particle's region rotation (state
 ## "region_rot") and rest offset, for the contacts and the push-out (ADR 0005 items 4 and 6).
 var _regions: Array = []
@@ -67,7 +73,10 @@ var _rest_now := PackedVector2Array()
 ## Per particle this substep, read from materials once in step() so the neighbour loops index
 ## arrays instead of looking a row up per pair (the same values; for speed only): class, density,
 ## friction, region reach (_region_reach; 0 outside clusters) and 1 for a member of a soft body.
+## _joint_a: for a member of a soft body held by pair joints (ADR 0016), the share of each joint's
+## error it moves by per iteration (_joint_share); 0 for everything else.
 var _cls := PackedInt32Array()
+var _joint_a := PackedFloat64Array()
 var _rho := PackedFloat64Array()
 var _mu := PackedFloat64Array()
 var _reach := PackedFloat64Array()
@@ -113,6 +122,7 @@ func _init(world: Vector2, material_table) -> void:
 			"cohesion": float(row.get("cohesion", 0.0)),
 			"adhesion": float(row.get("adhesion", 0.0)),
 			"plasticity": float(row.get("plasticity", 0.0)),
+			"soft_model": material_table.soft_model_of(id),
 		}
 	rest_density = rest_density_for(SimParams.H, SimParams.SPACING)
 	var h := SimParams.H
@@ -210,6 +220,9 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	var hsize := hydro_size(world_size)
 	hydro_p.resize(hsize.x * hsize.y)
 	var dry := _cache_particles(mat, body, bodies)
+	_joint_a.resize(n)
+	for i in n:
+		_joint_a[i] = _joint_share(mat[i], dt, iterations) if _softp[i] == 1 else 0.0
 
 	# Predict.
 	var pred := PackedVector2Array()
@@ -298,6 +311,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 				lambda[i] = 0.0
 		for i in n:
 			var d := Vector2.ZERO
+			_joint_sum = Vector2.ZERO
 			if _cls[i] == LIQUID:
 				d = _liquid_delta(i, pred, mat, lambda, neighbours[i], h, dt)
 			if contacts[i] == 1:
@@ -308,6 +322,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 				var scale := delta[i].length() / d.length()
 				pushed[i] += _body_out * scale
 				body_push[i] = _body_share * scale
+			# Pair joints (ADR 0016) after the clamp, which would cut one end's share and not the other's.
+			delta[i] += _joint_a[i] * _joint_sum
 		_share_pushes_over_regions(delta, body_push)
 		for i in n:
 			pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i], body[i] != 0)
@@ -978,8 +994,8 @@ func _match_regions(pred: PackedVector2Array, mat: PackedInt32Array, rest: Packe
 	var k_of := {}  # per material: the stiffness formula of _match_shapes
 	for i in n:
 		var list: PackedInt32Array = _regions[i]
-		if list.is_empty():
-			continue
+		if list.is_empty() or _joint_a[i] > 0.0:
+			continue  # a joints member is moved by its joints (_joint_error, ADR 0016), not goals
 		var goal := Vector2.ZERO
 		for r in list:
 			goal += shift[r] + _rotate(_region_rot[r], rest[i])
@@ -1279,6 +1295,47 @@ func _keep_order(i: int, j: int, pred: PackedVector2Array, mat: PackedInt32Array
 	var n := _rotate(r, q) / q_len
 	var short_by := SimParams.SOFT_ORDER * q_len - (pred[i] - pred[j]).dot(n)
 	return SimParams.SOFT_ORDER_PUSH * short_by * n if short_by > 0.0 else Vector2.ZERO
+
+
+## Error of the pair joint between members i and j of a soft body held by joints (ADR 0016): their
+## current vector p_j - p_i less their rest vector q_j - q_i turned by the normalized sum of both
+## ends' region rotations (the body's when that sum is ~0), clamped to JOINT_MAX_ERR spacings. The
+## same values from j's side give exactly the negated error, so with one share for both ends
+## (_joint_share) the pair's moves are equal and opposite and the body's momentum is kept.
+## Mirror: joint_error in powder.glslinc.
+func _joint_error(i: int, j: int, pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
+		bodies: Array) -> Vector2:
+	var r := _member_rot(i, mat, body, bodies) + _member_rot(j, mat, body, bodies)
+	r = r.normalized() if r.length_squared() > 1e-6 else bodies[body[i]].rot
+	var e := (pred[j] - pred[i]) - _rotate(r, _rest_now[j] - _rest_now[i])
+	return e.limit_length(SimParams.JOINT_MAX_ERR * SimParams.SPACING)
+
+
+## Share of each joint's error a member of a soft body held by joints moves by per iteration
+## (ADR 0016): JOINT_GAIN x k / 2, k the stiffness formula (_match_shapes), so a joint on its own
+## loses the stiffness's share of its error per 1/60 s (both ends move by k / 2 of it); at most 1 / N,
+## N the lattice neighbours within the region radius, where the Jacobi sum over a member's N joints
+## stays stable (a lattice's fastest mode moves a member by about 1.5 N times the share). k / N, a
+## member displaced alone getting k back as in a regions body, left a jelly at 0.2 a puddle on the
+## CPU: the joints under it carry the weight of every row above, where region goals hold each
+## member up on its own (ADR 0014). 0 for a regions material. Mirror: joint_share in powder.glslinc.
+func _joint_share(m: int, dt: float, iterations: int) -> float:
+	var row: Dictionary = materials[m]
+	if row.get("soft_model", 0) != JOINTS:
+		return 0.0
+	var k := 1.0 - pow(1.0 - row.stiffness, dt * 60.0 / iterations)
+	return minf(SimParams.JOINT_GAIN * 0.5 * k, 1.0 / lattice_joints(_region_reach(m), SimParams.SPACING))
+
+
+## Members of a square lattice of this spacing within reach of one of them (itself left out):
+## 8 at region 1.5, 12 at 2. Mirror: lattice_joints in powder.glslinc.
+static func lattice_joints(reach: float, spacing: float) -> int:
+	var count := 0
+	for y in range(-2, 3):
+		for x in range(-2, 3):
+			if (x != 0 or y != 0) and Vector2(x, y).length_squared() * spacing * spacing <= reach * reach:
+				count += 1
+	return count
 
 
 ## The rotation a member's way out of the rest shape is turned by (ADR 0005 item 6): in a soft
@@ -2144,6 +2201,8 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 		if own and (not soft_i or _rest_now[i].distance_squared_to(_rest_now[j]) <= _reach[i] * _reach[i]):
 			if soft_i:
 				sum += _keep_order(i, j, pred, mat, body, bodies)  # ADR 0013
+				if _joint_a[i] > 0.0:
+					_joint_sum += _joint_error(i, j, pred, mat, body, bodies)  # ADR 0016
 			continue
 		var rv := pred[i] - pred[j]
 		var dist := rv.length()

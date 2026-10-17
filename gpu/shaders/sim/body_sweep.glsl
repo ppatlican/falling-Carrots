@@ -27,7 +27,7 @@
 // Only members of bodies take part; vel is zero from hash_scatter for everything else.
 // Mirror: cpu_ref/particle_step.gd _sweep_delta.
 
-// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "powder.glslinc"
 

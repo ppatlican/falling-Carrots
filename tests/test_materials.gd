@@ -36,6 +36,8 @@ func test_validator_catches_bad_rows() -> void:
 		"'region'=2.5 out of range": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 2.5, "plasticity": 0.0})],
 		"'plasticity' must be a number for a cluster": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 1.5})],
 		"'plasticity'=1.5 out of range": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 1.5, "plasticity": 1.5})],
+		"unknown soft_model 'springs'": [_with(good, {"class": "cluster", "stiffness": 0.5, "region": 1.5, "plasticity": 0.0, "soft_model": "springs"})],
+		"'soft_model' is only for cluster": [_with(good, {"soft_model": "joints"})],
 	}
 	for expected in cases:
 		var problems: PackedStringArray = MaterialTable.new().load_rows(cases[expected])
@@ -89,6 +91,9 @@ func test_gpu_packing_layout() -> void:
 	table.load_rows([_with(_sand_row(), {"id": 5, "class": "cluster", "stiffness": 0.3, "region": 1.75, "plasticity": 0.625})])
 	expect_eq(table.pack_gpu().decode_float(5 * MaterialTable.GPU_STRIDE + 64), 1.75, "region at offset 64")
 	expect_eq(table.pack_gpu().decode_float(5 * MaterialTable.GPU_STRIDE + 76), 0.625, "plasticity at offset 76 (ADR 0012)")
+	expect_eq(table.pack_gpu().decode_u32(5 * MaterialTable.GPU_STRIDE + 52), 0, "no soft_model is regions (ADR 0016)")
+	table.load_rows([_with(_sand_row(), {"id": 5, "class": "cluster", "stiffness": 0.3, "region": 1.5, "plasticity": 0.0, "soft_model": "joints"})])
+	expect_eq(table.pack_gpu().decode_u32(5 * MaterialTable.GPU_STRIDE + 52), MaterialTable.SOFT_MODELS.find("joints"), "soft_model at offset 52")
 	expect_eq(b.decode_float(0 + 16), 0.0, "unused id 0 stays zero")
 	table.load_rows([_with(_sand_row(), {"id": 2, "cohesion": 0.25, "adhesion": 0.75})])
 	b = table.pack_gpu()
