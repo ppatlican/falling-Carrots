@@ -464,6 +464,7 @@ func make_body(positions: PackedVector2Array, material: int, rest_shape := Packe
 		shape.append(q - rest_mean)
 	var out: PackedVector2Array = ParticleStep.rest_outline(shape)
 	_bodies[id].rest = shape
+	_bodies[id].at = mean
 	var spawn := PackedFloat32Array()
 	spawn.resize(count * 8)
 	for k in count:
@@ -527,26 +528,46 @@ func _update_material_rt(id: int, row: PackedByteArray, became_soft: bool) -> vo
 		_ctx.rd.buffer_clear(_ctx.buffer("region_frame"), 0, cap * 16)
 
 
-## Reads every slot's position and flags back, a frame or two late, for the body brush to
-## refuse occupied spots. Calls callback(pos, flags) on the main thread with the pos (cap x 8
-## bytes) and mat_flags (cap x 4 bytes) buffers, both empty if a readback failed.
+## Reads every slot's position, flags and velocity back, a frame or two late, for the body
+## brush to refuse occupied spots. Calls callback(pos, flags, vel, read_frame) on the main
+## thread with the pos (cap x 8 bytes), mat_flags (cap x 4 bytes) and vel (cap x 8 bytes, px/s)
+## buffers, all empty if a readback failed, and the frame they show the pool after (the last
+## frame() before this call): bodies spawned later are not in them (unread_body_positions).
 func request_particles(callback: Callable) -> void:
-	RenderingServer.call_on_render_thread(_particles_rt.bind(callback))
+	RenderingServer.call_on_render_thread(_particles_rt.bind(callback, _frame))
 
 
-func _particles_rt(callback: Callable) -> void:
+func _particles_rt(callback: Callable, read_frame: int) -> void:
 	var got := {}
 	var done := func(data: PackedByteArray, what: String) -> void:
 		got[what] = data
-		if got.size() == 2:
-			callback.call_deferred(got.pos, got.flags)
+		if got.size() == 3:
+			callback.call_deferred(got.pos, got.flags, got.vel, read_frame)
 	if not _gpu_ready:
-		callback.call_deferred(PackedByteArray(), PackedByteArray())
+		callback.call_deferred(PackedByteArray(), PackedByteArray(), PackedByteArray(), read_frame)
 		return
 	var e1: Error = _ctx.readback_async_rt("pos", done.bind("pos"))
 	var e2: Error = _ctx.readback_async_rt("mat_flags", done.bind("flags"))
-	if e1 != OK or e2 != OK:
-		callback.call_deferred(PackedByteArray(), PackedByteArray())
+	var e3: Error = _ctx.readback_async_rt("vel", done.bind("vel"))
+	if e1 != OK or e2 != OK or e3 != OK:
+		callback.call_deferred(PackedByteArray(), PackedByteArray(), PackedByteArray(), read_frame)
+
+
+## Where the bodies made by make_body that a pool readback after read_frame doesn't show (still
+## waiting, or spawned since) spawn: each member's rest offset around the body's spawn mean.
+func unread_body_positions(read_frame: int) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for b in _bodies:
+		if b.count > 0 and b.made > read_frame and b.has("at"):
+			for q in b.rest:
+				out.append(b.at + q)
+	return out
+
+
+## How many frames the pool moves on from a readback after read_frame until a body made now
+## spawns: it waits behind the bodies already waiting, plus one frame for margin.
+func frames_until_spawn(read_frame: int) -> int:
+	return _frame - read_frame + _pending_bodies.size() + 1
 
 
 func _reset_bodies() -> void:

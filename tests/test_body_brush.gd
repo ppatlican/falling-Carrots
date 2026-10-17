@@ -7,6 +7,8 @@ const FILE_GROUPS := ["brush", "quick"]
 
 const BodyBrush = preload("res://core/body_brush.gd")
 const SimParams = preload("res://core/sim_params.gd")
+const ParticleSim = preload("res://gpu/particle_sim.gd")
+const MaterialTable = preload("res://cpu_ref/material_table.gd")
 
 const SP := SimParams.SPACING
 
@@ -98,6 +100,39 @@ func test_particles_occupy_the_spots_near_them() -> void:
 		expect(occupied.has(s), "the four spots around a particle between them (%s)" % s)
 	expect(not occupied.has(Vector2i(50, 50)), "a dead slot occupies nothing")
 	expect_eq(occupied.size(), 5, "occupied spots")
+
+
+func test_a_moving_particle_occupies_its_path() -> void:
+	# A particle on spot (10, 10) moving right at 120 px/s: in 0.05 s it moves 6 px, 3 spots.
+	var p := BodyBrush.spot_pos(Vector2i(10, 10))
+	var pos := PackedFloat32Array([p.x, p.y]).to_byte_array()
+	var flags := PackedInt32Array([BodyBrush.ALIVE]).to_byte_array()
+	var vel := PackedFloat32Array([120.0, 0.0]).to_byte_array()
+	expect_eq(BodyBrush.occupied_spots(pos, flags, vel).size(), 1, "where it is, with no time ahead")
+	var occupied: Dictionary = BodyBrush.occupied_spots(pos, flags, vel, 0.05)
+	for i in 4:
+		expect(occupied.has(Vector2i(10 + i, 10)), "spot (%d, 10) on its way" % (10 + i))
+	expect_eq(occupied.size(), 4, "only the spots along its path")
+
+
+func test_a_stroke_over_a_waiting_body_makes_nothing_there() -> void:
+	# Paused, a stroke makes a body that waits to spawn; the same stroke again, read back
+	# before it spawned, must make nothing (it made a second body inside the first).
+	var table = MaterialTable.new()
+	table.load_file()
+	var sim = ParticleSim.new(null, 1000, 1, table)
+	var stroke := _box(20, 20, 8, 4)
+	var first: Array = BodyBrush.bodies(stroke, {})
+	expect(sim.make_body(first[0], table.id_of("jelly")) > 0, "the first body is made")
+	var read_frame: int = sim._frame
+	var occupied := {}
+	BodyBrush.occupy(occupied, sim.unread_body_positions(read_frame), sim.frames_until_spawn(read_frame) * SimParams.DT)
+	expect(BodyBrush.bodies(stroke, occupied).is_empty(), "nothing over the waiting body")
+	var wider := _box(20, 20, 12, 4)
+	var rest: Array = BodyBrush.bodies(wider, occupied)
+	expect_eq(rest.size(), 1, "a wider stroke makes one body beside it")
+	if rest.size() == 1:
+		expect_eq(rest[0].size(), 16, "on the 4 x 4 spots the waiting body leaves free")
 
 
 func _box(x0: int, y0: int, cols: int, rows: int) -> Dictionary:

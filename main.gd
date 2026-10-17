@@ -208,15 +208,21 @@ func _paint_body(was_drawing: bool) -> void:
 		_stroke = {}
 
 
-## Makes the bodies of a finished stroke once the pool has been read back.
-func _make_stroke_bodies(pos: PackedByteArray, flags: PackedByteArray, stroke: Dictionary, material: int) -> void:
+## Makes the bodies of a finished stroke once the pool has been read back. A spot counts as
+## occupied where a particle will be when they spawn, or where a body made by an earlier stroke
+## but not in this readback will be (core/body_brush.gd).
+func _make_stroke_bodies(pos: PackedByteArray, flags: PackedByteArray, vel: PackedByteArray,
+		read_frame: int, stroke: Dictionary, material: int) -> void:
 	if not _running:
 		return
 	if pos.is_empty():
 		push_warning("body brush: the particle readback failed, no body made")
 	else:
+		var ahead: float = _sim.frames_until_spawn(read_frame) * SimParams.DT
+		var occupied: Dictionary = BodyBrush.occupied_spots(pos, flags, vel, ahead)
+		BodyBrush.occupy(occupied, _sim.unread_body_positions(read_frame), ahead)
 		var refused := 0
-		for positions in BodyBrush.bodies(stroke, BodyBrush.occupied_spots(pos, flags)):
+		for positions in BodyBrush.bodies(stroke, occupied):
 			if _sim.make_body(positions, material) == 0:
 				refused += 1
 		if refused > 0:

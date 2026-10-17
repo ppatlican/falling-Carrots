@@ -7,6 +7,11 @@
 ## body), then every spot not in a full 2 x 2 square of what is left (so each body is at least
 ## 2 particles thick), and each piece left, connected on the rest lattice as the eraser's split
 ## counts it (ParticleStep.body_pieces), becomes one body.
+## The pool is read back a few frames before the bodies spawn, so a spot also counts as held
+## when a particle will have moved onto it by then (occupied_spots' ahead) or a body not in the
+## readback yet will spawn on it (occupy). Without these, strokes drawn while paused, or over a
+## falling body, spawned bodies inside each other, which tore them into pieces that hung in
+## the air (2026-10-17).
 extends RefCounted
 
 const SimParams = preload("res://core/sim_params.gd")
@@ -51,22 +56,46 @@ static func paint(stroke: Dictionary, a: Vector2, b: Vector2, radius: float, max
 
 
 ## The spots (spot -> true) within OCCUPIED_REACH of a live particle, from the pool as read
-## back: pos (cap x vec2) and mat_flags (cap x uint) bytes.
-static func occupied_spots(pos: PackedByteArray, flags: PackedByteArray) -> Dictionary:
-	var sp := SimParams.SPACING
+## back: pos (cap x vec2) and mat_flags (cap x uint) bytes. With vel (cap x vec2, px/s) and
+## ahead (s), also the spots along each particle's path for ahead from the readback: where it
+## will be when a body made now spawns.
+static func occupied_spots(pos: PackedByteArray, flags: PackedByteArray, vel := PackedByteArray(),
+		ahead := 0.0) -> Dictionary:
 	var occupied := {}
 	var n := mini(pos.size() / 8, flags.size() / 4)
+	var moving := ahead > 0.0 and vel.size() >= n * 8
 	for i in n:
 		if flags.decode_u32(i * 4) & ALIVE == 0:
 			continue
 		var p := Vector2(pos.decode_float(i * 8), pos.decode_float(i * 8 + 4))
+		var to := p
+		if moving:
+			to += Vector2(vel.decode_float(i * 8), vel.decode_float(i * 8 + 4)) * ahead
+		_mark_path(occupied, p, to)
+	return occupied
+
+
+## Adds to occupied the spots of bodies that will spawn at positions (made, but not in the
+## readback yet), and below them as far as they fall from rest in ahead (s).
+static func occupy(occupied: Dictionary, positions: PackedVector2Array, ahead := 0.0) -> void:
+	var drop := Vector2(0.0, 0.5 * SimParams.GRAVITY * ahead * ahead)
+	for p in positions:
+		_mark_path(occupied, p, p + drop)
+
+
+## Marks the spots within OCCUPIED_REACH of the segment from a to b, sampled every quarter
+## spacing.
+static func _mark_path(occupied: Dictionary, a: Vector2, b: Vector2) -> void:
+	var sp := SimParams.SPACING
+	var steps := ceili(a.distance_to(b) / (0.25 * sp))
+	for k in steps + 1:
+		var p := a if steps == 0 else a.lerp(b, float(k) / steps)
 		var c := Vector2i((p / sp - Vector2(0.5, 0.5)).floor())
 		for dy in 2:
 			for dx in 2:
 				var s := c + Vector2i(dx, dy)
 				if spot_pos(s).distance_squared_to(p) < OCCUPIED_REACH * OCCUPIED_REACH:
 					occupied[s] = true
-	return occupied
 
 
 ## The bodies a finished stroke makes: one PackedVector2Array of spawn positions per piece,
