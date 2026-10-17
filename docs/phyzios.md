@@ -30,7 +30,7 @@ our symptoms.
 
 | our symptom (STATUS / ADR) | what Phyzios does instead | write-up § |
 |---|---|---|
-| Jelly on sand worms and digs; lopsided soft body creeps sideways | Jelly is a network of **pair joints** made on first touch, each storing a rest vector and both ends' rest angles; every correction is equal and opposite at the two ends, so momentum is exact and creep can't happen. No region goals to fight the grain contacts; sand meets jelly through the plain powder pair rule | 9 |
+| Jelly on sand worms and digs; lopsided soft body creeps sideways (**tried: ADR 0016**, joint jelly) | Jelly is a network of **pair joints** made on first touch, each storing a rest vector and both ends' rest angles; every correction is equal and opposite at the two ends, so momentum is exact and creep can't happen. No region goals to fight the grain contacts; sand meets jelly through the plain powder pair rule | 9 |
 | Dough (ADR 0012), if the rest lattice gives trouble | **Mochi:** no rest shape at all. `f = (ρi + ρj − 2ρ0)·ke + w·ks`, pull halved: pulls only while sparser than rest, breaks at one kernel radius, re-forms on contact. Or joints whose rest vector resets past a yield | 5, 9 |
 | Stickiness limits (ADR 0011): press-and-push, caps, tall damp cuts tearing | Cohesion driven by **density deficit** is self-limiting (a clump can't push itself up) and needs no cap or "touching" zone; taller walls = raise `ke`. No wall adhesion at all | 5 |
 | Sleeping trade-off; piles freeze; mid-air clumps | Sand never sleeps. Velocity-only contacts: a spring past rest spacing, damping **only on approach**, and friction that matches relative velocity scaled by overlap (`c = w·kf`). A pile at rest has no relative velocity, so friction holds it without freezing; overlaps spring apart slowly with no rebounds | 4 |
@@ -53,8 +53,8 @@ our symptoms.
   0.52). We probe both slider ends (ADR 0001); also probe an awkward **middle** value.
 
 ## Best candidates, in order (2026-10-17)
-1. Pair-joint jelly, as a timeboxed experiment against the creep (jelly on sand is fixed, ADR 0013). Since 2026-10-17 (ADR 0014): fixing the creep inside regional shape matching (FastLSM weights) works, but loaded jellies then give more, as the leak was holding them up; and a soft plank wedged into a gap turns inside out, which region fits don't undo. Joints conserve momentum by construction and have no fit to invert.
+1. ~~Pair-joint jelly~~: done as a timeboxed experiment (ADR 0016, 2026-10-17), and it passed its kill criteria: creep 0.001 px/s (FastLSM 0.028), loads hold better (a carrot dropped 60 px stays on up to 4 px off centre; regions only dead centre), a soft plank at 0.2 ends with 7 members inside out against 12-25, and it's cheaper than regions. On main as the "joint jelly" row for the owner to compare. What carried over and what didn't: the equal and opposite correction with Phyzios' half-each rotation of the rest vector, yes. Integrated angles and spin, no: each member's angle is the best rotation of its own joints, refitted every iteration, which keeps angular momentum exact as well. Gauss-Seidel order, no: a Jacobi sum is already momentum-exact; a coloured solve would raise the stiffness ceiling (from ~0.9 up the slider does nothing). Phyzios' constants didn't port: the share is k / 2 per joint, capped at 1 / N.
 2. Never-sleeping sand contacts on the CPU reference, then see whether `SLEEP_SPEED` can drop.
 3. Drag by density deficit, as an alternative to raising water drag to 0.3/s (the owner's call on feel).
 
-Each would be an ADR. None is started.
+Each would be an ADR. 2 and 3 aren't started.

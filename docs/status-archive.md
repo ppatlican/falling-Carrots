@@ -134,6 +134,13 @@ Solve dominates once particles are settled and packed, so measure the settled st
 - STATUS entry as it stood, 2026-10-17:
   - **A lopsided soft body creeps sideways on its own** (0.047 px/s at stiffness 0.2 on the CPU, 0.5–0.6 px/s on the GPU; not seen at the shipped 0.95). Tried: FastLSM weighting of the region fit (ADR 0013, CPU: a tilted jelly at 0.2 from 0.20 to 0.14 px/s; not kept), so the unweighted region fit (FastLSM splits each particle's mass over its regions, `docs/papers.md`) is only part of it. → archive § Lopsided soft body creeps sideways; ADR 0008.
 
+- **2026-10-17, pair joints (ADR 0016, the "joint jelly" row, owner to play):** every correction equal and opposite at a joint's two ends, each end's rest vector turned by half of each end's own best rotation. On the GPU `creep` at 0.2 reads 0.001 px/s (FastLSM 0.028, pre-FastLSM 0.154), and the jelly holds its lopsided shape (3.2 px off it, regions 9.2). Steps on the way, all GPU (`body_probe`):
+  - first build, R̄ = normalize(R_i + R_j) from the region fit: creep -0.001 px/s, but a joint plank on two carrot pillars (`droop` at 0.95) pushed itself and its pillars sideways at 1.2 px/s (probe shots: the whole set moves, nothing stretches);
+  - central joints (length only): no drift, but a 0.2 jelly slumps to 11 px of its 18 and a 0.2 plank inverts (16 members);
+  - each member's own best rotation, half each end (angular momentum exact): frictionless creep 0.034 → 0.014 px/s, the plank still slid;
+  - no push-out of a joint member from a rigid body, or a softer `JOINT_GAIN` 0.5: the plank rests (the push-out's corner misfire, one-sided, was the drive; regions' goals had absorbed it). Kept: that push-out only inside the nearest member's lattice cell (ADR 0008's gate);
+  - frictionless, regions and joints keep a small steady drift (0.038 / 0.014 px/s) that the CPU doesn't show: not the soft model, probably float rounding at the floor. Not looked into.
+
 ### A body dropped onto another freezes at the hit (fixed 2026-10-17, ADR 0015)
 Owner: "there's a noticeable slowdown of the bodies when a soft/rigid body is dropped from high up onto another soft/rigid body." Measured on the GPU (RTX 3080 Ti, `--disable-vsync` unless noted; the drops are deterministic, one run each).
 - **Not the frame time.** `main.tscn` driven by a throwaway script (a 16 x 10 body on the floor, 16 x 10 bodies let go at y 20 onto it, ~390 px/s at the hit), wall time per frame: carrot on carrot 1.3 ms mean, at most 3.0 ms, the same in the frames of the hits as anywhere else; jelly on jelly 2.4-2.8 ms at 0.95, 2.8-3.6 ms at 0.2 (it grows with the bodies, not at the hits). With vsync a flat 6.05 ms (165 Hz) through the hits. No pass spikes at the hit.

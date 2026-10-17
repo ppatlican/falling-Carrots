@@ -48,6 +48,7 @@ Times above are with 10 processes. The default is now 4 at below normal priority
 | `cpu_ref/reactions.gd`, `conduction.gd` | none exist yet | — |
 | `cpu_ref/particle_step.gd`, `_match_shapes`, `make_body`, `_member_rot` | `@rigid @soft @erase @bodies-water` | — |
 | … `_match_regions`, `_find_regions`, `_soft`, `_region_reach`, `_self_contact`, `_share_pushes_over_regions` | `@soft @plastic` | — |
+| … `_joint_error`, `_joint_share`, `lattice_joints` (pair joints, ADR 0016; only joint materials run them) | `test_joint_jelly_does_not_creep`, `@setup` | — |
 | … `_plastic_flow`, `_plastic_room`, `_plastic_outline` | `@plastic` | — |
 | … `rest_outline`, `body_pieces`, `split_body`, `erase_particles`, `_first_fit` | `@erase @brush @rigid` | — |
 | … `_contact_impulses`, `_impact_pair`, `_held_in_pair` (ADR 0015) | `@rigid @soft @sand @bodies-water` | — |
@@ -59,7 +60,7 @@ Times above are with 10 processes. The default is now 4 at below normal priority
 | … `_powder_liquid_drag`, powder sleeping | `@sand @liquids` | — |
 | … `step()`, `_find_neighbours`, `_apply_delta`, `_clamp_to_world` | the full suite | — |
 | `gpu/shaders/sim/body_match`, `body_project` | `@setup` | `body_probe tests,boxdrop,boxhigh,plank,boxside,boxstack,waterjelly`; `body_project` also `corkstrip` and the `solve_pressure` row |
-| … `body_region_fit`, `body_region_goal` | `@setup` | `body_probe jelly,droop,wobble,squash,erasejelly,waterjelly` |
+| … `body_region_fit`, `body_region_goal` | `@setup` | `body_probe jelly,droop,wobble,squash,erasejelly,waterjelly`; for pair joints (ADR 0016) also with `set=jelly.soft_model=joints`, plus `creep` and `droop inv` at 0.2 and `carrotjelly drop_dx=0,2,4` (each its own run) |
 | … `body_split` | `@setup` | `body_probe erasemid,erasejelly,erasebridge,erasedrag,reuse` |
 | … `body_plastic`, `body_outline`, `body_rest`, `plastic.glslinc` | `@setup` | `body_probe squash,wobble,sandjelly,waterjelly,jellystack,jellydrop,erasejelly,fold,softcap set=jelly.stiffness=S,jelly.plasticity=P` at P 0 and 1 and S 0.2, 0.8, 0.95; read the PLASTIC lines (ADR 0012 Results); `main.tscn` shots of dough |
 | … `body_sweep` | `@setup` | `body_probe boxhigh,plank,boxside,boxstack,sand` |

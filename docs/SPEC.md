@@ -88,7 +88,7 @@ Steps 2–5 run `substeps` times per frame (`config.json`, default 2) with dt = 
 
 **One data file**, `data/materials.json` (`{"materials": [row, ...]}`), with a hard cap of 64 materials. The `id` (0–63) is the GPU table index. One row per material:
 
-`id, name, class, color (HTML string; texture_id later), density, friction, viscosity, drag, wind_coupling, stiffness (clusters), region (clusters below stiffness 1: region radius in spacings, 1.5–2.0; ADR 0005), plasticity (clusters, 0–1; ADR 0012), cohesion, adhesion (0–1; ADR 0011), conductivity, heat_capacity, ignition_temp, boil_temp, melt_temp (number or null), lifetime (gas), tags`
+`id, name, class, color (HTML string; texture_id later), density, friction, viscosity, drag, wind_coupling, stiffness (clusters), region (clusters below stiffness 1: region radius in spacings, 1.5–2.0; ADR 0005), plasticity (clusters, 0–1; ADR 0012), soft_model (clusters, optional: "regions", the default, or "joints"; ADR 0016; packed into `Material.info.y`), cohesion, adhesion (0–1; ADR 0011), conductivity, heat_capacity, ignition_temp, boil_temp, melt_temp (number or null), lifetime (gas), tags`
 
 Stickiness columns (ADR 0011): `cohesion`, `adhesion`, 0 to 1 on every row, packed into `Material.more.y` and `.z`. `plasticity` (clusters, 0 to 1; ADR 0012) is the last free float, `Material.more.w`: the row is full, and a new column needs a fifth vec4 (96 bytes) and a shader stamp bump (2.7).
 

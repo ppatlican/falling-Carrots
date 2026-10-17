@@ -28,7 +28,7 @@ A cluster solid at stiffness 1: keeps its shape exactly (carrot, a drawn block).
 _Avoid_: Solid (ambiguous with static solid)
 
 **Soft body**:
-A cluster solid below stiffness 1: bends, wobbles and springs back (jelly), or keeps its dents if it has plasticity (dough). It is matched over regions, not as one cluster (ADR 0005).
+A cluster solid below stiffness 1: bends, wobbles and springs back (jelly), or keeps its dents if it has plasticity (dough). It is matched over regions, not as one cluster (ADR 0005), or held by pair joints if its material's soft model says so (ADR 0016).
 _Avoid_: Deformable
 
 **Jelly**:
@@ -47,6 +47,13 @@ The cluster-solid parameter: the share of a body's shape error removed per 1/60 
 **Region**:
 In a soft body, a member and the members of its body whose rest offsets lie within the material's `region` radius of its own (1.5–2.0 spacings). Each region is fitted like a small rigid body every iteration, and each member moves toward the mean of its regions' goals, so the body bends where it is loaded. Smaller regions bend more. A long or big soft body sags and slumps a lot (the noodle, ADR 0005 Known limits).
 _Avoid_: Cluster (a region is not its own body)
+
+**Soft model**:
+How a soft material keeps its shape, the `soft_model` column: `regions` (regional shape matching, the default) or `joints` (pair joints). Joint jelly is the shipped row with joints (ADR 0016).
+
+**Pair joint**:
+In a soft body held by joints, a link between two members whose rest offsets lie within the region radius (the same pairs a region holds). Each iteration both ends move toward their rest vector, turned by the two ends' rotations, by equal and opposite amounts, so the body's momentum is kept and it can't creep (ADR 0016).
+_Avoid_: Spring (a joint keeps direction as well as length), bond
 
 **Gas**:
 A behaviour class of light, short-lived particles moved by heat and wind (fire, smoke, steam).
