@@ -1,6 +1,6 @@
 # 0016: Pair-joint jelly (a timeboxed experiment)
 
-Date: 2026-10-17. Status: proposed, **owner's call**. A timeboxed experiment, ADR 0014's Owner's call 3: jelly as a network of pair joints (Phyzios, `docs/phyzios.md`, write-up § 9) instead of regional shape matching (ADR 0005), behind a per-material switch so the owner can compare the two. Built and measured on the GPU; it passed all three kill criteria (Results). On main as a new material row, **joint jelly**; the shipped jelly and dough are untouched.
+Date: 2026-10-17. Status: **accepted** (owner, 2026-10-17: "joints are better"; Owner's call below). A timeboxed experiment, ADR 0014's Owner's call 3: jelly as a network of pair joints (Phyzios, `docs/phyzios.md`, write-up § 9) instead of regional shape matching (ADR 0005), behind a per-material switch so the owner can compare the two. Built and measured on the GPU; it passed all three kill criteria (Results). On main as a new material row, **joint jelly**; the shipped jelly and dough are still on regions until the switch (Owner's call).
 
 ## Context
 - **The creep.** ADR 0014 (FastLSM weights, on main, 63b2106) stops a lopsided soft body creeping sideways (GPU `body_probe creep` at 0.2: 0.151 → 0.028 px/s). But loaded jellies then give more: a carrot dropped on a shipped jelly slid off in 2 of 3 runs, since the old momentum leak was holding loads up. ADR 0014 found that any momentum-exact fix inside regional shape matching sags the same way.
@@ -75,10 +75,13 @@ GPU (`body_probe`, RTX 3080 Ti, `--disable-vsync`). "Regions" is the shipped jel
 - **Not checked:** dough (plasticity) with joints, a joint jelly cut by a dragged eraser, joint jelly in deep water, phones.
 
 ## Owner's call
-Play **joint jelly** (the purple row) beside **jelly** in `main.tscn`: drop carrots on both, lean them, wedge planks, drop them on sand, drag the stiffness slider. Then:
-1. **Make jelly use joints** (`"soft_model": "joints"` on its row; dough after a plasticity check), and decide on ADR 0014 separately: FastLSM then only matters for regions bodies; or
-2. **Keep both rows** for now; or
-3. **Drop joints**: remove the row (the regions path is untouched).
+**Decided (owner, 2026-10-17): joints are better.** The options were: make jelly use joints, keep both rows, or drop joints.
+
+Next, not done yet:
+1. **Switch jelly to joints:** `"soft_model": "joints"` on the jelly row, then remove the joint jelly row. Before that, the owner may play the two side by side in `main.tscn`. If the shipped 0.95 feels too firm (it sags less than regions there), try ~0.8 before retuning. Re-run the shipped jelly scenarios afterwards (`docs/agents/testing.md`, the `body_region_fit` row).
+2. **Dough stays on regions** until plasticity (ADR 0012) has been checked with joints (`body_probe squash,wobble,sandjelly,waterjelly,jellystack,jellydrop,erasejelly,fold set=jelly.plasticity=1,jelly.soft_model=joints` at 0.2, 0.8 and 0.95; read the PLASTIC lines).
+3. **ADR 0014 (FastLSM)** then only matters for regions bodies (dough). Keep it or revert it once dough has been checked.
+4. Later, if the top of the stiffness slider is missed: a coloured solve to raise the joints' stiffness ceiling (Known limits).
 
 ## Considered and rejected
 - **R̄ = normalize(R_i + R_j) with the region fit's rotations** (the first build): momentum-exact but not angular-momentum-exact, and with the push-out misfire the plank on pillars slid sideways at 1.2 px/s (item 3).
