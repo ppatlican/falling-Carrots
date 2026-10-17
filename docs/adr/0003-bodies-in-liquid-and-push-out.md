@@ -2,6 +2,17 @@
 
 Date: 2026-10-12. Status: accepted, implemented in the CPU reference and on the GPU (Milestone 3 step 4 and the sand push-out the owner chose, 2026-10-12: "a grain inside a body is pushed toward the nearest edge of the body's rest shape, using the body's position and rotation from shape matching"). Written before the code. Items 2 (level, compression), 4 (reference pressure, wet floor) and 6 (drag) were changed or added by the CPU tests, and item 4 (wet face, surface drop) by the GPU probe, as each says; item 12 (a soft body's pushes made rigid) was added after the owner chose it, 2026-10-12, to fix the first Known limit; items 11 and 13 were added 2026-10-13 after the owner reported bodies passing into each other, item 14 (swept contacts between bodies) the same day as the next step agreed with the owner, and item 15 (a body's whole face wet under water, wet side walls) the same day after the owner reported corks staying in a sand bed under water, and item 16 (the grid's cells around a body pinned under sand) the same day after the owner saw such corks shake and the sea jump with them. The measurements are in "Decided by the tests" below.
 
+## Decision summary
+*Added 2026-10-17 so agents can stop here; the full ADR below is unchanged.* Accepted and built (CPU reference and GPU), items 1–18.
+- **The grid sees bodies (1–3):** body particles splat a volume and a weight channel (`hydro_phi` is a `vec4`); body volume counts toward bed, bubble pull and compression, body weight sets the cell's level; water's PBF density counts body particles at share 1.
+- **Buoyancy (4, 12, 15, 17):** water presses on a body's wet face with the grid's pressure relative to the body's reference pressure p_ref (the lowest p over its faces, at least g × `BODY_SURFACE_DROP`); under water the whole outline face and the floor and side walls count as wet. A soft body's pressure pushes are replaced by their rigid part (`body_project`), and every body's pushes are clamped only after that.
+- **Liquid contacts and drag (5, 6):** body–liquid pairs follow the body contact rule with mass weights, no friction; water drags wet members (`BODY_LIQUID_DRAG` 20); bodies don't get wet (`WET_SLIP` stays a powder rule).
+- **Push-out from inside a body (7–10, the owner's option 1):** each member stores the way out of its rest shape (`rest_offset.zw`); a grain or liquid particle inside the outline is pushed toward the nearest edge; an erased body's outline is stale until the split rebuilds it.
+- **Body against body (11, 13, 14):** body pairs get the push-out too; a push between bodies may stop a body but not launch it; a body that went into another this substep is rewound along its path (`body_sweep`).
+- **The grid around bodies (16, 18):** no bubble pull in a body's cells, sand bed is porous to the water beside it, a mixed cell under cover isn't air; the water under a floater is pulled up to it (capped, only under a body that reaches the air).
+- **Rejected:** bodies as liquid volume in the grid, the grid's push on every body particle, buoyancy from contacts alone, a per-body buoyancy force.
+- **Still open** (Known limits): a sunk body slides on a water film, a big floater heaves with the pool, a long body takes ~15 s to rise, a buried cork can stay down, the sweep rewinds a whole move and not a spin.
+
 ## Context
 ADR 0002 left two things open:
 - **Body–liquid coupling (step 4).** Water passes into and fills bodies: body particles are left out of the density projection grid, of water's PBF density, and of the contact rule for body–liquid pairs.

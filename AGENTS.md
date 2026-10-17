@@ -18,10 +18,10 @@ When a task needs a subagent, delegate it through `/grok-cc:rescue` (the Grok CL
 
 ## Project docs
 
-- `CONTEXT.md`: the glossary. Use its terms (grain, pile, block fill, churn, slosh, squeezing, pudding, sleeping, density projection grid, rigid body, soft body, plasticity, dough, parameter, stickiness, CPU reference, GPU probe).
+- `CONTEXT.md`: the glossary. Use CONTEXT.md's terms.
 - `docs/adr/`: decisions. `0001-oe-cake-direction.md` sets the direction (OE-Cake-style, rigid and soft bodies as cluster solids, per-material parameters the player adjusts) and lists what in the code still works against it.
 - `docs/SPEC.md`: what we're building and the rules the code must keep, including the GPU plumbing rules in 2.7. Read 2.7 before touching a shader.
-- `docs/STATUS.md`: what works, what's verified, open bugs with everything already tried, and what's next. Read Known issues before tuning the solver.
+- `docs/STATUS.md`: what works, open bugs with what was already tried, and what's next. Read its Known issues before tuning the solver. Resolved issues, experiment logs, the Verified table and pass times are in `docs/status-archive.md` (grep its headings).
 - `docs/papers.md`: reference papers and code, grouped by symptom. Before changing solver, boundary, sand, MPM or fluid-rendering behaviour, read only the matching section; cite what you used.
 - `docs/agents/gpu-probe.md`: read before running or reading the GPU probe, comparing variants, timing passes, or taking screenshots.
 - `.workbuddy-ai/memory/` (untracked, main checkout only): notes from another AI tool the owner used, with decisions made there (for example, an MPM rewrite was judged not justified). Read them before solver or architecture decisions. WorkBuddy no longer works on this codebase (owner, 2026-10-14), and its spikes were deleted.
@@ -34,20 +34,14 @@ When a task needs a subagent, delegate it through `/grok-cc:rescue` (the Grok CL
 ## Working on the sim
 
 ### Liquids
-- Depth pressure comes from the density projection grid (`gpu/shaders/sim/hydro.glslinc`); PBF only fixes local spacing. Tune liquids through the `HYDRO_*` constants and water `drag` in `data/materials.json`. STATUS lists the local fixes the grid replaced (liquid stack scaling, per-particle carried pressure) and why they churned.
+- Depth pressure comes from the density projection grid (`gpu/shaders/sim/hydro.glslinc`); PBF only fixes local spacing. Tune liquids through the `HYDRO_*` constants and water `drag` in `data/materials.json`. `docs/status-archive.md` (Water churn) lists the local fixes the grid replaced (liquid stack scaling, per-particle carried pressure) and why they churned.
 
 ### Verifying a change on the GPU
 - A solver change is fixed only once the GPU probe shows it (`tools/gpu_probe.gd`; arguments in its header, how to read it in `docs/agents/gpu-probe.md`). Fixes that passed the CPU reference have done nothing on the GPU before.
 - A change to what the owner sees is fixed only once screenshots of `main.tscn` show it (recipe in `docs/agents/gpu-probe.md`). The probe's mean speed once read 9 px/s while the owner saw water shooting up.
 - Run Godot from a copy of the repo under the job tmp or scratchpad. Running in the repo rewrites `project.godot` and `.godot/`, and a headless `--import` drops lines from `project.godot`. A fresh copy needs one `--headless --import` before the probe. After editing a `.glslinc`, delete `.godot/imported/*.glsl-*` in the copy before importing.
 - The GPU probe needs a real window: the Windows console exe without `--headless`, `/mnt/c/Users/nosed/Desktop/Godot_v4.7.1-stable_win64.exe/Godot_v4.7.1-stable_win64_console.exe --path '<windows path>' --script res://tools/gpu_probe.gd -- <args>`. A WSL path works as `\\wsl.localhost\kali-linux\home\...`.
-- In a worktree session, a guard rejects shell commands it can't verify. Rejected so far:
-  - a variable as the command (`$G`), or a variable holding a path that `sed` or another tool acts on;
-  - `for` loops, `bash script.sh`, `timeout`, `sleep` followed by other commands, and commands that read stdin;
-  - any text containing `.git` (such as `tar --exclude=.git`), `git -C .`, `cd` into the main checkout before `git`, and a heredoc whose text contains the word git;
-  - several heredocs writing files in one command.
-
-  What passes: one literal Godot call per command (chained with `;` or `&&`); `cp -r` over an explicit list of top-level entries; the Write tool for new or rewritten files; one `python3 - <<'EOF'` per command for multi-file edits; `until <check>; do sleep 5; done` to wait. To read a file from another branch, use `git show <ref>:<path> > <tmp file>` from the worktree.
+- In a worktree session, a guard rejects shell commands it can't verify: what it rejects and what passes is in `docs/agents/gpu-probe.md` (Worktree shell guard).
 
 ### Running tests
 - Before running anything, pick what the change can affect from `docs/agents/testing.md`: changed file → CPU test groups and GPU probe scenarios. Name what you skipped and why in the report.

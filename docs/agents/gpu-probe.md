@@ -3,10 +3,14 @@
 How to measure the GPU sim: run the probe, read it, time passes, and capture what the owner sees. Arguments and output fields are listed in the header of `tools/gpu_probe.gd`; this file covers how to use them. For how water and sand move in the owner's scenes (fall, dam, surface, pour, sandair, erase, shaft, sink, bowl, mounds, hover), use `tools/water_feel_probe.gd`; for rigid and soft bodies (the `tests/test_bodies.gd` scenarios on the GPU, a box on sand, and timing loads with big and many bodies), use `tools/body_probe.gd`. Their scenarios and outputs are in their headers, and they run the same way.
 
 ## Running variants
-- One tmp copy per variant (`$CLAUDE_JOB_DIR/tmp/wc/<name>`), each imported once. Up to two probes can run in parallel as separate windows (see Timing passes); a 2400-frame run takes a few minutes.
+- One tmp copy per variant (`$CLAUDE_JOB_DIR/tmp/wc/<name>`), each imported once.
+  - The first `--headless --import` of a fresh copy sometimes stops partway, and then every shader fails with "could not load as RDShaderFile (is it imported?)". Run `--import` again.
+  - Reusing a copy (refreshed without its `.godot`) keeps the old import cache, so `test_shader_imports_newer_than_includes` fails spuriously; touching a `.glsl` doesn't help, since Godot reimports by hash. Delete the copy's `.godot` before `--import`.
+  - Surface metrics (`water_feel_probe surface`, `hover`, `gpu_probe` 50k water) are chaotic: the same code gave a quiet run and a bursting one. Judge a change on 2–3 runs plus an unchanged baseline run the same day: export the base branch into its own tmp dir (`git archive <branch>`), copy the new probe in, import it.
+  - `water_feel_probe shots=` saves frames to `user://`, which is `%APPDATA%/Godot/app_userdata/fallingCarrots/` on Windows. Up to two probes can run in parallel as separate windows (see Timing passes); a 2400-frame run takes a few minutes.
 - Compare variants on **plateaus**: the mean of every sample from frame 1200 on, never a single sample. Run-to-run noise on mean speed is about ±3 px/s. A small script that averages the `SURF` and `f=` lines per log pays for itself after the second variant.
 - Use both drop patterns for liquids:
-  - Default (blocks in consecutive frames): the STATUS baseline.
+  - Default (blocks in consecutive frames): the baseline in the Verified table (`docs/status-archive.md`).
   - `gap=30`: blocks 30 frames apart, the pace of the owner clicking "+10k". It leaves more air and motion than the default. The owner's churn reports come from this pattern.
 - Two liquids (ADR 0010): `gpu_probe oil,water 4800 2 every=47` pours water onto oil; the per-material lines' `mean_y` shows which ends on top (~266 over ~329 when fully layered). A layered pool rocks for ~40–55 s as its interface sloshes (mean speed swinging 1–17 px/s with a ~5–6 s period), so run 4800 frames and judge the last 1000. Both start as two thick layers; `water_feel_probe layers` starts mixed (`mix=rows`: 2 px rows alternating; `mix=alt`: +10k oil, water, oil, water clicked 30 frames apart; `mix=pour`/`pourwater pour_y=150`: one liquid brushed onto a pool of the other; the brush draws nothing inside a pool). Read `top` (per 20 px column, the share of oil among its highest particles: 1 layered, ~0.5 mixed) and `LAYERPROF` at the end.
 - **Before trusting what the owner saw, check their imports.** A game run without the editor re-importing loads the SPIR-V of an older `.glsl` (the owner's "oil and water just mix", 2026-10-15, was every shader imported before ADR 0010). The game now refuses to start on a stale import (`ComputeContext.import_is_stale`); to reproduce the owner's run anyway, copy their `.godot` into a tmp copy and don't import it.
@@ -44,3 +48,12 @@ The probe draws nothing visible. To see what the owner sees, run `main.tscn` fro
 - To quit: set `main._running = false`, then `main._sim.shutdown()`, then `quit()`. Otherwise `main.gd` runs one more frame on a freed sim and logs a script error.
 - `ffmpeg -framerate 30 -pattern_type glob -i 'clip/c*.png'` turns frames into an mp4 or gif. To put a number on visible churn, measure the share of water pixels that change between frames 2 apart (PIL `ImageChops.difference`, pixels over 40). PR #2 measured 13.7%; the density projection grid 0.1%.
 - The owner's before and after images and clips are in `C:\Users\nosed\Pictures\falling-carrots-water50k\`.
+
+## Worktree shell guard
+In a worktree session, a guard rejects shell commands it can't verify. Rejected so far:
+- a variable as the command (`$G`), or a variable holding a path that `sed` or another tool acts on;
+- `for` loops, `bash script.sh`, `timeout`, `sleep` followed by other commands, and commands that read stdin;
+- any text containing `.git` (such as `tar --exclude=.git`), `git -C .`, `cd` into the main checkout before `git`, and a heredoc whose text contains the word git;
+- several heredocs writing files in one command.
+
+What passes: one literal Godot call per command (chained with `;` or `&&`); `cp -r` over an explicit list of top-level entries; the Write tool for new or rewritten files; one `python3 - <<'EOF'` per command for multi-file edits; `until <check>; do sleep 5; done` to wait. To read a file from another branch, use `git show <ref>:<path> > <tmp file>` from the worktree.

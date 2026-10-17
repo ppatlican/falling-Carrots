@@ -10,7 +10,7 @@ ADR 0001 decisions 3 and 4: parameters are per material, the player edits the se
 What the code reads, checked before writing this:
 - Every column a slider touches is read from the material buffer (binding 14) in every substep: `density` (powder and body contacts, a body's weight in the density projection grid, `solve_pressure`), `friction` (powder and body contacts, wall friction in `solve_apply`), `viscosity` (liquid XSPH), `drag` (`velocity_update`, all classes), `stiffness` (`body_match`, `body_region_goal`, `soft_material()`), `region` (`region_reach()` in `body_region_fit` and `body_region_goal`). Nothing caches them on the GPU: regions are found again every iteration from the live radius.
 - One thing was cached on the CPU: each body's `soft` flag in `ParticleSim`, which decides whether the regions pass runs (ADR 0005).
-- A liquid's `density` does nothing (STATUS Known issues, "Liquids ignore their material density").
+- A liquid's `density` does nothing (STATUS Known issues, now `docs/status-archive.md`, "Liquids ignore their material density").
 - Nothing reads `wind_coupling`, `conductivity`, `heat_capacity`, `lifetime` or the temperatures yet.
 
 ## Decision

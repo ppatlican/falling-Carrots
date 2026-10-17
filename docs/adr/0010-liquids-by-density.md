@@ -1,6 +1,18 @@
 # 0010: Liquids by density (mass-weighted PBF and grid)
 
-Date: 2026-10-15. Status: accepted (owner, 2026-10-15; answers below). Milestone 3b, STATUS Next item 9 ("per-material liquid density"); fixes STATUS Known issues "Liquids ignore their material density".
+Date: 2026-10-15. Status: accepted (owner, 2026-10-15; answers below). Milestone 3b, STATUS Next item 9 ("per-material liquid density"); fixes STATUS Known issues "Liquids ignore their material density" (now in `docs/status-archive.md`).
+
+## Decision summary
+*Added 2026-10-17 so agents can stop here; the full ADR below is unchanged.* Accepted and built: option A, mass-weighted PBF and grid (SunaBox's per-material gravity rejected). A liquid particle's mass is its `density` (water 1), and every rule reduces exactly to the old code for pure water.
+- **1.** PBF: each liquid pair's term is scaled by `2 ρ_j / (ρ_i + ρ_j)` (FleX 2014 Eq. 4), so momentum is kept.
+- **2.** The grid pushes a liquid by `−∇p / ρ_i`.
+- **3.** The grid solve weighs each face by `1 / ρ_face` (variable-density Poisson); the bed continues p with the pore liquid's head.
+- **4.** Liquids with density ≠ 1 splat their excess mass into a fifth channel; `hydro_phi` writes a cell density to `hydro_rho` (binding 29).
+- **5–7.** A body counts at its weight in the cell's liquid; body buoyancy follows p; the bubble pull stays by volume.
+- **8–9.** Liquid `density` slider 0.5–2; oil ships (density 0.8, olive `#b5b82e`).
+- **Unchanged on purpose:** grains ignore a liquid's density (sand sinks through liquid at 2; owner: fine for now), no interfacial tension, `LIQUID_KICK` 2.
+- **Owner's "they just mix" (2026-10-15)** was stale shader imports; the game now refuses to start on one (`ComputeContext.import_is_stale`).
+- **Known limits:** a layered pool rocks for ~40–55 s, a dark line along the interface, an oil film on the floor from a fine mix, `HYDRO_MAX_CELLS` 960.
 
 ## Context
 ADR 0001 and SPEC 2.2 say buoyancy comes from each material's density. For liquids the code doesn't do that yet. What it does today (read before writing this):
