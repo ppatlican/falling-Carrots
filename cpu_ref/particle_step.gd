@@ -780,10 +780,15 @@ func _project_body_pushes(delta: PackedVector2Array, pred: PackedVector2Array, m
 ## offsets lie within the material's region radius of its own (_find_regions).
 ##   Fit (body_region_fit.glsl): per region, its centroid c, rest centroid c0 and rotation R, as
 ##   _match_shapes fits a whole body (R kept from the last fit when the region has under 2
-##   members or |A_pq| is near 0), kept as R and t = c - R c0.
+##   members or |A_pq| is near 0), kept as R and t = c - R c0, except that each member m counts
+##   with weight 1 / n_m, n_m the size of its own region (FastLSM, ADR 0014).
 ##   Goal (body_region_goal.glsl): member i moves toward the mean, over the regions that hold it
 ##   (the members of its own region: the relation is symmetric), of t_r + R_r q_i, by the
 ##   stiffness formula of _match_shapes.
+## With those weights the goals keep the body's momentum exactly: the moves sum to k times the sum
+## over regions r of sum over m in r of (goal_r(m) - pred[m]) / n_m, which is 0 about each weighted
+## centroid. Unweighted, edge members (smaller regions) counted for more, and a lopsided jelly at
+## stiffness 0.2 slid sideways for good (STATUS; GPU body_probe creep 0.15 px/s, now 0.03).
 ## Each region is rigid but neighbouring ones turn by different amounts, so the body bends where
 ## it is loaded and springs back to its rest shape. The rotations stay in state "region_rot"
 ## (the push-out reads them, and the next fit keeps one when it can't find one).
@@ -798,20 +803,23 @@ func _match_regions(pred: PackedVector2Array, mat: PackedInt32Array, rest: Packe
 			continue
 		var c := Vector2.ZERO
 		var c0 := Vector2.ZERO
+		var ws := 0.0
 		for m in list:
-			c += pred[m]
-			c0 += rest[m]
-		c /= list.size()
-		c0 /= list.size()
+			var w: float = 1.0 / _regions[m].size()
+			c += w * pred[m]
+			c0 += w * rest[m]
+			ws += w
+		c /= ws
+		c0 /= ws
 		var a := Vector2.ZERO
 		for m in list:
 			var p := pred[m] - c
 			var q := rest[m] - c0
-			a += Vector2(p.dot(q), q.cross(p))
+			a += Vector2(p.dot(q), q.cross(p)) / _regions[m].size()
 		var rot := _region_rot[r]
 		if rot.length_squared() < 0.25:
 			rot = Vector2(1.0, 0.0)  # a fresh slot (make_body writes (1, 0), as brush_spawn does)
-		if list.size() >= 2 and a.length() > BODY_ROT_EPS * list.size():
+		if list.size() >= 2 and a.length() > BODY_ROT_EPS * ws:
 			rot = a.normalized()
 		_region_rot[r] = rot
 		shift[r] = c - _rotate(rot, c0)

@@ -11,7 +11,7 @@
 // A thread writes only its own s_pred and reads no other particle's position, so no thread sees
 // another's move. Mirror: cpu_ref/particle_step.gd _match_regions (the goal).
 
-// common.glslinc stamp: Params 128 B, v23. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {

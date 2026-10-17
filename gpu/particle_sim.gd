@@ -239,7 +239,7 @@ func _body_buffer_specs() -> Array:
 		[25, "bodies", (body_cap + 1) * BODY_BYTES],
 		[26, "body_spawn", cap * 32],
 		[27, "region_frame", cap * 16],
-		[28, "body_push", cap * 8],
+		[28, "body_push", cap * 16],
 	]
 
 

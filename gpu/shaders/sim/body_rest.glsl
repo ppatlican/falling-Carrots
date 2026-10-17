@@ -9,7 +9,7 @@
 // rest_offset, and reads only its own, so no member sees another's half-written.
 // Mirror: cpu_ref/particle_step.gd _plastic_outline (the new outline and rest).
 
-// common.glslinc stamp: Params 128 B, v23. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "plastic.glslinc"
 
@@ -21,7 +21,7 @@ void main() {
 	uint body = s_body(t);
 	uint slot = sorted_ids[t];
 	vec4 r = rest_offset[slot];
-	vec2 q = r.xy + body_push[t];
+	vec2 q = r.xy + body_push[t].xy;
 	bool moved = false;
 	vec2 best = vec2(PLASTIC_INNER);
 	// Only points within PLASTIC_REACH spacings on the rest shape: the window holds the members
@@ -30,7 +30,7 @@ void main() {
 	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
 		if (s_body(j) != body) continue;
-		moved = moved || body_push[j] != vec2(0.0);
+		moved = moved || body_push[j].xy != vec2(0.0);
 		vec2 o = scratch[j];
 		if (o.x < 0.5 * PLASTIC_INNER) {
 			float d2 = dot(o - q, o - q);

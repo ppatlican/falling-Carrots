@@ -8,7 +8,7 @@
 // Liquids: density constraint. Everyone: powder contacts. Clamped to half a spacing
 // per iteration for stability. New behaviour classes add their term here.
 
-// common.glslinc stamp: Params 128 B, v23. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "liquid.glslinc"
 #include "powder.glslinc"
@@ -34,7 +34,7 @@ void main() {
 		vel[sorted_ids[t]] += scale * body_out;  // summed over the iterations (velocity_update)
 	}
 	// What a soft member gets from other soft bodies, in the share each member of its region gets
-	// of it (solve_apply).
-	body_push[t] = scale * body_share / region_n;
+	// of it (solve_apply), and its region's size (body_region_fit).
+	body_push[t] = vec4(scale * body_share / region_n, region_n, 0.0);
 	scratch[t] = d;
 }
