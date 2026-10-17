@@ -69,7 +69,7 @@ GPU, RTX 3080 Ti, `--disable-vsync`, the shipped dough row (1.1) unless set. "Be
 - **A dough of density 1.0 sinks slowly**, since its top is out of the grid's liquid fill at first. A 0.9 dough rising from the floor breaks into a few pieces at the surface.
 - **A very light dough (0.1) under a big pool turns over for a long time** (Results).
 - **A dough bed on the floor under water is buoyant only where the grid holds liquid** (its top cells). Its deep part bears its full weight, as a dough sealed to the floor would.
-- **The gap is drawn over, not closed.** The sim leaves 1-3 px of air over the dips of the dough's top (44% of columns before the drawing), held by the grid as over sand.
+- **The gap is drawn over, not closed.** The sim leaves 1-3 px of air over the dips of the dough's top (44% of columns before the drawing), held by the grid as over sand. **Amended by ADR 0020 (2026-10-17):** the grid now pulls room beside mochi full, as in open water, so the sim closes it (shots at 10 s: 22-23% of columns dark, from 34-36%), and the air a dough leaves sinking through a pool (the owner's oil over dough, pockets up to ~20 px at the walls) with it.
 - Not checked: oil and dough (oil is a liquid, so it takes the same rules), dough and sand under water, the eraser in a wet dough, phones.
 
 ## Owner's call
