@@ -23,6 +23,7 @@ When a task needs a subagent, delegate it through `/grok-cc:rescue` (the Grok CL
 - `docs/SPEC.md`: what we're building and the rules the code must keep, including the GPU plumbing rules in 2.7. Read 2.7 before touching a shader.
 - `docs/STATUS.md`: what works, open bugs with what was already tried, and what's next. Read its Known issues before tuning the solver. Resolved issues, experiment logs, the Verified table and pass times are in `docs/status-archive.md` (grep its headings).
 - `docs/papers.md`: reference papers and code, grouped by symptom. Before changing solver, boundary, sand, MPM or fluid-rendering behaviour, read only the matching section; cite what you used.
+- `docs/phyzios.md`: how Phyzios (OE-Cake's successor, reverse-engineered by the owner) handles each of our open symptoms, with a pointer to the full write-up. Read the matching row before changing a material rule, the soft bodies, sand, stickiness or drag. Ideas only: no code or files from the game.
 - `docs/agents/gpu-probe.md`: read before running or reading the GPU probe, comparing variants, timing passes, or taking screenshots.
 - `.workbuddy-ai/memory/` (untracked, main checkout only): notes from another AI tool the owner used, with decisions made there (for example, an MPM rewrite was judged not justified). Read them before solver or architecture decisions. WorkBuddy no longer works on this codebase (owner, 2026-10-14), and its spikes were deleted.
 

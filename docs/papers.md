@@ -2,6 +2,8 @@
 
 Read only the section for the problem at hand. Fetch one paper section at a time; cite what you used.
 
+Also check `docs/phyzios.md`: how OE-Cake's successor handles the same symptom (ideas only).
+
 ## Solver basics (substeps, dt scaling, s_corr, stiffness)
 - **Small Steps in Physics Simulation** (Macklin et al. 2019): https://matthias-research.github.io/pages/publications/smallsteps.pdf
   Substeps beat iterations; deep PBF tank coming fully to rest; how constants scale with dt. **Read first.**
@@ -18,6 +20,7 @@ Read only the section for the problem at hand. Fetch one paper section at a time
   Boundary particles that fix density deficit at walls/floor; relevant for M4 static solids.
 
 ## Sand (piles freezing, sand under water)
+- **Phyzios powder** (`docs/phyzios.md`): no sleeping; velocity-only contacts with approach-only damping and overlap-scaled velocity matching hold a pile without freezing it.
 - **Drucker-Prager Elastoplasticity for Sand Animation** (Klár et al. 2016): https://math.ucdavis.edu/~jteran/papers/KGPSJT16.pdf
   Correct angle of repose; piles creep instead of freezing.
 - **Multi-species simulation of porous sand and water mixtures** (Tampubolon et al. 2017): https://math.ucdavis.edu/~jteran/papers/PGKFTJM17.pdf
@@ -41,6 +44,7 @@ Read only the section for the problem at hand. Fetch one paper section at a time
 - **SunaEngine renderer** (`src/render.js`; AGPL, see Readable code): a working 2D, face-on version of the paper above, used by an OE-Cake remake. Splat poly6 kernels into a field texture (coverage, speed, and the material id in alpha) → bilateral Gaussian or curvature-flow smooth → coverage mask blurred at 1/8 resolution for thickness → composite: normals from the smoothed height, Fresnel, per-channel Beer-Lambert, per-material optics from a 32-slot table. Also a "flat" view (metaball threshold, no shading: OE-Cake's own look), gas drawn with a lower threshold so thin smoke still shows, and a glow halo for hot particles. The renderer binds sim buffers read-only. **Read before designing M5.**
 
 ## Soft & rigid bodies, ropes (OE-CAKE-style features; ADR 0001)
+- **Phyzios Elastic and rigid bodies** (`docs/phyzios.md`): jelly as pair joints with rest vectors and rest angles (equal-and-opposite corrections: no creep, no region goals for grains to fight); rigid contacts as impulses divided by contact count.
 - **Meshless Deformations Based on Shape Matching** (Müller et al. 2005): https://graphics.stanford.edu/courses/cs468-05-fall/Papers/p471-muller.pdf
   Core of the cluster-solid class: rigid blocks (R only), jelly (linear/quadratic blend), overlapping clusters, plasticity for dough. Section 4.5 (plasticity: a yield c_yield on the deformation S - I, creep c_creep, a cap c_max on the plastic state S_p, det S_p = 1 to keep volume) is what ADR 0012 adapts to rest offsets: yield and creep as written, the cap as a band on the rest lattice's links; the volume part isn't built (ADR 0012 Known limits).
 - **FastLSM: Fast Lattice Shape Matching for Robust Real-Time Deformation** (Rivers & James, SIGGRAPH 2007): https://doi.org/10.1145/1275808.1276480
@@ -63,6 +67,7 @@ Read only the section for the problem at hand. Fetch one paper section at a time
   - Elastic and breakable solids use distance bonds per particle pair (stiffness, break strain, re-form on contact, stiffness ramped by temperature), not soft shape matching. Rigid and bonded are exclusive per material.
 
 ## Stickiness & thick liquids (cohesion, adhesion, viscosity range)
+- **Phyzios Mochi, Tensile and Viscous** (`docs/phyzios.md`): cohesion driven by density deficit (self-limiting, pull half of push), curvature surface tension, and spin-aware viscosity for honey that folds.
 - **Particle-based Viscoelastic Fluid Simulation** (Clavet, Beaudoin, Poulin 2005): http://www.ligum.umontreal.ca/Clavet-2005-PVFS/pvfs.pdf
   Sticky and stringy fluids from a particle model: viscosity impulses that go well past XSPH, springs between neighbours for elasticity and plasticity, stickiness to objects. (Its plastic springs, rest lengths that yield past a ratio, were the other model for ADR 0012; not used: the cluster solids have no springs.)
 - **Versatile Surface Tension and Adhesion for SPH Fluids** (Akinci, Akinci, Teschner 2013): https://cg.informatik.uni-freiburg.de/publications/2013_SIGGRAPH_surfaceTensionAdhesion.pdf
