@@ -78,7 +78,7 @@
 ##            stroke of the body brush (a capsule, as main.tscn paints it) of jelly at y 60 across the
 ##            pile, 1200 frames: members still moving (over 5 px/s) and members under the sand's top
 ##            beside them. Rests at every stiffness since ADR 0009 (0.95: 72-174 members under the
-##            sand's top, 0.2: 351-499). Before it, at stiff=0.2 the strip dug down through the
+##            sand's top, 0.2: 351-499) and stays on top since ADR 0013 (1-40 under at 0.2-0.95). Before it, at stiff=0.2 the strip dug down through the
 ##            pile (1779 of 1780 under the top) with members at up to 55 px/s, and 0.5 and 0.8 kept
 ##            a few members moving at 8-13 px/s
 ##   sandstroke the same pile; at frame 300 a jelly stroke painted level across its top, depth= px into it
