@@ -14,7 +14,7 @@ Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/age
 
 ### Subagents
 
-When a task needs a subagent, delegate it through `/grok-cc:rescue` (the Grok CLI worker) instead of spawning a Claude subagent.
+When a task needs a subagent, delegate it through `/grok-cc:rescue` (the Grok CLI worker) or DeepSeek instead of spawning a Claude subagent. DeepSeek runs through the DeepSeek Harness CLI (`dsh`, installed globally): `echo "<task>" | dsh headless -` from the repo root prints the answer on stdout and its reasoning on stderr. It is a full agent that can edit files: start review or research tasks with "Read-only task: do not edit any files", and run edit tasks in a worktree.
 
 ## Project docs
 
