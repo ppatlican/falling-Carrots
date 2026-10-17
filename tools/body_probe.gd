@@ -136,6 +136,10 @@
 ##            as test_jelly_plank_bends_over_a_gap, 300 frames: its middle sags over 2 px below the
 ##            columns over the pillars, stays on them (down under 10 px), and rests (every member
 ##            under 2.5 px/s over the last 60 frames)
+##   creep    a 16x10 jelly let go turned 30 deg, its lowest corner 1 px over the floor, 1800 frames:
+##            it falls onto a corner and rests lopsided at low stiffness. Prints its centroid every
+##            300 frames, then how fast the centroid moves sideways from frame 600 on (px/s, the
+##            STATUS creep) and the fastest member over the last 60 frames. No pass mark
 ##   drape    a 40x4 jelly plank on two 4x20 carrot pillars 60 px apart (centres), 300 frames, no
 ##            pass mark: at the shipped jelly it falls through the gap, straightens on the floor
 ##            and pushes the pillars over (ADR 0005 Known limits). Reports the sag, how far the
@@ -229,6 +233,8 @@ var time_from := -1  # from "from=N"; -1 = the scenario's default
 var jelly_stiff := -1.0  # from "stiff=S"; -1 = the shipped table's
 var jelly_region := -1.0  # from "region=W"
 var run_frames := 0  # from "frames=N"
+var inverted_trace := false  # from "inv": droop and drape print every sample to frame 60
+var inverted_at := Vector4.ZERO  # _inverted: the most squeezed member's rest offset, then x from the middle and height over the floor
 var shots := PackedInt32Array()
 var ready := false
 var failed := 0
@@ -254,6 +260,8 @@ func _initialize() -> void:
 			jelly_stiff = float(a.substr(6))
 		elif a.begins_with("region="):
 			jelly_region = float(a.substr(7))
+		elif a == "inv":
+			inverted_trace = true
 		elif a.begins_with("frames="):
 			run_frames = int(a.substr(7))
 		elif a.begins_with("depth="):
@@ -516,6 +524,18 @@ func _start(name: String) -> void:
 			_body(_box(Vector2(X - 15.0, FLOOR), 6, 10), carrot)
 			_body(_box(Vector2(X + 15.0, FLOOR), 6, 10), carrot)
 			sc.target = _body(_box(Vector2(X, FLOOR - 10.0 * sp), 24, 6), jelly)
+			sc.late_speed = 0.0
+		"creep":
+			sc.frames = 1800
+			sc.every = 30
+			sc.x600 = 0.0
+			var pts := _box(Vector2(X, 40.0), 16, 10, deg_to_rad(30.0))
+			var lowest := -INF
+			for p in pts:
+				lowest = maxf(lowest, p.y)
+			for i in pts.size():
+				pts[i].y += FLOOR - 1.0 - lowest
+			sc.target = _body(pts, jelly)
 			sc.late_speed = 0.0
 		"drape":
 			sc.frames = 300
@@ -791,6 +811,19 @@ func _sample(f: int, b: Dictionary) -> void:
 				var bound := sqrt(2.0 * SimParams.GRAVITY * SimParams.SPACING)
 				_result("box spawned 4 px into the floor: peak upward centroid speed %.2f px/s (launch from %.0f), final speed %.3f px/s"
 						% [sc.peak_up, bound, v.length()], sc.peak_up < bound and v.length() < REST_SPEED)
+		"creep":
+			var fit := _fit(bodies[1])
+			if f > sc.frames - 60:
+				sc.late_speed = maxf(sc.late_speed, _max_speed(bodies[1]))
+			if f == 600:
+				sc.x600 = fit.c.x
+			if f % 300 == 0:
+				print("  f=%d centroid (%.2f, %.2f), turned %.3f rad, shape error %.2f px, fastest member %.2f px/s"
+						% [f, fit.c.x, fit.c.y, fit.theta, fit.err, _max_speed(bodies[1])])
+			if f == sc.frames:
+				var rate: float = (fit.c.x - sc.x600) / ((sc.frames - 600) / 60.0)
+				print("BODY creep: 16x10 jelly let go turned 30 deg: centroid moved %.2f px sideways from frame 600 (%.3f px/s), turned %.3f rad, fastest member over the last 60 frames %.2f px/s  (no pass mark)"
+						% [fit.c.x - sc.x600, rate, fit.theta, sc.late_speed])
 		"corner":
 			var now: float = sc.tilt + _fit(bodies[1]).theta
 			sc.max_turn = maxf(sc.max_turn, absf(now - sc.tilt))
@@ -850,6 +883,7 @@ func _sample(f: int, b: Dictionary) -> void:
 			var fit := _fit(bodies[1])
 			var inside := _inside(b, bodies[1], fit, water)
 			sc.most_inside = maxi(sc.most_inside, inside)
+			sc.most_deep = maxi(sc.get("most_deep", 0), _inside(b, bodies[1], fit, water, SimParams.SPACING))
 			if f % 60 == 0 or (sc.name.begins_with("waterdeep") and f % 20 == 0) or (sc.name.begins_with("pour") and f % 20 == 0):
 				print("  f=%d c=(%.1f, %.1f) rot %.3f v=%s draft %.2f inside %d; water top at x 40 / 600 %.1f / %.1f; p_ref %.0f; gap under %.1f px" % [f, fit.c.x, fit.c.y, fit.theta,
 						_mean_vel(bodies[1]), _draft(b, bodies[1]), inside, _top_of(b, water, 40.0, 17.0), _top_of(b, water, 600.0, 17.0),
@@ -895,8 +929,8 @@ func _sample(f: int, b: Dictionary) -> void:
 							% [FLOOR - bottom, inside, sc.most_inside, fit.err, fit.theta, _mean_vel(bodies[1]).length()],
 							FLOOR - bottom < 2.0 * SimParams.SPACING and sc.most_inside == 0 and fit.err < 0.1)
 				elif sc.name == "waterjelly":
-					_result("16x10 jelly (density 1.1) dropped into an 80 px pool: lowest particle %.2f px above the floor, water inside its outline %d at the end (most %d at a sample), shape error %.3f px, speed %.3f px/s"
-							% [FLOOR - bottom, inside, sc.most_inside, fit.err, _mean_vel(bodies[1]).length()],
+					_result("16x10 jelly (density 1.1) dropped into an 80 px pool: lowest particle %.2f px above the floor, water inside its outline %d at the end (most %d at a sample, most %d over a spacing in), shape error %.3f px, speed %.3f px/s"
+							% [FLOOR - bottom, inside, sc.most_inside, sc.get("most_deep", 0), fit.err, _mean_vel(bodies[1]).length()],
 							FLOOR - bottom < 2.0 * SimParams.SPACING and sc.most_inside == 0 and fit.err < 2.0)
 				else:
 					# The wide floaters must float on the water, not over air (ADR 0003 item 18).
@@ -1020,7 +1054,27 @@ func _sample_soft_stack(f: int, bodies: Dictionary) -> void:
 		return
 	if f > sc.frames - 60:
 		for id in bodies:
-			sc.soft_speed = maxf(sc.get("soft_speed", 0.0), _max_speed(bodies[id]))
+			for i in bodies[id].vel.size():
+				var v: float = bodies[id].vel[i].length()
+				if v > sc.get("soft_speed", 0.0):
+					sc.soft_speed = v
+					sc.soft_who = "body %d rest (%.0f, %.0f) at (%.1f, %.1f)" % [id, bodies[id].rest[i].x, bodies[id].rest[i].y,
+							bodies[id].pos[i].x, bodies[id].pos[i].y]
+	if f == sc.frames - 60 or f == sc.frames:
+		# How far any member moved over the last 60 frames: a member whose velocity flips while it
+		# holds its place reads a speed it doesn't have (ADR 0009 Known limits).
+		var now := {}
+		for id in bodies:
+			now[id] = bodies[id].pos.duplicate()
+		if f == sc.frames:
+			var moved := 0.0
+			for id in now:
+				if sc.get("soft_pos", {}).has(id) and sc.soft_pos[id].size() == now[id].size():
+					for i in now[id].size():
+						moved = maxf(moved, now[id][i].distance_to(sc.soft_pos[id][i]))
+			print("  soft: fastest member (last 60 frames) %s; most any member moved over them %.3f px"
+					% [sc.get("soft_who", "-"), moved])
+		sc.soft_pos = now
 	if f % 30 != 0 and f != sc.frames:
 		return
 	var ids: Array = bodies.keys()
@@ -1197,9 +1251,11 @@ func _sample_soft(f: int, bodies: Dictionary) -> void:
 				sc.left0 = _left(body)
 			if f > sc.frames - 60:
 				sc.late_speed = maxf(sc.late_speed, _max_speed(body))
-			if f % 30 == 0:
-				print("  f=%d middle down %.2f px, ends slid in %.2f px, fastest member %.2f px/s"
-						% [f, _rows_y(body, 0.0) - sc.mid0, _left(body) - sc.left0, _max_speed(body)])
+			if f % 30 == 0 or (inverted_trace and f <= 60):
+				var inv := _inverted(body)
+				print("  f=%d middle down %.2f px, ends slid in %.2f px, fastest member %.2f px/s, inside out %d (lowest det F %.2f, rest (%.1f, %.1f), at x %.1f up %.1f)"
+						% [f, _rows_y(body, 0.0) - sc.mid0, _left(body) - sc.left0, _max_speed(body), inv.x, inv.y,
+						inverted_at.x, inverted_at.y, inverted_at.z, inverted_at.w])
 			if f == sc.frames:
 				var sag: float = _rows_y(body, 0.0) - 0.5 * (_rows_y(body, -sc.pillar) + _rows_y(body, sc.pillar))
 				var down: float = _rows_y(body, 0.0) - sc.mid0
@@ -1298,6 +1354,46 @@ func _height(body: Dictionary) -> float:
 		top = minf(top, q.y)
 		bottom = maxf(bottom, q.y)
 	return bottom - top
+
+
+## Members of a soft body whose local deformation is inside out: F = P Q^-1 over the members
+## within 1.5 spacings of it on the rest shape (P = sum of dp dq^T, Q = sum of dq dq^T), det F <= 0.
+## Also the smallest det F (the area ratio; 1 at rest).
+func _inverted(body: Dictionary) -> Vector2:
+	var reach2 := pow(1.5 * SimParams.SPACING + 1e-3, 2.0)
+	var count := 0
+	var low := INF
+	inverted_at = Vector4.ZERO
+	for i in body.pos.size():
+		var p00 := 0.0
+		var p01 := 0.0
+		var p10 := 0.0
+		var p11 := 0.0
+		var q00 := 0.0
+		var q01 := 0.0
+		var q11 := 0.0
+		for j in body.pos.size():
+			var dq: Vector2 = body.rest[j] - body.rest[i]
+			if j == i or dq.length_squared() > reach2:
+				continue
+			var dp: Vector2 = body.pos[j] - body.pos[i]
+			p00 += dp.x * dq.x
+			p01 += dp.x * dq.y
+			p10 += dp.y * dq.x
+			p11 += dp.y * dq.y
+			q00 += dq.x * dq.x
+			q01 += dq.x * dq.y
+			q11 += dq.y * dq.y
+		var det_q := q00 * q11 - q01 * q01
+		if det_q < 1e-6:
+			continue
+		var det_f := (p00 * p11 - p01 * p10) / det_q
+		if det_f < low:
+			inverted_at = Vector4(body.rest[i].x, body.rest[i].y, body.pos[i].x - X, FLOOR - body.pos[i].y)
+		low = minf(low, det_f)
+		if det_f <= 0.0:
+			count += 1
+	return Vector2(count, low)
 
 
 func _max_speed(body: Dictionary) -> float:
@@ -1845,12 +1941,14 @@ func _members_inside(body: Dictionary, other: Dictionary) -> int:
 
 ## Particles of `material` whose position, taken into the box's rest frame, lies inside the
 ## bounding box of its rest lattice.
-func _inside(b: Dictionary, body: Dictionary, fit: Dictionary, material: int) -> int:
+func _inside(b: Dictionary, body: Dictionary, fit: Dictionary, material: int, margin := 0.0) -> int:
 	var lo := Vector2(INF, INF)
 	var hi := Vector2(-INF, -INF)
 	for q in body.rest:
 		lo = lo.min(q)
 		hi = hi.max(q)
+	lo += Vector2(margin, margin)
+	hi -= Vector2(margin, margin)
 	var n := 0
 	for i in b.mat_flags.size() / 4:
 		var f: int = b.mat_flags.decode_u32(i * 4)
