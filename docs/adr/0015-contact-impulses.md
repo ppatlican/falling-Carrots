@@ -1,6 +1,6 @@
 # 0015: Contact impulses between rigid bodies (a corner hit turns into spin)
 
-Date: 2026-10-17. Status: proposed, **owner's call**. Built and measured on branch `contact-impulses`, not merged: it meets every target, but it throws a corner-landing carrot sideways and costs ~0.1 ms a frame (Owner's call). Follows the STATUS known issue "A body dropped onto another freezes at the hit" (status-archive § A body dropped onto another freezes at the hit) and ADR 0003 item 14 (swept contacts) and its Known limits ("the sweep rewinds a whole move and not a spin").
+Date: 2026-10-17. Status: accepted. The owner played it (2026-10-17: "looks ok. merge."), side effects included: a corner-landing carrot is thrown sideways, and it costs ~0.1 ms a frame while bodies exist. On main since 2026-10-17. Follows the STATUS known issue "A body dropped onto another freezes at the hit" (status-archive § A body dropped onto another freezes at the hit) and ADR 0003 item 14 (swept contacts) and its Known limits ("the sweep rewinds a whole move and not a spin").
 
 ## Context
 Since the sweep fires once per hit (2026-10-17, on main), a carrot landing on another no longer stops dead, but the contacts still take a corner hit's speed instead of turning it into spin: `boxtilt` (a 16 x 10 carrot turned 30 deg, a corner hits at ~280 px/s) goes 150, 75, 66, 54 ... px/s after the touch and lies flat 9 frames later, where a rigid box keeps ~40% of its speed and slams flat in ~3. Contacts in PBD are position corrections spread over the body by shape matching: they stop the members that touch, and the body only learns to turn from those members' share of the fit.
@@ -44,7 +44,7 @@ Every `body_probe` check passes. `main.tscn` (a carrot dropped 150 px onto anoth
 
 **CPU**: `test_corner_hit_on_a_box_turns_into_spin` (new, @rigid): 77f2ea5 60.6 px/s a frame after the touch and flat 8 frames later (fails), this ADR 115 px/s and 4 frames. `@setup @rigid @soft @sand @bodies-water` pass.
 
-## Owner's call
+## Owner's call (decided 2026-10-17: option 1, merged)
 1. **Merge it**: corner hits spin and keep their speed, bodies don't bounce off each other, at ~0.1 ms a frame while bodies exist. A carrot landing on a corner is thrown sideways (57 px/s in `boxtilt`) and slides ~11 px before friction stops it: what a rigid box with a gripping corner does, but more than before (12 px/s).
 2. **Keep main** (the sweep once): corner hits slow, 5-6 px/s rebounds, no extra cost.
 3. Later, if the cost matters on a phone: one indirect dispatch skipping the passes while nothing is closing fast.
