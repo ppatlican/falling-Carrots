@@ -50,6 +50,7 @@ Times above are with 10 processes. The default is now 4 at below normal priority
 | … `_match_regions`, `_find_regions`, `_soft`, `_region_reach`, `_self_contact`, `_share_pushes_over_regions` | `@soft @plastic` | — |
 | … `_plastic_flow`, `_plastic_room`, `_plastic_outline` | `@plastic` | — |
 | … `rest_outline`, `body_pieces`, `split_body`, `erase_particles`, `_first_fit` | `@erase @brush @rigid` | — |
+| … `_contact_impulses`, `_impact_pair`, `_held_in_pair` (ADR 0015) | `@rigid @soft @sand @bodies-water` | — |
 | … `_sweep_bodies`, `_contact_delta`, `_push_out`, `in_lattice_cell`, `stack_weight`, `body_stack_weight`, `stop_not_launch`, `limit_separation` | `@rigid @soft @sand @bodies-water` | — |
 | … `_hydro_*`, `hydro_*`, `_cradled` | `@hydro @liquids @bodies-water` | — |
 | … `_body_pressure_delta`, `_body_p_sample`, `_body_liquid_fill`, `body_wet_face`, `_body_liquid_drag`, `_project_body_pushes` | `@bodies-water` | — |
@@ -62,6 +63,7 @@ Times above are with 10 processes. The default is now 4 at below normal priority
 | … `body_split` | `@setup` | `body_probe erasemid,erasejelly,erasebridge,erasedrag,reuse` |
 | … `body_plastic`, `body_outline`, `body_rest`, `plastic.glslinc` | `@setup` | `body_probe squash,wobble,sandjelly,waterjelly,jellystack,jellydrop,erasejelly,fold,softcap set=jelly.stiffness=S,jelly.plasticity=P` at P 0 and 1 and S 0.2, 0.8, 0.95; read the PLASTIC lines (ADR 0012 Results); `main.tscn` shots of dough |
 | … `body_sweep` | `@setup` | `body_probe boxhigh,plank,boxside,boxstack,sand` |
+| … `body_impulse*`, `impulse.glslinc` (ADR 0015) | `@setup` | `body_probe boxtilt,boxoff,boxhigh,boxdrop,plank,boxside,boxstack,stack3,stack5,jellydrop vtrace`; TIME with `many,big`; `main.tscn` shots of a tilted and an off-centre drop |
 | … `brush_*` | `@setup` | `body_probe erase,erasemid,reuse`; `gpu_probe water 600`; `main.tscn` screenshots of the brush |
 | … `hydro.glslinc`, `hydro_*` | `@setup` | `gpu_probe water 2400 3 gap=30 every=47`; `gpu_probe oil,water 4800 2 every=47` (layering, ADR 0010); `water_feel_probe layers 4800 every=47` with `mix=rows`, `mix=alt` and `mix=pourwater pour_y=150` (mixed starts); `water_feel_probe surface`, `bowl`; `body_probe watersink,waterfloat,pourfloor,sandcorks`; the sand checks |
 | … `liquid.glslinc`, `solve_lambda`, `solve_delta`, `solve_apply` | `@setup` | `gpu_probe water` (both drop patterns); `gpu_probe oil,water 4800 2 every=47`; `water_feel_probe layers 4800 every=47 mix=rows`; `water_feel_probe fall,dam,surface`; `body_probe watersink,waterfloat`; `body_probe jellystack,jellydrop` and `stack3,stack5,boxstack set=carrot.stiffness=0.5 frames=1800` (the soft verdict, ADR 0008) |

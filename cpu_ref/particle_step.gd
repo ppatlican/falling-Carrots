@@ -28,6 +28,9 @@ const MIN_DIST := 1e-4
 ## Shape matching keeps a body's last rotation when |A_pq| (the length of the vector its
 ## angle comes from) is below this, per live member, in px^2.
 const BODY_ROT_EPS := 1e-4
+## Contact impulses (ADR 0015): sin 30 deg, how far below level an impulse must push a resting body
+## for it to be held in that pair. Mirror: IMPULSE_FIXED in impulse.glslinc.
+const IMPULSE_FIXED := 0.5
 ## Half-width, in spacings, of a body member's lattice cell for the push-out between two soft
 ## bodies (in_lattice_cell, ADR 0008): a little over half a spacing, so a point at the
 ## middle of a lattice square, half a spacing from four members, is still in one of their cells.
@@ -231,6 +234,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	if not dry:
 		phi = _hydro_density(pred, mat, body)
 		_hydro_solve(phi, hydro_p, dt, _hydro_rho)
+	# Contact impulses between rigid bodies (ADR 0015, impulse.glslinc): a corner hit turns into spin.
+	_contact_impulses(pos, vel, pred, mat, body, bodies, members, neighbours, dt)
 	# Swept contacts: each body that went into another this substep rewound along its path to
 	# where they first touched (body_sweep.glsl, body_project.glsl).
 	var back := _sweep_bodies(pos, pred, mat, body, edge, bodies, members, neighbours)
@@ -429,6 +434,153 @@ func _sweep_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, mat
 		return 0.0
 	# How far they came together along N: d1 - d0, at least gone_in.
 	return minf(gone_in / (d1 - d0), 1.0)
+
+
+## Contact impulses between rigid bodies (ADR 0015; Phyzios, docs/phyzios.md rigid stacks row),
+## after the grid and before the swept contacts: IMPULSE_PASSES times, each rigid body's impact pairs
+## (_impact_pair) give it one impulse per pair, J = excess / (D_a + D_b), D = (c^2 / I + 1 / M) cnt
+## with c = r x n, plus friction up to friction x J, summed into dV and dw for its members' velocity
+## (v += dV + dw x r), from which they are predicted again. A resting body pushed down in a pair is
+## held there (_held_in_pair). Velocities are read as they were at the start of each pass, as the
+## GPU's passes read them (Jacobi). Mirror: impulse.glslinc and body_impulse_*.glsl.
+func _contact_impulses(pos: PackedVector2Array, vel: PackedVector2Array, pred: PackedVector2Array,
+		mat: PackedInt32Array, body: PackedInt32Array, bodies: Array, members: PackedInt32Array,
+		neighbours: Array, dt: float) -> void:
+	var nb_bodies := bodies.size()
+	if nb_bodies < 3:  # ids from 1: fewer than two bodies
+		return
+	var sp := SimParams.SPACING
+	var speed := SimParams.SWEEP_DEPTH * sp / dt
+	# Per body: live members, start centroid, 1/M, 1/I (0 for a soft body), resting.
+	var live: Array = []
+	live.resize(nb_bodies)
+	var geo := PackedVector4Array()
+	geo.resize(nb_bodies)
+	var rest := PackedByteArray()
+	rest.resize(nb_bodies)
+	var any := false
+	for id in range(1, nb_bodies):
+		var b: Dictionary = bodies[id]
+		var list := PackedInt32Array()
+		var c := Vector2.ZERO
+		var v_max := 0.0
+		for k in range(b.first, b.first + b.count):
+			var m := members[k]
+			if body[m] == id:
+				list.append(m)
+				c += pos[m]
+				v_max = maxf(v_max, vel[m].length())
+		live[id] = list
+		if list.is_empty() or _softp[list[0]] == 1 or _rho[list[0]] <= 0.0:
+			continue
+		c /= list.size()
+		var q := 0.0
+		for m in list:
+			q += (pos[m] - c).length_squared()
+		var rho := _rho[list[0]]
+		geo[id] = Vector4(c.x, c.y, 1.0 / (rho * list.size()), 1.0 / (rho * (q + list.size() * sp * sp / 6.0)))
+		rest[id] = 1 if v_max < speed else 0
+		any = true
+	if not any:
+		return
+	var count := PackedInt32Array()
+	count.resize(pos.size())
+	var cnt := PackedInt32Array()
+	cnt.resize(nb_bodies)
+	var imp := PackedVector3Array()
+	imp.resize(nb_bodies)
+	for _p in SimParams.IMPULSE_PASSES:
+		cnt.fill(0)
+		for id in range(1, nb_bodies):
+			if geo[id].z == 0.0:
+				continue
+			for i in live[id]:
+				var k := 0
+				for j in neighbours[i]:
+					if _impact_pair(i, j, pos, vel, body, speed, dt).w > 0.0:
+						k += 1
+				count[i] = k
+				cnt[id] += k
+		for id in range(1, nb_bodies):
+			imp[id] = Vector3.ZERO
+			if cnt[id] == 0:
+				continue
+			var g := geo[id]
+			var c := Vector2(g.x, g.y)
+			var p_sum := Vector2.ZERO
+			var l_sum := 0.0
+			for i in live[id]:
+				if count[i] == 0:
+					continue
+				var r := pos[i] - c
+				for j in neighbours[i]:
+					var pair := _impact_pair(i, j, pos, vel, body, speed, dt)
+					if pair.w <= 0.0:
+						continue
+					var n := Vector2(pair.x, pair.y)
+					var excess := pair.z
+					var jb := body[j]
+					var g_j := geo[jb]
+					var cnt_j := maxi(cnt[jb], 1)
+					var r_j := pos[j] - Vector2(g_j.x, g_j.y)
+					var held := _held_in_pair(rest[id], n)
+					var held_j := _held_in_pair(rest[jb], -n)
+					if held and held_j:
+						continue
+					var w := 0.0 if held else 1.0
+					var w_j := 0.0 if held_j else 1.0
+					var jn := excess / (w * _impulse_inv_mass(g, cnt[id], r, n) + w_j * _impulse_inv_mass(g_j, cnt_j, r_j, n))
+					var tg := Vector2(-n.y, n.x)
+					var vt := (vel[i] - vel[j]).dot(tg)
+					var mu := minf(_mu[i], _mu[j])
+					var jt := -vt / (w * _impulse_inv_mass(g, cnt[id], r, tg) + w_j * _impulse_inv_mass(g_j, cnt_j, r_j, tg))
+					jt = clampf(jt, -mu * jn, mu * jn)
+					if held:
+						continue  # what it rests on takes it
+					var pv := jn * n + jt * tg
+					p_sum += pv
+					l_sum += r.cross(pv)
+			imp[id] = Vector3(p_sum.x * g.z, p_sum.y * g.z, l_sum * g.w)
+		for id in range(1, nb_bodies):
+			if imp[id] == Vector3.ZERO:
+				continue
+			var c := Vector2(geo[id].x, geo[id].y)
+			for i in live[id]:
+				var r := pos[i] - c
+				vel[i] += Vector2(imp[id].x, imp[id].y) + imp[id].z * Vector2(-r.y, r.x)
+				pred[i] = _clamp_to_world(pos[i] + (vel[i] * dt).limit_length(SimParams.MAX_STEP), i, true)
+
+
+## Body member i (in a rigid body) and j: an impact pair (impact_pair in impulse.glslinc)? Returns
+## n (from j to i at the start of the substep), the closing speed the gap can't take this substep,
+## and w 1 for a pair (0 for none): a member of another rigid body within a kernel radius at their
+## predicted positions (the neighbour lists), closing faster than speed and by more than the gap.
+func _impact_pair(i: int, j: int, pos: PackedVector2Array, vel: PackedVector2Array, body: PackedInt32Array,
+		speed: float, dt: float) -> Vector4:
+	if body[j] == 0 or body[j] == body[i] or _softp[j] == 1:
+		return Vector4.ZERO
+	var a := pos[i] - pos[j]
+	var d := a.length()
+	if d < MIN_DIST:
+		return Vector4.ZERO
+	var n := a / d
+	var vn := -(vel[i] - vel[j]).dot(n)
+	var excess := vn - maxf(d - SimParams.SPACING, 0.0) / dt
+	if vn > speed and excess > 0.0:
+		return Vector4(n.x, n.y, excess, 1.0)
+	return Vector4.ZERO
+
+
+## A resting body pushed down by a pair (along dir, at least 30 deg below level) is held in it: what
+## it rests on takes the impulse (fixed_in_pair in impulse.glslinc).
+static func _held_in_pair(rest: int, dir: Vector2) -> bool:
+	return rest != 0 and dir.y > IMPULSE_FIXED
+
+
+## Inverse effective mass of a body (geo: centroid, 1/M, 1/I) at r along dir, times its contact count.
+static func _impulse_inv_mass(geo: Vector4, cnt: int, r: Vector2, dir: Vector2) -> float:
+	var c := r.cross(dir)
+	return (c * c * geo.w + geo.z) * cnt
 
 
 ## A body's push from other bodies this substep (o, contacts and push-out) may stop it along

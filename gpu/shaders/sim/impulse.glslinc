@@ -1,0 +1,79 @@
+// Contact impulses between rigid bodies (ADR 0015; Phyzios, docs/phyzios.md rigid stacks row).
+// Included after common.glslinc by body_impulse_geo, body_impulse_count, body_impulse and
+// body_impulse_apply, which run once per substep after the hash and before body_sweep:
+//   geo                  per body: centroid at the start (s_pos), 1/mass, 1/moment; clears the count
+//   IMPULSE_PASSES x     count (per particle): each member's impact pairs, summed into its body's cnt
+//                        impulse (per body): every pair's impulse J, summed into dV and dw
+//                        apply (per particle): v += dV + dw x r, the predicted position again
+// A pair is a member of a rigid body (stiffness 1) and one of another rigid body within a kernel
+// radius at their predicted positions, closing faster than impulse_speed() and by more than their gap
+// allows in this substep (impact_pair). J = (vn - gap / dt) / (D_a + D_b), D = (c^2 / I + 1 / M) cnt
+// with c = r x n: speculative (only the approach that would overlap this substep is taken out, so no
+// rewind is needed and nothing is pushed apart), divided by each body's contact count, so a body
+// touching in 16 places gets one impulse's worth. Each pair is found from both ends with the same J,
+// so momentum is exact. Friction: a tangential impulse that stops the slide at the contact, at most
+// friction x J (the lower friction of the two, as the contacts). Resting contact (slower than
+// impulse_speed()) is left to the contacts, the push-out and stop_not_launch, as before.
+// Mirror: cpu_ref/particle_step.gd _contact_impulses.
+
+// Per body id (binding 30). geo: start centroid x, y, 1/mass, 1/moment (0, 0 for a soft body or
+// none); imp: this pass's dV x, y and dw; cnt: this pass's contact pairs (atomicAdd in count);
+// rest: 1 when every member started the substep slower than an impact (fixed_in_pair).
+struct BodyDyn {
+	vec4 geo;
+	vec4 imp;
+	uint cnt;
+	uint rest;
+	uint pad1;
+	uint pad2;
+};
+layout(set = 0, binding = 30, std430) buffer BodyDyns { BodyDyn body_dyn[]; };
+// Per sorted index (binding 31): how many impact pairs the member is in this pass (count).
+layout(set = 0, binding = 31, std430) buffer BodyContact { uint body_contact[]; };
+
+// Least closing speed of an impact, in spacings a substep (SWEEP_DEPTH: 60 px/s at 2 substeps).
+// Mirror: SimParams.SWEEP_DEPTH.
+const float IMPULSE_DEPTH = 0.25;
+// sin 30 deg: how far below level an impulse must push a resting body for it to count as fixed.
+// At sin 60 the lattice's diagonal pairs (35-45 deg off vertical) still pushed a carrot resting on the
+// floor down at 14-26 px/s when one was dropped flat onto it, and it came back up (body_probe boxdrop,
+// boxhigh). Mirror: ParticleStep.IMPULSE_FIXED.
+const float IMPULSE_FIXED = 0.5;
+
+bool rigid_material(uint m) { return materials[m].extra.y >= 1.0; }
+
+float impulse_speed() { return IMPULSE_DEPTH * params.spacing / params.dt; }
+
+// A resting body pushed down by a pair (its impulse, along dir, at least 30 deg below level) counts
+// as fixed in it: what it rests on takes the impulse. Without it a carrot resting on the floor took
+// half of every hit, went into the floor at 30-60 px/s and came back up, and one dropped onto it
+// sank 2 px in and tilted (body_probe boxhigh). It stands in for Phyzios's sequential order, where
+// the floor's impulse on the lower body comes before the upper one's in the same step.
+bool fixed_in_pair(uint rest, vec2 dir) {
+	return rest != 0u && dir.y > IMPULSE_FIXED;
+}
+
+float cross2(vec2 a, vec2 b) { return a.x * b.y - a.y * b.x; }
+
+// Member t (sorted, in a rigid body) and j: an impact pair? n points from j to t at the start of
+// the substep; excess is the closing speed the gap can't take this substep.
+bool impact_pair(uint t, uint j, out vec2 n, out float excess) {
+	n = vec2(0.0);
+	excess = 0.0;
+	uint j_body = s_body(j);
+	if (j_body == 0u || j_body == s_body(t) || !rigid_material(s_material(j))) {
+		return false;
+	}
+	if (length(s_pred[t] - s_pred[j]) >= params.h) {  // the CPU reference's neighbour lists
+		return false;
+	}
+	vec2 a = s_pos[t] - s_pos[j];
+	float d = length(a);
+	if (d < MIN_DIST) {
+		return false;
+	}
+	n = a / d;
+	float vn = -dot(s_vel[t] - s_vel[j], n);
+	excess = vn - max(d - params.spacing, 0.0) / params.dt;
+	return vn > impulse_speed() && excess > 0.0;
+}

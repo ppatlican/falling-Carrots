@@ -107,6 +107,11 @@
 ##            other at the end, and how fast they come apart again (the rebound, under 20 px/s)
 ##   boxstack as boxhigh onto a stack of three 16x10 carrots: the top one stays on, the stack
 ##            stays standing (lower boxes under 0.05 rad at the end)
+##   boxoff   as boxdrop, 20 px to the right: 10 of its 16 columns hang over the lower box's edge
+##            and its centre is 4 px past it, so it should tip off at the speed it hits with (ADR 0015)
+##   floortilt  a 16x10 carrot turned 30 deg let go 150 px above the bare floor, 600 frames: its
+##            corner hits the floor; whether it stops dead there (as boxtilt did on a body) or
+##            slams flat, and that it rests flat
 ##            All box scenarios print the largest |rotation| any box reached (the impact tilt).
 ##            With "vtrace" (also jellydrop) they read back every frame and print the falling body's
 ##            centroid fall and speed beside free fall with drag 0.6/s, to 60 frames after it touches
@@ -241,7 +246,7 @@ var inverted_trace := false  # from "inv": droop and drape print every sample to
 ## From "vtrace": the drop scenarios (VTRACE) read back every frame and print the falling body's
 ## centroid speed beside free fall with drag 0.6/s, from its spawn to 60 frames after it touches.
 var velocity_trace := false
-const VTRACE := ["boxdrop", "boxtilt", "boxhigh", "plank", "boxstack", "jellydrop"]
+const VTRACE := ["boxdrop", "boxtilt", "boxhigh", "plank", "boxstack", "jellydrop", "boxoff", "floortilt"]
 var inverted_at := Vector4.ZERO  # _inverted: the most squeezed member's rest offset, then x from the middle and height over the floor
 var shots := PackedInt32Array()
 var ready := false
@@ -489,7 +494,7 @@ func _start(name: String) -> void:
 			sc.slots = 2 * SimParams.BENCH_BLOCK
 			sc.late = []
 			_body(_box(Vector2(X, 30.0), STRIP_COLS, STRIP_ROWS), cork)
-		"boxdrop", "boxtilt", "boxhigh", "plank", "boxside", "boxstack":
+		"boxdrop", "boxtilt", "boxhigh", "plank", "boxside", "boxstack", "boxoff", "floortilt":
 			sc.frames = 600
 			sc.every = 5
 			sc.most_inside = 0
@@ -515,6 +520,8 @@ func _start(name: String) -> void:
 				"boxstack":
 					for k in 3:
 						_body(_box(Vector2(X, FLOOR - k * 10.0 * SimParams.SPACING), 16, 10), carrot)
+				"floortilt":
+					pass  # nothing under it
 				_:
 					_body(_box(Vector2(X, FLOOR), 16, 10), carrot)
 		"jellystack":
@@ -720,12 +727,12 @@ func _scenario_brush(brush: Dictionary) -> void:
 					# As main.tscn's Drop cork: a 16x10 cork let go at y 12 (bottom row at 30).
 					var tilt := deg_to_rad(30.0) if sc.name == "waterdeeptilt" else 0.0
 					_body(_box(Vector2(X, 30.0), 16, 10, tilt), cork, _box(Vector2(X, 30.0), 16, 10))
-	elif sc.name in ["boxdrop", "boxtilt", "boxhigh", "plank", "boxstack"] and frame_i == 60:
-		var tilt := deg_to_rad(30.0) if sc.name == "boxtilt" else 0.0
-		var dx: float = {"boxtilt": 6.0, "boxhigh": 4.0, "plank": 4.0, "boxstack": 4.0}.get(sc.name, 0.0)
-		# Height of what it lands on, in spacings: the plank's 2 rows, the stack's 3 boxes.
-		var under: float = {"plank": 2.0, "boxstack": 30.0}.get(sc.name, 10.0)
-		var fall := 150.0 if sc.name in ["boxdrop", "boxtilt"] else 330.0
+	elif sc.name in ["boxdrop", "boxtilt", "boxhigh", "plank", "boxstack", "boxoff", "floortilt"] and frame_i == 60:
+		var tilt := deg_to_rad(30.0) if sc.name in ["boxtilt", "floortilt"] else 0.0
+		var dx: float = {"boxtilt": 6.0, "boxhigh": 4.0, "plank": 4.0, "boxstack": 4.0, "boxoff": 20.0}.get(sc.name, 0.0)
+		# Height of what it lands on, in spacings: the plank's 2 rows, the stack's 3 boxes, the floor.
+		var under: float = {"plank": 2.0, "boxstack": 30.0, "floortilt": 0.0}.get(sc.name, 10.0)
+		var fall := 150.0 if sc.name in ["boxdrop", "boxtilt", "boxoff", "floortilt"] else 330.0
 		var at := Vector2(X + dx, FLOOR - under * SimParams.SPACING - fall)
 		# An upright rest shape, so _members_inside's box is the body's own.
 		_body(_box(at, 16, 10, tilt), carrot, _box(at, 16, 10))
@@ -962,7 +969,20 @@ func _sample(f: int, b: Dictionary) -> void:
 			_sample_sandstroke(f, b, bodies)
 		"corkstrip":
 			_sample_corkstrip(f, b, bodies)
-		"boxdrop", "boxtilt", "boxhigh", "plank", "boxside", "boxstack":
+		"floortilt":
+			if bodies.is_empty():
+				return
+			var fit := _fit(bodies[bodies.keys()[0]])
+			var v := _mean_vel(bodies[bodies.keys()[0]])
+			sc.max_tilt = maxf(sc.max_tilt, absf(fit.theta))
+			if f > sc.frames - 60:
+				sc.late_speed = maxf(sc.late_speed, v.length())
+			if f % 60 == 0:
+				print("  f=%d box c=(%.1f, %.1f) rot %.3f v=%s, shape error %.3f" % [f, fit.c.x, fit.c.y, fit.theta, v, fit.err])
+			if f == sc.frames:
+				_result("floortilt: 16x10 carrot turned 30 deg dropped on the floor: rotation at the end %.3f rad, max shape error %.4f px, max speed (last 60 frames) %.3f px/s"
+						% [fit.theta, fit.err, sc.late_speed], absf(fit.theta) < 0.05 and fit.err < 0.1 and sc.late_speed < REST_SPEED)
+		"boxdrop", "boxtilt", "boxhigh", "plank", "boxside", "boxstack", "boxoff":
 			if bodies.size() < sc.ids.size() or sc.ids.size() < 2:
 				return
 			var ids: Array = bodies.keys()
@@ -1021,7 +1041,7 @@ func _sample(f: int, b: Dictionary) -> void:
 						inside == 0 and sc.overlap_samples <= 4
 						and sc.most_deep < 2.0 * SimParams.SPACING
 						and gap >= 0.8 * SimParams.SPACING and err < 0.1 and sc.late_speed < REST_SPEED
-						and (on_top or sc.name == "boxtilt") and (sc.rebound < 20.0 or sc.name in ["boxdrop", "boxtilt"])
+						and (on_top or sc.name == "boxtilt") != (sc.name == "boxoff") and (sc.rebound < 20.0 or sc.name in ["boxdrop", "boxtilt", "boxoff"])
 						and (low_tilt < 0.05 or sc.name != "boxstack"))
 		"reuse":
 			if f == sc.frames:
@@ -1066,7 +1086,7 @@ func _sample(f: int, b: Dictionary) -> void:
 ## model of free fall with drag 0.6/s stepped as the sim steps (gravity in predict, then
 ## exp(-drag dt) in velocity_update, per substep), the speed of the body under it and the gap.
 func _sample_vtrace(f: int, bodies: Dictionary) -> void:
-	if bodies.size() < 2:
+	if bodies.size() < (1 if sc.name == "floortilt" else 2):
 		return
 	var ids: Array = bodies.keys()
 	ids.sort()
@@ -1094,13 +1114,21 @@ func _sample_vtrace(f: int, bodies: Dictionary) -> void:
 				continue
 			for q in bodies[id].pos:
 				gap = minf(gap, p.distance_to(q))
-	if sc.vt_touch < 0 and gap < SimParams.SPACING:
+	var touch_at := SimParams.SPACING
+	if ids.size() == 1:  # floortilt: from the floor
+		touch_at = 0.01
+		for p in bodies[top].pos:
+			gap = minf(gap, FLOOR - p.y)
+	var theta: float = _fit(bodies[top]).theta
+	var spin: float = (theta - sc.get("vt_theta", theta)) / SimParams.DT
+	sc.vt_theta = theta
+	if sc.vt_touch < 0 and gap < touch_at:
 		sc.vt_touch = f
 	if sc.vt_touch >= 0 and f > sc.vt_touch + 60:
 		return
 	var v := _mean_vel(bodies[top])
-	print("  VT f=%d fall %.1f px (model %.1f) vy %.1f px/s (model %.1f) vx %.1f, body under vy %.1f, gap %.2f px%s"
-			% [f, c.y - sc.vt_y0, sc.vt_y, v.y, sc.vt_v, v.x, _mean_vel(bodies[ids[-2]]).y, gap,
+	print("  VT f=%d fall %.1f px (model %.1f) vy %.1f px/s (model %.1f) vx %.1f, rot %.3f spin %.2f rad/s, body under vy %.1f, gap %.2f px%s"
+			% [f, c.y - sc.vt_y0, sc.vt_y, v.y, sc.vt_v, v.x, theta, spin, _mean_vel(bodies[ids[-2]]).y if ids.size() > 1 else 0.0, gap,
 			" TOUCH" if f == sc.vt_touch else ""])
 
 

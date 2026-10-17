@@ -40,7 +40,7 @@ our symptoms.
 | Honey flows like wet sand (XSPH capped at 1) | Micropolar viscosity: per-particle spin; damp only the relative velocity a shared rotation doesn't explain, put the rest into spin. Thick and still folds and coils. Costs one float per particle | 7 |
 | Edge chaos at screen walls | Wall = one ghost neighbour on the wall plane (adds density); push-back is linear, thresholded (only past 0.25 h overlap) and capped at the speed cap. No wall friction | 3 |
 | Oil/water layering rocks or churns (ADR 0010) | Equal masses everywhere. Light/Dense are flags: a momentum-conserving swap only between unlike neighbours (`v_a ∓= g·w·coef`, other end opposite). A settled layer feels nothing, so it rests | 2b |
-| Rigid stacks jitter; a body spawned into the floor launches | Bodies pinned exactly to their frame every step; contacts are impulses **divided by the body's contact count**; rotation from atan2 of the 2×2 covariance (exact in 2D, no polar iteration) | 12 |
+| Rigid stacks jitter; a body spawned into the floor launches | Bodies pinned exactly to their frame every step; contacts are impulses **divided by the body's contact count**; rotation from atan2 of the 2×2 covariance (exact in 2D, no polar iteration). The impulses between rigid bodies are built (ADR 0015, branch `contact-impulses`, owner's call) | 12 |
 | Eraser splits, future cutting/brittle (ADR 0004, 0006) | Union-find over contacts plus joints with weight > 0. Break thresholds vary per pair by a cheap index hash, so cracks come out irregular with no RNG | 12, 10 |
 | Weak water brush | Pour = a row at rest spacing every `spacing/speed` steps: a lattice brush in time, never overlaps itself | 15 |
 | Snow, packable flour | A weak spring toward exactly rest spacing in both directions | 8 |

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://q13apbhrapm"
+path="res://.godot/imported/body_impulse_count.glsl-fc2168385f5248b8acc6dfb908c4c6b2.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/body_impulse_count.glsl"
+dest_files=["res://.godot/imported/body_impulse_count.glsl-fc2168385f5248b8acc6dfb908c4c6b2.res"]
+
+[params]
+

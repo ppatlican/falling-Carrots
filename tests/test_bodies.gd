@@ -41,6 +41,7 @@ const GROUPS := {
 	"test_fast_box_drop_on_plank_stays_on_top": ["rigid"],
 	"test_boxes_colliding_sideways_stay_apart": ["rigid"],
 	"test_fast_box_drop_on_a_stack_of_three": ["rigid"],
+	"test_corner_hit_on_a_box_turns_into_spin": ["rigid"],
 	"test_erasing_part_of_a_body_works_its_outline_out_again": ["erase", "quick"],
 	"test_erasing_a_body_in_two_makes_two_bodies": ["erase", "quick"],
 	"test_pieces_keep_the_motion_they_had": ["erase"],
@@ -749,6 +750,49 @@ func test_boxes_colliding_sideways_stay_apart() -> void:
 			% [apart, _drop_line(r)])
 	expect(apart > 16.0 * SimParams.SPACING - 1.0, "side by side, not one inside the other: %.2f px apart" % apart)
 	_expect_drop(r)
+
+
+## A carrot turned 30 deg landing on a corner on another (body_probe boxtilt): a rigid box keeps
+## about 40% of its speed and slams flat in ~3 frames. With contacts alone it lost most of its
+## speed at the touch and took ~9 frames to tip flat (status-archive § A body dropped onto another
+## freezes at the hit); contact impulses turn the hit into spin (ADR 0015). Started 8 px above the
+## box below at about boxtilt's impact speed.
+func test_corner_hit_on_a_box_turns_into_spin() -> void:
+	var world := Vector2(80, 80)
+	var sim = _sim(world)
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var floor_y := _floor_y(world)
+	var below: int = ParticleStep.make_body(state, _box(Vector2(40, floor_y), 16, 10), _carrot)
+	var tilt := deg_to_rad(30.0)
+	var pts := _box(Vector2(46, 0.0), 16, 10, tilt)
+	var lowest := -INF
+	for q in pts:
+		lowest = maxf(lowest, q.y)
+	for i in pts.size():
+		pts[i].y += floor_y - 9.0 * SimParams.SPACING - 8.0 - lowest
+	var above: int = ParticleStep.make_body(state, pts, _carrot)
+	for m in _live(state, above):
+		state.vel[m] = Vector2(0.0, 280.0)
+	var touch := -1
+	var flat_at := -1
+	var kept := 0.0  # centroid speed a frame after the touch
+	for f in 120:
+		_frame(sim, state)
+		if touch < 0 and _pair_gap(state, below, above) < SimParams.SPACING:
+			touch = f
+		if touch >= 0 and f == touch + 1:
+			kept = _body_vel(state, above).length()
+		var now: float = tilt + _fit(state, above).theta
+		if touch >= 0 and flat_at < 0 and absf(now - roundf(now / (PI / 2.0)) * PI / 2.0) < 0.05:
+			flat_at = f
+	# Its rest shape is turned, so _members_inside's upright box doesn't fit it: the closest pair instead.
+	var gap := _closest_cross_pair(state)
+	_report("16x10 carrot turned 30 deg hitting another on a corner at 280 px/s: touched at frame %d, %.1f px/s a frame later, flat (within 0.05 rad) %d frames after the touch, closest cross-body pair at the end %.3f px"
+			% [touch, kept, flat_at - touch, gap])
+	expect(touch >= 0, "the box hits the other")
+	expect(kept > 70.0, "keeps over a quarter of its speed a frame after the touch: %.1f px/s" % kept)
+	expect(flat_at >= 0 and flat_at - touch <= 6, "flat within 6 frames of the touch: %d" % (flat_at - touch))
+	expect(gap >= 0.8 * SimParams.SPACING, "nothing inside the other box, closest cross-body pair >= 0.8 spacing: %.3f px" % gap)
 
 
 func test_fast_box_drop_on_a_stack_of_three() -> void:

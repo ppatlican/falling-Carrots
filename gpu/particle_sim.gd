@@ -13,6 +13,10 @@
 ##   hash      clear, count, 3-step prefix sum, scatter (copies state into cell order)
 ##   hydro     liquid density projection grid (splat, density, then all SOR sweeps in one
 ##             128-thread workgroup, hydro_solve)
+##   impulse   contact impulses between rigid bodies (ADR 0015, impulse.glslinc): each body's
+##             centroid and masses (body_impulse_geo), then IMPULSE_PASSES x (impact pairs per
+##             member, body_impulse_count; each body's impulse, body_impulse; applied to its
+##             members' velocities and predicted positions, body_impulse_apply)
 ##   solve     bodies' swept contacts (body_sweep), grid pressure push (pressure, the bodies
 ##             pass's projection and move back out of other bodies, apply), then
 ##             solver_iterations x (lambda, delta, apply, then the bodies pass)
@@ -50,6 +54,7 @@ const KERNELS := [
 	"hash_clear", "hash_count", "scan_local", "scan_blocks", "scan_add", "hash_scatter",
 	"hydro_splat", "hydro_phi", "hydro_solve", "body_sweep", "solve_pressure", "solve_lambda", "solve_delta", "solve_apply",
 	"body_project", "body_match", "body_region_fit", "body_region_goal",
+	"body_impulse_geo", "body_impulse_count", "body_impulse", "body_impulse_apply",
 	"body_plastic", "body_outline", "body_rest",
 	"velocity_update", "velocity_xsph", "velocity_commit",
 	"render_clear", "render_points", "render_gap", "render_powder",
@@ -78,6 +83,8 @@ const BRUSH_BODY := 4
 ## Bytes per body record (Body in common.glslinc), and the offset of its live count.
 const BODY_BYTES := 48
 const BODY_LIVE_OFFSET := 8
+## Bytes per body's contact impulse record (BodyDyn in impulse.glslinc).
+const BODY_DYN_BYTES := 48
 ## Offset of a body record's flags (info.w), and its stale-outline flag (BODY_STALE).
 const BODY_FLAGS_OFFSET := 12
 const BODY_STALE := 1
@@ -231,7 +238,8 @@ func _buffer_specs() -> Array:
 	]
 
 
-## Cluster solid buffers, bindings 23 to 28 (common.glslinc). [binding, name, bytes]
+## Cluster solid buffers, bindings 23 to 28 (common.glslinc) and 30, 31 (impulse.glslinc).
+## [binding, name, bytes]
 func _body_buffer_specs() -> Array:
 	return [
 		[23, "rest_offset", cap * 16],
@@ -240,6 +248,8 @@ func _body_buffer_specs() -> Array:
 		[26, "body_spawn", cap * 32],
 		[27, "region_frame", cap * 16],
 		[28, "body_push", cap * 16],
+		[30, "body_dyn", (body_cap + 1) * BODY_DYN_BYTES],
+		[31, "body_contact", cap * 4],
 	]
 
 
@@ -300,6 +310,11 @@ func _build_passes_rt() -> void:
 			d.call("scan_add", cells), d.call("hash_scatter", all),
 		])
 		_ctx.add_pass("hydro", hydro_pass)
+		# Contact impulses between rigid bodies (ADR 0015); groups are set per frame.
+		var impulse := [d.call("body_impulse_geo", 0)]
+		for _p in SimParams.IMPULSE_PASSES:
+			impulse.append_array([d.call("body_impulse_count", 0), d.call("body_impulse", 0), d.call("body_impulse_apply", 0)])
+		_ctx.add_pass("impulse", impulse)
 		# Bodies' swept contacts, a soft body's pressure pushes made rigid and every body moved back
 		# out of the bodies it went into before they're applied, then shape matching after every
 		# iteration's apply. Workgroups (one per body id) are set per frame.
@@ -592,6 +607,12 @@ func _frame_rt(push: PackedByteArray, op: int, count: int, radius: float, clear:
 	_ctx.set_groups_rt("brush", 2, ComputeContext.groups_for(cap) if op == BRUSH_ERASE else 0)
 	_ctx.set_groups_rt("brush", 3, 1 if op != BRUSH_NONE else 0)
 	_ctx.set_groups_rt("bodies", 0, body_groups)  # one workgroup per body id
+	# Contact impulses: one workgroup per body id, and per particle while any body exists.
+	_ctx.set_groups_rt("impulse", 0, body_groups)
+	for k in SimParams.IMPULSE_PASSES:
+		_ctx.set_groups_rt("impulse", 1 + 3 * k, ComputeContext.groups_for(cap) if body_groups > 0 else 0)
+		_ctx.set_groups_rt("impulse", 2 + 3 * k, body_groups)
+		_ctx.set_groups_rt("impulse", 3 + 3 * k, ComputeContext.groups_for(cap) if body_groups > 0 else 0)
 	var region_groups := ComputeContext.groups_for(cap) if soft else 0
 	_ctx.set_groups_rt("regions", 0, region_groups)
 	_ctx.set_groups_rt("regions", 1, region_groups)

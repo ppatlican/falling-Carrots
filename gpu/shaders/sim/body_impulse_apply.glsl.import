@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://blgghia2q7366"
+path="res://.godot/imported/body_impulse_apply.glsl-5ad4ff9c4da61b6fac11cd501bff38b8.res"
+
+[deps]
+
+source_file="res://gpu/shaders/sim/body_impulse_apply.glsl"
+dest_files=["res://.godot/imported/body_impulse_apply.glsl-5ad4ff9c4da61b6fac11cd501bff38b8.res"]
+
+[params]
+

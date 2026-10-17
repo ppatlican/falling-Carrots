@@ -111,6 +111,11 @@ const BODY_KICK := 4.0
 ## the contacts and push-out (without the least depth a 5-box stack leaned and never rested).
 ## Mirror: SWEEP_DEPTH in body_sweep.glsl.
 const SWEEP_DEPTH := 0.25
+## Contact impulses between rigid bodies (ADR 0015; impulse.glslinc, ParticleStep._contact_impulses):
+## how many times per substep the impulses are solved, each from the velocities the last left
+## (Jacobi on the GPU, where Phyzios walks its pairs in order). Impacts are pairs closing faster
+## than SWEEP_DEPTH spacings a substep.
+const IMPULSE_PASSES := 3
 
 ## Plasticity (ADR 0012; body_plastic.glsl, ParticleStep._plastic_flow). A member of a soft body
 ## whose material has plasticity keeps the part of its offset from the body's best fit (the body
