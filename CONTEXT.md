@@ -38,7 +38,7 @@ The springy soft-body material, as in OE-Cake.
 The mochi material (ADR 0017): a soft, sticky lump with no rest shape that slumps, stretches into strands and merges with dough it touches. Until ADR 0017 it was a soft body with plasticity (ADR 0012).
 
 **Mochi**:
-The behaviour class of a cohesive lump with no rest shape and no body (ADR 0017, after Phyzios' Mochi): each pair of one mochi material within 4/3 spacings pushes apart where it is denser than rest and pulls together (by the material's cohesion) where it is sparser, equal and opposite. A pair further apart than that has no pull, so a strand breaks there, and particles that come back within it pull again, so torn pieces merge. Drawn with the circle brush.
+The behaviour class of a cohesive lump with no rest shape and no body (ADR 0017, after Phyzios' Mochi): each pair of one mochi material within 4/3 spacings pushes apart where it is denser than rest and pulls together (by the material's cohesion) where it is sparser, equal and opposite. A pair further apart than that has no pull, so a strand breaks there, and particles that come back within it pull again, so torn pieces merge. Drawn with the circle brush. In a liquid (ADR 0018) the same rule pushes water away where the dough is full, water caught inside rises out, and a dough floats or sinks by its density.
 _Avoid_: Cohesive fluid, putty
 
 **Plasticity**:
