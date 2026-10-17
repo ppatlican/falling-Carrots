@@ -1,6 +1,6 @@
 # 0014: A soft body's region goals keep its momentum (the creep)
 
-Date: 2026-10-17. Status: proposed, **owner's call**. Built and measured (branch `fastlsm-region-fit`, commit 03d2e51), not merged: it fixes the creep, but loaded soft bodies give more (Results). Follows ADR 0013 Known limits and the STATUS known issue "A lopsided soft body creeps sideways on its own" (ADR 0008 Known limits).
+Date: 2026-10-17. Status: proposed, **owner's call**. Built and measured; on main since 2026-10-17 (commit 63b2106) for the owner to play how soft loaded jellies get (owner: "we can undo if its bad"; to undo, `git revert 63b2106`). It fixes the creep, but loaded soft bodies give more (Results). Follows ADR 0013 Known limits and the STATUS known issue "A lopsided soft body creeps sideways on its own" (ADR 0008 Known limits).
 
 ## Context
 The creep was measured on the CPU only (ADR 0008: 0.047 px/s; ADR 0013: 0.20 px/s, FastLSM weighting 0.14, not kept). Measured on the GPU first (`body_probe creep`, new: a 16 x 10 jelly let go turned 30 deg on the floor, 1800 frames, the centroid's sideways speed from frame 600; RTX 3080 Ti, `--disable-vsync`; each line two runs, identical):
@@ -41,7 +41,7 @@ Kept as ADR 0013 needs:
 
 ## Owner's call
 1. **Keep the creep** (0.15 px/s at 0.2 on the GPU, none from 0.5 up) and leave regional shape matching as it is; or
-2. **Merge the branch** and accept softer loaded jellies (a carrot on a shipped jelly sags ~1 px more and may slide off its dent), maybe with the shipped jelly stiffer to make up for it (a tuning pass over `squash`, `stack3`, `jellystack`, the drop in `main.tscn`); or
+2. **Keep it (now on main)** and accept softer loaded jellies (a carrot on a shipped jelly sags ~1 px more and may slide off its dent), maybe with the shipped jelly stiffer to make up for it (a tuning pass over `squash`, `stack3`, `jellystack`, the drop in `main.tscn`); or
 3. **Pair joints instead of regions** (Phyzios, `docs/phyzios.md` § 9): every correction equal and opposite at a pair's two ends, so momentum is exact by construction and the stiffness is tuned with no leak to lose; no region fit to turn inside out (ADR 0013 Known limits, `droop`); joints break past a stretch. It replaces ADR 0005's regions, so its own ADR and a timeboxed CPU experiment first. Not started.
 
 ## Considered and rejected
