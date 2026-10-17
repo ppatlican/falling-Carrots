@@ -17,7 +17,8 @@
 // water soaked into the sand, since the push was all that held water out of it.
 // Friction is cut for grains surrounded by liquid (wet_slip), see the end of contact_delta.
 // Mochi (ADR 0017) follows the powder rule against everything but its own material, whose pairs take
-// only the mochi rule (mochi_push, summed into mochi_sum). Against a body it is heavier by STACK_K
+// only the mochi rule (mochi_push, summed into mochi_sum), and liquids, whose pairs with it take the
+// pair rule's push (mochi_wet_push, into mochi_sum at both ends; ADR 0018). Against a body it is heavier by STACK_K
 // when lower, as a grain, so a dough holds a carrot set on it (squashing under it); shared by density
 // alone (as a soft body is), a dropped carrot split a dough and went down to the floor (body_probe
 // doughcarrot). Against grains, by density (see the push share below).
@@ -228,8 +229,9 @@ float stack_height(uint t, uint body) {
 // same-body pairs this loop skips). Both for solve_delta (ADR 0008 item 1).
 // joint_sum: for a member of a soft body held by pair joints, the sum of its joints' errors
 // (joint_error, ADR 0016; 0 for anything else), which solve_delta moves it by joint_share of.
-// mochi_sum: for a mochi particle, the sum of its mochi pair pushes (mochi_push, ADR 0017; 0 for
-// anything else), which solve_delta adds after the clamp.
+// mochi_sum: for a mochi particle, the sum of its mochi pair pushes (mochi_push, ADR 0017) and of its
+// pushes from liquids (mochi_wet_push, ADR 0018); for a liquid particle its pushes from mochi; 0 for
+// anything else. solve_delta adds it after the clamp.
 vec2 contact_delta(uint t, out vec2 body_out, out vec2 body_share, out float region_n, out vec2 joint_sum,
 		out vec2 mochi_sum) {
 	uint m_t = s_material(t);
@@ -272,6 +274,10 @@ vec2 contact_delta(uint t, out vec2 body_out, out vec2 body_share, out float reg
 		bool j_liquid = mj.info.x == CLASS_LIQUID;
 		uint j_body = flags_j >> BODY_SHIFT;
 		bool j_mochi = mj.info.x == CLASS_MOCHI;
+		if ((t_mochi && j_liquid) || (t_liquid && j_mochi)) {
+			mochi_sum += mochi_wet_push(t, j, t_mochi ? t : j);  // mochi and a liquid: the pair rule (ADR 0018)
+			continue;
+		}
 		if (!t_powder && !j_powder && t_body == 0u && j_body == 0u && !t_mochi && !j_mochi) continue;  // liquid-liquid: the density constraint
 		bool own = t_body != 0u && t_body == j_body;
 		if (own && !self_contact(t, j)) {

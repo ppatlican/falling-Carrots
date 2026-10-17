@@ -10,6 +10,7 @@ const GROUPS := {
 	"test_shipped_dough_is_mochi": ["quick", "setup"],
 	"test_pair_rule": ["quick"],
 	"test_a_lump_slumps_and_rests": ["quick"],
+	"test_wet_pair_rule": ["quick"],
 }
 
 const MaterialTable = preload("res://cpu_ref/material_table.gd")
@@ -119,6 +120,58 @@ func test_pair_rule() -> void:
 	expect(ParticleStep.mochi_push_size(2.0, 2.0, 0.7 * sp, target, 1.0) > 0.0, "a dense pair pushes")
 	expect_eq(ParticleStep.mochi_push_size(0.1, 0.1, reach, target, 1.0), 0.0, "nothing at the reach (a strand breaks there)")
 	expect(absf(ParticleStep.mochi_push_size(9.0, 9.0, 0.0, target, 1.0)) <= SimParams.MOCHI_MAX_PAIR * sp + 1e-6, "clamped")
+
+
+## Against a liquid (ADR 0018): the pair rule with the mochi end's own plus wet density, a push only. A
+## dough particle at a flat water face (three dough and one water neighbour at the rest spacing) is
+## pushed by nothing; one closed in (dense) pushes; a sparse pair doesn't pull; within
+## MOCHI_WET_MAX_PAIR. A water particle mostly closed in by dough counts as enclosed, one lying on it
+## doesn't.
+func test_wet_pair_rule() -> void:
+	var sp := SimParams.SPACING
+	var target := ParticleStep.mochi_target()
+	expect(absf(ParticleStep.mochi_wet_push_size(0.75, 0.25, sp, target)) < 1e-6, "water on a flat dough face is at rest")
+	expect(ParticleStep.mochi_wet_push_size(0.75, 0.75, 0.8 * sp, target) > 0.0, "water pressed into a dough is pushed out")
+	expect_eq(ParticleStep.mochi_wet_push_size(0.5, 0.0, 1.2 * sp, target), 0.0, "no pull: water doesn't stick")
+	expect(ParticleStep.mochi_wet_push_size(9.0, 9.0, 0.0, target) <= SimParams.MOCHI_WET_MAX_PAIR * sp + 1e-6, "clamped")
+	var table = _table()
+	var sim = ParticleStep.new(WORLD, table)
+	sim._encl = PackedVector2Array([Vector2(1.0, 0.05), Vector2(0.3, 1.0), Vector2.ZERO])
+	expect_eq(sim.mochi_enclosed(0), 1.0, "closed in")
+	expect_eq(sim.mochi_enclosed(1), 0.0, "lying on a dough")
+	expect_eq(sim.mochi_enclosed(2), 0.0, "no dough near")
+
+
+## Water caught in a dough under water rises out of it (ADR 0018): a 14 x 6 dough on the floor with one
+## of its particles in the third row swapped for water, under a 4-row pool; after 2 s the water particle
+## is over the dough's top and the dough is one piece on the floor.
+func test_water_in_a_dough_rises_out() -> void:
+	var table = _table()
+	var dough: int = table.id_of("dough")
+	var water: int = table.id_of("water")
+	var world := Vector2(40, 30)
+	var sim = ParticleStep.new(world, table)
+	var state := _state()
+	var fl := _floor_y(world)
+	_block(state, Vector2(world.x * 0.5, fl), 14, 6, dough)
+	var caught := 2 * 14 + 7
+	state.material[caught] = water
+	for y in 4:
+		for x in 19:
+			state.pos.append(Vector2(1.0 + x * SimParams.SPACING, fl - (6 + y) * SimParams.SPACING))
+			state.vel.append(Vector2.ZERO)
+			state.material.append(water)
+	var start: float = state.pos[caught].y
+	_run(sim, state, 120)
+	var top := INF
+	for i in state.pos.size():
+		if state.material[i] == dough:
+			top = minf(top, state.pos[i].y)
+	var d := _measure(state, dough)
+	_report("water caught in a 14x6 dough under a pool: from y %.1f to %.1f in 2 s, the dough's top at %.1f, %d piece(s)"
+			% [start, state.pos[caught].y, top, d.pieces])
+	expect(state.pos[caught].y < top, "out over the dough's top: %.1f against %.1f" % [state.pos[caught].y, top])
+	expect_eq(d.pieces, 1, "the dough stays one piece")
 
 
 ## A 16 x 10 dough block set on the floor has no rest shape to keep: it slumps lower and wider, stays

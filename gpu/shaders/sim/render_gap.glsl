@@ -10,6 +10,10 @@
 // much water the bed holds (see docs/STATUS.md, dark strip). Only background pixels are
 // painted and always in the liquid's plain colour, so the draw order among threads can't
 // make it flicker, and grains drawn next still cover their own pixels.
+// Mochi (ADR 0018) likewise: water lies on a dough at its own packing since the mochi-liquid pair
+// rule, but over the dips of a dough's rough top it still leaves 1-3 px of air the grid holds up, as
+// over sand (doughbed shots: a dark pixel over the dough's top in 59% of columns before the pair
+// rule, 44% with it).
 
 // common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
@@ -25,6 +29,21 @@ const float GAP_SIDE = 2.0;
 const float BED_INSIDE_FILL = 0.9;
 const float NEAR_FILL = 0.02;
 
+// Body volume of the grid at x (bilinear over the cells' body channel, as hydro_powder_fill reads
+// the powder one): bodies and mochi (hydro_splat). Near mochi the pass runs as near sand.
+float body_fill(vec2 x) {
+	ivec2 size = hydro_size();
+	vec2 g = x / hydro_cell_size() - 0.5;
+	ivec2 b = ivec2(floor(g));
+	vec2 f = g - vec2(b);
+	float v[4];
+	for (int k = 0; k < 4; k++) {
+		ivec2 c = clamp(b + ivec2(k & 1, k >> 1), ivec2(0), size - ivec2(1));
+		v[k] = hydro_phi[hydro_index(c)].z;
+	}
+	return mix(mix(v[0], v[1], f.x), mix(v[2], v[3], f.x), f.y);
+}
+
 // A pixel nothing has been drawn on yet (render_clear's background is ~0.07).
 bool background(ivec2 q) {
 	vec3 c = imageLoad(out_image, q).rgb;
@@ -38,15 +57,15 @@ void main() {
 	}
 	vec2 pt = s_pred[t];
 	float fill = hydro_powder_fill(pt);
-	if (fill >= BED_INSIDE_FILL || fill < NEAR_FILL) {
+	if (fill >= BED_INSIDE_FILL || (fill < NEAR_FILL && body_fill(pt) < NEAR_FILL)) {
 		return;
 	}
-	// The nearest grain under the particle.
+	// The nearest grain (or mochi particle) under the particle.
 	float best = 1e30;
 	vec2 below = pt;
 	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
-		if (j == t || s_class(j) != CLASS_POWDER) continue;
+		if (j == t || (s_class(j) != CLASS_POWDER && s_class(j) != CLASS_MOCHI)) continue;
 		vec2 d = s_pred[j] - pt;
 		if (d.y <= 0.0 || abs(d.x) > GAP_SIDE) continue;
 		if (d.y < best) {

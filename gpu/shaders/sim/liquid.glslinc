@@ -89,12 +89,16 @@ float displacing_share(uint c) {
 	return c == CLASS_POWDER ? LIQUID_POWDER_SHARE : (c == CLASS_CLUSTER || c == CLASS_MOCHI ? 1.0 : 0.0);
 }
 
+// PBF lambda of liquid particle t. Also keeps its enclosure sums for mochi_enclosed (ADR 0018):
+// poly6 summed over its mochi and over its liquid neighbours, in rest_offset.xy of its slot (z: the
+// frame), when it has a mochi neighbour.
 float liquid_lambda(uint t) {
 	vec2 pt = s_pred[t];
 	vec2 wall_grad;
 	float density = poly6(0.0) + wall_density(pt, wall_grad);
 	vec2 grad_t = wall_grad / params.rest_density;
 	float grad_sum = 0.0;
+	vec2 enclosure = vec2(0.0);  // poly6 sums over mochi and liquid neighbours (ADR 0018)
 	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
 		if (j == t) continue;
@@ -102,18 +106,27 @@ float liquid_lambda(uint t) {
 		float r2 = dot(rv, rv);
 		if (r2 >= params.h * params.h) continue;
 		uint cj = s_class(j);
+		float w6 = poly6(r2);
 		if (cj != CLASS_LIQUID) {
 			// Grains and body particles displace the liquid but don't move with its constraint.
 			float share = displacing_share(cj);
-			density += share * poly6(r2);
+			density += share * w6;
 			grad_t += share * spiky_grad(rv, t, j) / params.rest_density;
+			enclosure.x += cj == CLASS_MOCHI ? w6 : 0.0;
 			continue;
 		}
-		density += poly6(r2);
+		density += w6;
+		enclosure.y += w6;
 		vec2 g = spiky_grad(rv, t, j) / params.rest_density;
 		grad_t += g;
 		grad_sum += dot(g, g);
 	} END_NEIGHBOURS
+	// How far mochi closes it in (mochi_enclosed, ADR 0018), in its slot's rest_offset, which only
+	// body members use otherwise, stamped with the frame. Only with mochi near: written for every
+	// liquid particle in every iteration, the store took 50k water's solve from 538 to 565 us.
+	if (enclosure.x > 0.0) {
+		rest_offset[sorted_ids[t]].xyz = vec3(enclosure, uintBitsToFloat(params.frame));
+	}
 	float c = density / params.rest_density - 1.0;
 	return min(-c / (grad_sum + dot(grad_t, grad_t) + params.lambda_eps), 0.0);
 }

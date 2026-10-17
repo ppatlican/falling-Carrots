@@ -71,8 +71,13 @@ var _joint_sum := Vector2.ZERO
 ## For a mochi particle, the sum of its mochi pair pushes from _contact_delta (_mochi_push, ADR 0017;
 ## 0 for anything else): step() adds it after the contact clamp, as the joints'.
 var _mochi_sum := Vector2.ZERO
-## Per mochi particle, this iteration's mochi density (_mochi_density, ADR 0017; GPU: lambda).
+## Per mochi particle, this iteration's mochi density (_mochi_density, ADR 0017; GPU: lambda), and
+## its wet density, mochi_w over its liquid neighbours (ADR 0018; GPU: rest_offset.x of its slot).
 var _mochi_rho := PackedFloat64Array()
+var _mochi_wet := PackedFloat64Array()
+## Per liquid particle, this iteration's poly6 sums over its mochi and its liquid neighbours (_lambda;
+## mochi_enclosed, ADR 0018; GPU: rest_offset.xy of its slot).
+var _encl := PackedVector2Array()
 ## The mochi density of a particle on the rest lattice (mochi_rest), and the density a pair's push
 ## aims for (mochi_target).
 var _mochi_rest: float
@@ -273,6 +278,10 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 				delta[i] = _hydro_delta(pred[i], phi, hydro_p, dt) / _rho[i]
 			elif body[i] != 0:
 				delta[i] = _body_pressure_delta(i, pred, mat, body, edge, bodies[body[i]], neighbours[i], phi, hydro_p, dt)
+			elif _cls[i] == MOCHI:
+				# Mochi in liquid (ADR 0018): as a liquid, over its mass, where the grid holds liquid.
+				var gate := smoothstep(0.0, SimParams.MOCHI_WET_FILL, _body_liquid_fill(pred[i], phi))
+				delta[i] = _hydro_delta(pred[i], phi, hydro_p, dt) * (gate / _rho[i]) if gate > 0.0 else Vector2.ZERO
 			else:
 				delta[i] = Vector2.ZERO
 			if body[i] == 0:  # a body's pushes are clamped once their rigid part is taken
@@ -312,6 +321,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	_pair_g.resize(_pair_off[n])
 	_pair_w.resize(_pair_off[n])
 	_mochi_rho.resize(n)
+	_mochi_wet.resize(n)
+	_encl.resize(n)
 	for _it in iterations:
 		for i in n:
 			if _cls[i] == LIQUID:
@@ -325,7 +336,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 			else:
 				lambda[i] = 0.0
 				if _cls[i] == MOCHI:
-					_mochi_rho[i] = _mochi_density(i, pred, mat, neighbours[i])
+					_mochi_rho[i] = _mochi_density(i, pred, mat, neighbours[i])  # also _mochi_wet[i]
 		for i in n:
 			var d := Vector2.ZERO
 			_joint_sum = Vector2.ZERO
@@ -383,7 +394,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h, dt) \
 				+ _powder_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt) \
 				+ (_body_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt) if body[i] != 0 or _cls[i] == MOCHI else Vector2.ZERO) \
-				+ _mochi_viscosity(i, pred, vel, mat, neighbours[i], dt)
+				+ _mochi_viscosity(i, pred, vel, mat, neighbours[i], dt) \
+				+ _mochi_expel(i, pred, mat, neighbours[i], dt)
 		if sticky:
 			new_vel[i] += _stick_pull(i, pred, mat, body, bodies, neighbours[i]) * dt \
 					+ _stick_damp(i, pred, vel, mat, body, bodies, neighbours[i], dt) \
@@ -811,6 +823,7 @@ func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: Packed
 	var hh := h * h
 	var p_i := pred[i]
 	var off := _pair_off[i]
+	var encl := Vector2.ZERO  # poly6 over mochi and over liquid neighbours (mochi_enclosed, ADR 0018)
 	for k in nb.size():
 		var j := nb[k]
 		var rv := p_i - pred[j]
@@ -831,11 +844,15 @@ func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: Packed
 			var share := SimParams.LIQUID_POWDER_SHARE if c_j == POWDER else 1.0 if c_j == CLUSTER or c_j == MOCHI else 0.0
 			density += share * w
 			grad_i += share * g / rest_density
+			if c_j == MOCHI:
+				encl.x += w
 			continue
 		density += w
+		encl.y += w
 		g = g / rest_density
 		grad_i += g
 		grad_sum += g.length_squared()
+	_encl[i] = encl if encl.x > 0.0 else Vector2.ZERO
 	var c := density / rest_density - 1.0
 	return -c / (grad_sum + grad_i.length_squared() + SimParams.LAMBDA_EPS)
 
@@ -2228,6 +2245,9 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 		if c_i == MOCHI and mat[j] == m_i:
 			_mochi_sum += _mochi_push(i, j, pred, m_i)  # one mochi material: its pair rule only
 			continue
+		if (c_i == MOCHI and c_j == LIQUID) or (t_liquid and c_j == MOCHI):
+			_mochi_sum += _mochi_wet_push(i, j, pred, i if c_i == MOCHI else j)  # the pair rule (ADR 0018)
+			continue
 		if c_i != POWDER and c_j != POWDER and b_i == 0 and b_j == 0 and c_i != MOCHI and c_j != MOCHI:
 			continue  # liquid-liquid: the density constraint
 		var own := b_i != 0 and b_i == b_j
@@ -2459,13 +2479,18 @@ static func mochi_target() -> float:
 	return mochi_rest() + mochi_w(SimParams.SPACING) * SimParams.MOCHI_KS / (2.0 * SimParams.MOCHI_KE)
 
 
-## Mochi density of particle i: the sum of mochi_w over its neighbours of its own material.
-## Mirror: mochi_density in mochi.glslinc (solve_lambda, into lambda).
+## Mochi density of particle i: the sum of mochi_w over its neighbours of its own material. Its wet
+## density, the sum over its liquid neighbours, goes to _mochi_wet[i] (ADR 0018).
+## Mirror: mochi_density in mochi.glslinc (solve_lambda, into lambda and rest_offset.x).
 func _mochi_density(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: PackedInt32Array) -> float:
 	var rho := 0.0
+	var wet := 0.0
 	for j in nb:
 		if mat[j] == mat[i]:
 			rho += mochi_w(pred[i].distance_to(pred[j]))
+		elif _cls[j] == LIQUID:
+			wet += mochi_w(pred[i].distance_to(pred[j]))
+	_mochi_wet[i] = wet
 	return rho
 
 
@@ -2495,6 +2520,72 @@ func _mochi_push(i: int, j: int, pred: PackedVector2Array, m: int) -> Vector2:
 	if size == 0.0:
 		return Vector2.ZERO
 	return size * (rv / r if r > MIN_DIST else pair_dir(rv, r, i, j))
+
+
+## Size (px) of the push between a mochi particle (own density rho_m, wet density wet_m) and a liquid
+## one r px apart (ADR 0018): the pair rule with rho_m + wet_m for both ends, f = 2 (rho_m + wet_m -
+## target) MOCHI_KE + w MOCHI_KS, times the reach; a push only (0 where f <= 0: no pull, so water
+## doesn't stick to a dough), at most MOCHI_WET_MAX_PAIR spacings. Mirror: mochi_wet_push in mochi.glslinc.
+static func mochi_wet_push_size(rho_m: float, wet_m: float, r: float, target: float) -> float:
+	var w := mochi_w(r)
+	if w <= 0.0:
+		return 0.0
+	var f := 2.0 * (rho_m + wet_m - target) * SimParams.MOCHI_KE + w * SimParams.MOCHI_KS
+	if f <= 0.0:
+		return 0.0
+	return minf(f * SimParams.MOCHI_REACH * SimParams.SPACING, SimParams.MOCHI_WET_MAX_PAIR * SimParams.SPACING)
+
+
+## Move of i from j for a mochi-liquid pair, m the mochi end: mochi_wet_push_size along the pair, so
+## j's is exactly the opposite.
+func _mochi_wet_push(i: int, j: int, pred: PackedVector2Array, m: int) -> Vector2:
+	var rv := pred[i] - pred[j]
+	var r := rv.length()
+	var size := mochi_wet_push_size(_mochi_rho[m], _mochi_wet[m], r, _mochi_target)
+	if size == 0.0:
+		return Vector2.ZERO
+	return size * (rv / r if r > MIN_DIST else pair_dir(rv, r, i, j))
+
+
+## How far liquid particle l is closed in by mochi, 0 to 1: the mochi share of its mochi-and-liquid
+## poly6 weight (_encl, _lambda) through a smoothstep from MOCHI_ENCLOSED_LO to _HI.
+## Mirror: mochi_enclosed in mochi.glslinc.
+func mochi_enclosed(l: int) -> float:
+	var e := _encl[l]
+	if e.x <= 0.0:
+		return 0.0
+	return smoothstep(SimParams.MOCHI_ENCLOSED_LO, SimParams.MOCHI_ENCLOSED_HI, e.x / (e.x + e.y))
+
+
+## Velocity change of i, a mochi or a liquid particle, from trading momentum with the other kind
+## (ADR 0018): each pair whose liquid end is closed in (mochi_enclosed) trades MOCHI_EXPEL x mochi_w x
+## enclosure x gravity x dt of speed along gravity, the liquid up and the mochi down, each end its mass
+## share (liquid_pair_share), so the pair's momentum is kept.
+## A mochi particle with no wet density (_mochi_wet) trades nothing, from either end. 0 for anything
+## else. Mirror: mochi_expel in mochi.glslinc.
+func _mochi_expel(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: PackedInt32Array, dt: float) -> Vector2:
+	var c_i := _cls[i]
+	if c_i != MOCHI and c_i != LIQUID:
+		return Vector2.ZERO
+	var t_mochi := c_i == MOCHI
+	var gate_i := 0.0 if t_mochi else mochi_enclosed(i)
+	if (_mochi_wet[i] <= 0.0) if t_mochi else (gate_i <= 0.0):
+		return Vector2.ZERO
+	var dv := 0.0
+	for j in nb:
+		if j == i:
+			continue
+		if t_mochi:
+			if _cls[j] != LIQUID:
+				continue
+		elif _cls[j] != MOCHI or _mochi_wet[j] <= 0.0:
+			continue
+		var w := mochi_w(pred[i].distance_to(pred[j]))
+		if w <= 0.0:
+			continue
+		var f := SimParams.MOCHI_EXPEL * w * (mochi_enclosed(j) if t_mochi else gate_i) * liquid_pair_share(_rho[i], _rho[j])
+		dv += f if t_mochi else -f  # +y is down: the mochi down, the liquid up
+	return Vector2(0.0, dv * SimParams.GRAVITY * dt)
 
 
 ## Velocity change of mochi particle i from its viscosity: toward its own-material neighbours'

@@ -4,11 +4,13 @@
 // Solve, once per frame before the iterations: liquids are pushed down the gradient of
 // the density projection grid's pressure (hydro_delta in hydro.glslinc) over their mass, into scratch,
 // clamped like solve_delta. solve_apply then applies it.
-// Body particles are pushed by the pressure on their wet surface (body_pressure_delta, ADR 0003).
+// Body particles are pushed by the pressure on their wet surface (body_pressure_delta, ADR 0003); mochi
+// where the grid holds liquid as a liquid is (ADR 0018).
 
 // common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
+#include "mochi.glslinc"
 
 // A body particle's wet face toward a liquid neighbour d away: the unit vector to it, weighted
 // 1 out to 1.5 spacings and fading to 0 at h, over 1 + sqrt(2), what a flat face of liquid on
@@ -168,6 +170,14 @@ void main() {
 		d = hydro_delta(s_pred[t]);
 		if (rho != 1.0) {
 			d /= rho;
+		}
+	} else if (s_class(t) == CLASS_MOCHI) {
+		// Mochi in liquid (ADR 0018): as a liquid, over its mass, where the grid holds liquid at it
+		// (MOCHI_WET_FILL), so a dough floats, hangs or sinks by its density. Ungated, a dry dough bed's
+		// grid pressure (continued hydrostatically, though no water is in it) would hold it up.
+		float gate = smoothstep(0.0, MOCHI_WET_FILL, body_liquid_fill(s_pred[t]));
+		if (gate > 0.0) {
+			d = hydro_delta(s_pred[t]) * (gate / materials[s_material(t)].phys.x);
 		}
 	}
 	// A body's pushes are capped after body_project has taken their rigid part, not here.

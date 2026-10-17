@@ -114,6 +114,18 @@ const MOCHI_KS := 0.2
 const MOCHI_PULL := 0.5
 const MOCHI_MAX_PAIR := 0.25
 const MOCHI_VISC := 1.0
+## Mochi against liquids (ADR 0018; mochi.glslinc): a mochi-liquid pair takes the pair rule's push with
+## the mochi end's own plus wet density (mochi_w over its liquid neighbours) for both ends, at most
+## MOCHI_WET_MAX_PAIR spacings per end per iteration. A liquid particle whose mochi share of its
+## mochi-and-liquid poly6 weight is past MOCHI_ENCLOSED_LO (fully at _HI) is closed in, and trades
+## MOCHI_EXPEL x mochi_w x enclosure gravities of momentum along gravity with each mochi neighbour, the
+## liquid up. A mochi particle where the grid holds liquid (MOCHI_WET_FILL, bilinear) takes the grid's
+## pressure push over its density, as a liquid does.
+const MOCHI_WET_MAX_PAIR := 0.5
+const MOCHI_ENCLOSED_LO := 0.5
+const MOCHI_ENCLOSED_HI := 0.9
+const MOCHI_EXPEL := 60.0
+const MOCHI_WET_FILL := 0.05
 ## Powder sleeping (velocity_update.glsl): a grain the solver stopped that moved slower
 ## than this (px/s) in a step stays put with zero velocity. 0.1 px per 1/60 s step.
 const SLEEP_SPEED := 6.0

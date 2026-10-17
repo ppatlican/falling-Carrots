@@ -12,8 +12,21 @@
 // pushes (contact_delta) after the contact clamp, as pair joints are. The push is the same size from
 // both ends of a pair (both read the same densities and distance) and along the pair, so the moves
 // are equal and opposite: a lump's momentum is kept, and it can't creep. Velocity: viscosity blends
-// toward the own-material neighbours (velocity_xsph). A mochi particle meets every other material as
-// a grain does (powder.glslinc), sharing the push by density with what isn't soft (body_stack_weight).
+// toward the own-material neighbours (velocity_xsph). A mochi particle meets every other material but
+// liquids as a grain does (powder.glslinc), sharing the push by density with what isn't soft
+// (body_stack_weight).
+//
+// Against a liquid (ADR 0018), after Phyzios' Mochi, whose density counts every neighbour and whose
+// rule runs on every pair with a mochi end: a mochi-liquid pair takes the pair rule, push only, with
+// the mochi end's own density plus its wet density (mochi_w over its liquid neighbours) for both ends
+// (mochi_wet_push), instead of the grain contact. Water lies on a dough at its own packing, and water
+// pressed into a dough is pushed out as the dough closes on it. A liquid particle mostly closed in by
+// mochi (mochi_enclosed) and its mochi neighbours trade momentum along gravity, the liquid up
+// (mochi_expel), so water caught inside a dough rises out of it. A mochi particle where the grid holds
+// liquid takes the grid's pressure push over its density, as a liquid does (solve_pressure), so a
+// dough floats, hangs or sinks in water by its density. A mochi particle's wet density and a liquid
+// particle's enclosure sums are kept in rest_offset of its slot, which only body members use otherwise
+// (neither is ever one): no new buffer.
 
 const float MOCHI_REACH = 4.0 / 3.0;
 const float MOCHI_KE = 0.1;
@@ -21,6 +34,24 @@ const float MOCHI_KS = 0.2;
 const float MOCHI_PULL = 0.5;
 const float MOCHI_MAX_PAIR = 0.25;
 const float MOCHI_VISC = 1.0;
+// Most a mochi-liquid pair moves each end per iteration, in spacings (ADR 0018): twice a mochi pair's,
+// so water landing on a dough is pushed back out before the dough closes over it (doughbed, before
+// mochi_expel: 48-56 water left inside at 0.25, 28-34 at 0.5, 44 at 1). Mirror: SimParams.MOCHI_WET_MAX_PAIR.
+const float MOCHI_WET_MAX_PAIR = 0.5;
+// Liquid share of a liquid particle's mochi-and-liquid neighbour weight (poly6) from which it counts as
+// closed in by mochi, and at which it fully does (mochi_enclosed). Water lying on a flat dough reads
+// about LO; one particle in a dough's crack about 1. Mirror: SimParams.MOCHI_ENCLOSED_LO, _HI.
+const float MOCHI_ENCLOSED_LO = 0.5;
+const float MOCHI_ENCLOSED_HI = 0.9;
+// Momentum a mochi-liquid pair trades along gravity per second when the liquid end is closed in, per
+// unit of mochi_w, in gravities (mochi_expel). At 10 and 50 without the enclosure gate (on any pair
+// with the heavier end above) nothing left (61-68 water inside a "+10k dough" bed under "+10k water");
+// gated, 20 left 34 and 60 left 2-13. Mirror: SimParams.MOCHI_EXPEL.
+const float MOCHI_EXPEL = 60.0;
+// Liquid fill of the density projection grid at a mochi particle (bilinear) from which the grid's
+// pressure pushes it (solve_pressure). Inside a dry dough bed the grid continues the pressure
+// hydrostatically all the same, and that push would hold a dry dough up. Mirror: SimParams.MOCHI_WET_FILL.
+const float MOCHI_WET_FILL = 0.05;
 
 bool mochi_material(uint m) { return materials[m].info.x == CLASS_MOCHI; }
 
@@ -49,17 +80,24 @@ float mochi_target() {
 	return mochi_rest() + mochi_w(params.spacing) * MOCHI_KS / (2.0 * MOCHI_KE);
 }
 
-// Mochi density of particle t: mochi_w summed over its own-material neighbours. For solve_lambda.
-// Mirror: ParticleStep._mochi_density.
+// Mochi density of particle t: mochi_w summed over its own-material neighbours. For solve_lambda. Its
+// wet density, mochi_w summed over its liquid neighbours, goes to rest_offset.x of its slot (ADR 0018;
+// mochi_wet_push). Mirror: ParticleStep._mochi_density.
 float mochi_density(uint t) {
 	uint m = s_material(t);
 	vec2 pt = s_pred[t];
 	float rho = 0.0;
+	float liq = 0.0;
 	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
-		if (j == t || s_material(j) != m) continue;
-		rho += mochi_w(length(pt - s_pred[j]));
+		if (j == t) continue;
+		if (s_material(j) == m) {
+			rho += mochi_w(length(pt - s_pred[j]));
+		} else if (s_class(j) == CLASS_LIQUID) {
+			liq += mochi_w(length(pt - s_pred[j]));
+		}
 	} END_NEIGHBOURS
+	rest_offset[sorted_ids[t]].x = liq;
 	return rho;
 }
 
@@ -80,6 +118,76 @@ vec2 mochi_push(uint t, uint j) {
 	}
 	float most = MOCHI_MAX_PAIR * params.spacing;
 	return clamp(f * MOCHI_REACH * params.spacing, -most, most) * pair_dir(rv, r, t, j);
+}
+
+// Move of t from j for a mochi-liquid pair (ADR 0018), m the mochi end: the pair rule with the mochi
+// end's own density plus its wet density for both ends, f = 2 (rho_m + wet_m - target) MOCHI_KE +
+// w MOCHI_KS, times the reach, along the pair (> 0 apart), a push only (no pull: water doesn't stick to
+// a dough), clamped to MOCHI_WET_MAX_PAIR spacings. A dough's top under water reads as full as its
+// inside, so water on it is pushed by nothing at the rest spacing and lies at its own packing; water in
+// a crack, with the dough round it at full density and closing in, is pushed out. Both ends compute it
+// from the same values. Mirror: ParticleStep.mochi_wet_push_size, _mochi_wet_push.
+vec2 mochi_wet_push(uint t, uint j, uint m) {
+	vec2 rv = s_pred[t] - s_pred[j];
+	float r = length(rv);
+	float w = mochi_w(r);
+	if (w <= 0.0) {
+		return vec2(0.0);
+	}
+	float f = 2.0 * (lambda[m] + rest_offset[sorted_ids[m]].x - mochi_target()) * MOCHI_KE + w * MOCHI_KS;
+	if (f <= 0.0) {
+		return vec2(0.0);
+	}
+	return min(f * MOCHI_REACH * params.spacing, MOCHI_WET_MAX_PAIR * params.spacing) * pair_dir(rv, r, t, j);
+}
+
+// How far liquid particle l is closed in by mochi, 0 to 1: the mochi share of its mochi-and-liquid
+// neighbour weight (rest_offset.xy of its slot, stamped with the frame in z, liquid_lambda) through a
+// smoothstep from MOCHI_ENCLOSED_LO to _HI. Mirror: ParticleStep.mochi_enclosed.
+float mochi_enclosed(uint l) {
+	vec4 e = rest_offset[sorted_ids[l]];
+	if (floatBitsToUint(e.z) != params.frame || e.x <= 0.0) {
+		return 0.0;  // no mochi near it this frame (liquid_lambda writes the sums only then)
+	}
+	return smoothstep(MOCHI_ENCLOSED_LO, MOCHI_ENCLOSED_HI, e.x / (e.x + e.y));
+}
+
+// Velocity change of t, a mochi or a liquid particle, from trading momentum with the other kind
+// (ADR 0018): each pair whose liquid end is closed in (mochi_enclosed) trades MOCHI_EXPEL x
+// mochi_w x enclosure x gravity x dt of speed along gravity, the liquid up and the mochi down, each end
+// its mass share (liquid_pair_share), so the pair's momentum is kept. After Phyzios' Light/Dense pair swap, but only for
+// a liquid closed in: on any pair with the heavier end above it pumped water up into the bottom of a
+// dough sinking through a pool, and a dough of density 0.9 split. Liquid in a dough lighter than it is
+// pushed up too: down, it went into the dough under it. Mirror: ParticleStep._mochi_expel.
+vec2 mochi_expel(uint t) {
+	bool t_mochi = s_class(t) == CLASS_MOCHI;
+	float gate_t = t_mochi ? 0.0 : mochi_enclosed(t);
+	// Nothing to trade: a liquid not closed in, or a mochi particle with no liquid within the mochi
+	// reach (its wet density, mochi_density), which is every particle inside a dough.
+	if (t_mochi ? rest_offset[sorted_ids[t]].x <= 0.0 : gate_t <= 0.0) {
+		return vec2(0.0);
+	}
+	vec2 pt = s_pred[t];
+	float rho_t = materials[s_material(t)].phys.x;
+	float dv = 0.0;
+	FOR_EACH_NEIGHBOUR(t) {
+		uint j = k;
+		if (j == t) continue;
+		uint cj = s_class(j);
+		// A mochi end that skips the trade (no wet density) is skipped from the liquid end too, so the
+		// pair stays equal and opposite.
+		if (t_mochi ? cj != CLASS_LIQUID : (cj != CLASS_MOCHI || rest_offset[sorted_ids[j]].x <= 0.0)) continue;
+		float w = mochi_w(length(pt - s_pred[j]));
+		if (w <= 0.0) continue;
+		// The pair's momentum over the ends' reduced mass, so each end's change is its liquid_pair_share
+		// (ADR 0010) of the same speed: over the end's own mass instead, a dough of density 0.1 took ten
+		// times the water's kick and flew apart at over 1000 px/s.
+		float f = MOCHI_EXPEL * w * (t_mochi ? mochi_enclosed(j) : gate_t);
+		float rho_j = materials[s_material(j)].phys.x;
+		float share = rho_t == rho_j ? 1.0 : 2.0 * rho_j / (rho_t + rho_j);  // liquid_pair_share
+		dv += (t_mochi ? f : -f) * share;  // +y is down: the mochi down, the liquid up
+	} END_NEIGHBOURS
+	return vec2(0.0, dv * params.gravity * params.dt);
 }
 
 // Velocity change of mochi particle t from its viscosity (velocity_xsph): toward its own-material
