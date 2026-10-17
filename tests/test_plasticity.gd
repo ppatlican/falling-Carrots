@@ -1,7 +1,8 @@
 ## CPU reference: plasticity (ADR 0012). A soft body whose material has plasticity keeps the
 ## shape it is pressed or dropped into (dough), where a jelly springs back, and a resting one
 ## doesn't creep. Jelly with its stiffness and plasticity set here, as the parameter panel does,
-## so the numbers don't follow a shipped dough row. 2 substeps, 4 iterations (config.json).
+## so the numbers don't follow a shipped dough row, and on regions (ADR 0005) as dough is: the
+## shipped jelly is on pair joints (ADR 0016), not yet checked with plasticity. 2 substeps, 4 iterations (config.json).
 extends "res://tests/test_case.gd"
 
 const FILE_GROUPS := ["plastic"]
@@ -164,6 +165,7 @@ func _sim(world: Vector2, jelly: Dictionary):
 	_jelly = table.id_of("jelly")
 	_carrot = table.id_of("carrot")
 	_sand = table.id_of("sand")
+	table.set_soft_model(_jelly, "regions")
 	for column in jelly:
 		table.set_value(_jelly, column, jelly[column])
 	return ParticleStep.new(world, table)

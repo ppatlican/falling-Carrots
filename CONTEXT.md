@@ -49,7 +49,7 @@ In a soft body, a member and the members of its body whose rest offsets lie with
 _Avoid_: Cluster (a region is not its own body)
 
 **Soft model**:
-How a soft material keeps its shape, the `soft_model` column: `regions` (regional shape matching, the default) or `joints` (pair joints). Joint jelly is the shipped row with joints (ADR 0016).
+How a soft material keeps its shape, the `soft_model` column: `regions` (regional shape matching, the default) or `joints` (pair joints). Jelly is on joints and dough on regions (ADR 0016).
 
 **Pair joint**:
 In a soft body held by joints, a link between two members whose rest offsets lie within the region radius (the same pairs a region holds). Each iteration both ends move toward their rest vector, turned by the two ends' rotations, by equal and opposite amounts, so the body's momentum is kept and it can't creep (ADR 0016).

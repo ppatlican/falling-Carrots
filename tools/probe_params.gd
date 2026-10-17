@@ -1,7 +1,7 @@
 ## Parameter edits for the GPU probes (ADR 0007), through the parameter panel's path: the
 ## table clamps the value to the validator range and the sim uploads the row while it runs.
 ##   set=<material>.<column>=<value>[,...]   e.g. set=water.drag=60,sand.friction=0
-##                                           (soft_model takes a name: set=jelly.soft_model=joints)
+##                                           (soft_model takes a name: set=jelly.soft_model=regions)
 ##   setat=N                                 apply at frame N (default: right after setup)
 ## Prints one PARAM line per edit with the value actually stored.
 extends RefCounted

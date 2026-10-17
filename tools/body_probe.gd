@@ -123,7 +123,8 @@
 ##            a fresh outline (no BODY_STALE), its shape, and no kick (largest speed after the
 ##            erase, at rest at the end)
 ##   erasejelly the same with a 16x10 jelly, 360 frames: each half (about 4 x 10) may buckle and tip
-##            onto its side (ADR 0005 Known limits), so its shape within 4 px, at rest at the end
+##            onto its side (ADR 0005 Known limits), so its shape within 4.5 px (pair joints 4.1, regions
+##            2.9; ADR 0016), at rest at the end
 ##   erasebridge a 30x5 carrot plank laid on two 4x12 pillars under its ends, its middle erased
 ##            at frame 61 (8 px eraser), 300 frames: each half, now held at its outer end only,
 ##            tips into the gap (|rotation| over 0.3 rad, centroid down over 5 px). Held as one
@@ -140,7 +141,8 @@
 ##   brushcap one 50x40 box (2000 particles, the body brush's cap SimParams.BODY_BRUSH_MAX)
 ##            dropped, 900 frames, timed from 300
 ##   huge     one 125x80 box (10000 particles) dropped, 900 frames, timed from 300
-## Soft bodies bend (ADR 0005), with the shipped jelly or stiff= / region= (below):
+## Soft bodies bend (ADR 0005), with the shipped jelly (pair joints, ADR 0016; set=jelly.soft_model=regions
+## runs it on regions, as dough is) or stiff= / region= (below):
 ##   droop    a 24x6 jelly plank laid on two 6x10 carrot pillars 30 px apart (centres; a 20 px gap),
 ##            as test_jelly_plank_bends_over_a_gap, 300 frames: its middle sags over 2 px below the
 ##            columns over the pillars, stays on them (down under 10 px), and rests (every member
@@ -1932,7 +1934,7 @@ func _sample_split(f: int, b: Dictionary, bodies: Dictionary) -> void:
 		ok = ok and absf(turns[0]) > 0.3 and absf(turns[1]) > 0.3 and drops[0] > 5.0 and drops[1] > 5.0 and err < 0.1
 	else:
 		line += ", largest piece speed after the erase %.3f px/s" % sc.max_after
-		ok = ok and err < (4.0 if sc.name == "erasejelly" else 0.1) and speed < REST_SPEED
+		ok = ok and err < (4.5 if sc.name == "erasejelly" else 0.1) and speed < REST_SPEED
 	_result(line, ok)
 
 

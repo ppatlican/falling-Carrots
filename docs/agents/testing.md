@@ -37,7 +37,7 @@ Times above are with 10 processes. The default is now 4 at below normal priority
 | a test file | the tests you changed | — |
 | `tests/run_tests.gd`, `test_case.gd` | `-- --list`, then `@quick` | — |
 | `tools/*_probe.gd` | — | the scenarios you changed, once |
-| `data/materials.json` | `@setup`, plus the groups of the material's class: water or oil `@liquids @hydro @bodies-water`, sand `@sand`, carrot or cork `@rigid @bodies-water`, jelly `@soft`, dough `@soft @plastic` | that material's scenarios at both ends of the parameter's range (ADR 0001, `gpu-probe.md`) |
+| `data/materials.json` | `@setup`, plus the groups of the material's class: water or oil `@liquids @hydro @bodies-water`, sand `@sand`, carrot or cork `@rigid @bodies-water`, jelly `@soft` (and `test_joint_jelly_does_not_creep`: jelly is on pair joints), dough `@soft @plastic` (the plasticity tests put jelly on regions, as dough is) | that material's scenarios at both ends of the parameter's range (ADR 0001, `gpu-probe.md`) |
 | `config.json` | `@setup` (CPU tests fix substeps and iterations themselves) | the scenarios the setting touches |
 | `core/sim_params.gd` | by constant: `HYDRO_*` `@hydro @liquids @bodies-water`; `BODY_*`, `STACK_K` `@rigid @soft @bodies-water`; powder constants `@sand @liquids`; `STICK_*` `@stick`; `SPACING`, `H`, `DT`, `GRAVITY`, `MAX_STEP` the full suite | as the matching shader rows |
 | `core/body_brush.gd` | `@brush` | `main.tscn` screenshots of a stroke |
@@ -60,9 +60,9 @@ Times above are with 10 processes. The default is now 4 at below normal priority
 | … `_powder_liquid_drag`, powder sleeping | `@sand @liquids` | — |
 | … `step()`, `_find_neighbours`, `_apply_delta`, `_clamp_to_world` | the full suite | — |
 | `gpu/shaders/sim/body_match`, `body_project` | `@setup` | `body_probe tests,boxdrop,boxhigh,plank,boxside,boxstack,waterjelly`; `body_project` also `corkstrip` and the `solve_pressure` row |
-| … `body_region_fit`, `body_region_goal` | `@setup` | `body_probe jelly,droop,wobble,squash,erasejelly,waterjelly`; for pair joints (ADR 0016) also with `set=jelly.soft_model=joints`, plus `creep` and `droop inv` at 0.2 and `carrotjelly drop_dx=0,2,4` (each its own run) |
+| … `body_region_fit`, `body_region_goal` | `@setup` | `body_probe jelly,droop,wobble,squash,erasejelly,waterjelly` (the shipped jelly is on pair joints, ADR 0016) and again with `set=jelly.soft_model=regions` (dough's model), plus `creep` and `droop inv` at 0.2 and `carrotjelly drop_dx=0,2,4` (each its own run) |
 | … `body_split` | `@setup` | `body_probe erasemid,erasejelly,erasebridge,erasedrag,reuse` |
-| … `body_plastic`, `body_outline`, `body_rest`, `plastic.glslinc` | `@setup` | `body_probe squash,wobble,sandjelly,waterjelly,jellystack,jellydrop,erasejelly,fold,softcap set=jelly.stiffness=S,jelly.plasticity=P` at P 0 and 1 and S 0.2, 0.8, 0.95; read the PLASTIC lines (ADR 0012 Results); `main.tscn` shots of dough |
+| … `body_plastic`, `body_outline`, `body_rest`, `plastic.glslinc` | `@setup` | `body_probe squash,wobble,sandjelly,waterjelly,jellystack,jellydrop,erasejelly,fold,softcap set=jelly.stiffness=S,jelly.plasticity=P,jelly.soft_model=regions` at P 0 and 1 and S 0.2, 0.8, 0.95; read the PLASTIC lines (ADR 0012 Results); `main.tscn` shots of dough |
 | … `body_sweep` | `@setup` | `body_probe boxhigh,plank,boxside,boxstack,sand` |
 | … `body_impulse*`, `impulse.glslinc` (ADR 0015) | `@setup` | `body_probe boxtilt,boxoff,boxhigh,boxdrop,plank,boxside,boxstack,stack3,stack5,jellydrop vtrace`; TIME with `many,big`; `main.tscn` shots of a tilted and an off-centre drop |
 | … `brush_*` | `@setup` | `body_probe erase,erasemid,reuse`; `gpu_probe water 600`; `main.tscn` screenshots of the brush |

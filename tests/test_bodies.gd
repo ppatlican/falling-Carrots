@@ -625,7 +625,8 @@ func test_soft_jelly_rests_on_sand() -> void:
 	expect(sunk < 2.0 * SimParams.SPACING, "it doesn't dig into the bed, lowest member under 2 spacings below its top: %.2f px" % sunk)
 
 
-## A lopsided soft body doesn't creep sideways (ADR 0014): a jelly at stiffness 0.2 let go turned
+## A lopsided regions soft body doesn't creep sideways (ADR 0014): a jelly on regions (the shipped
+## jelly before ADR 0016; dough still is) at stiffness 0.2 let go turned
 ## 30 deg rests lopsided on a corner. With every member of a region counted the same in its fit,
 ## members near an edge (smaller regions) counted for more in the goals, which pushed the body as a
 ## whole: with no floor friction to hold it, it glided off (GPU body_probe creep: 1.8 px/s; with
@@ -633,7 +634,7 @@ func test_soft_jelly_rests_on_sand() -> void:
 ## Friction off, so the test sees the push itself, not what friction lets through.
 func test_lopsided_soft_jelly_does_not_creep() -> void:
 	var world := Vector2(80, 60)
-	var sim = _sim(world, {"stiffness": 0.2, "friction": 0.0})
+	var sim = _sim(world, {"stiffness": 0.2, "friction": 0.0, "soft_model": "regions"})
 	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
 	var pts := _box(Vector2(40, 20), 16, 10, deg_to_rad(30.0))
 	var lowest := -INF
@@ -648,12 +649,12 @@ func test_lopsided_soft_jelly_does_not_creep() -> void:
 		if f == 119:
 			x0 = _fit(state, id).c.x
 	var rate: float = (_fit(state, id).c.x - x0) / 3.0
-	_report("16x10 jelly (stiffness 0.2, no friction) let go turned 30 deg, 300 frames: centroid moved %.3f px/s sideways from 2 s to 5 s, turned %.3f rad"
+	_report("16x10 regions jelly (stiffness 0.2, no friction) let go turned 30 deg, 300 frames: centroid moved %.3f px/s sideways from 2 s to 5 s, turned %.3f rad"
 			% [rate, _fit(state, id).theta])
 	expect(absf(rate) < 0.3, "it doesn't creep, under 0.3 px/s: %.3f" % rate)
 
 
-## Pair-joint jelly (ADR 0016): the same lopsided jelly held by joints, whose corrections are equal and
+## Pair-joint jelly (ADR 0016, the shipped jelly): the same lopsided jelly held by joints, whose corrections are equal and
 ## opposite at a pair's two ends, so its momentum is kept and it can't push itself sideways (regions
 ## before ADR 0014: 2.34 px/s here; FastLSM weights 0.061). What the landing leaves it (a sideways
 ## drift from the per-member speed caps) dies out by drag alone, so it is read over the last second.
@@ -981,9 +982,10 @@ func test_split_plan_for_the_gpu() -> void:
 
 # --- Helpers -----------------------------------------------------------------------
 
-## A ParticleStep over the shipped table: rigid "carrot" (stiffness 1), "jelly" (stiffness
-## 0.3) and "cork" (rigid, density 0.5: it floats).
-## `jelly` sets jelly's parameters for this sim, as the parameter panel does (column -> value).
+## A ParticleStep over the shipped table: rigid "carrot" (stiffness 1), "jelly" (soft, held by
+## pair joints, ADR 0016) and "cork" (rigid, density 0.5: it floats).
+## `jelly` sets jelly's parameters for this sim, as the parameter panel does (column -> value;
+## "soft_model": "regions" puts it back on regional shape matching, ADR 0005).
 func _sim(world := WORLD, jelly := {}):
 	var table = MaterialTable.new()
 	var problems: PackedStringArray = table.load_file()
