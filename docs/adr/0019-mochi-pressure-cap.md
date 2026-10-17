@@ -13,6 +13,7 @@ Date: 2026-10-17. Status: **proposed, owner to play.** Owner, 2026-10-17: "dough
 
 ## Decision
 - **The grid's push on a mochi particle is at most `MOCHI_PRESSURE_MAX` (1.25) gravities (g dt²) over its density a step** (`solve_pressure.glsl`; CPU `ParticleStep.mochi_pressure_push`). At rest the push that holds water up is one gravity, so a dough still gets 1 / density of it: it floats, hangs or sinks by its density as in ADR 0018. The push that removes the water's compression is cut to that, so it can't hold a dough up on its wet rows.
+- **Amended by ADR 0021 (2026-10-17):** dough round a pocket of liquid caught inside a dough bed (the liquid share of the 3 x 3 grid cells round it under 0.2-0.45) takes no push at all.
 - Nothing else changes: a dry dough never takes the push (ADR 0018's fill gate), and every other class takes its old path. No new buffer, binding or `Params` field; `common.glslinc` is unchanged.
 
 ## Results (2026-10-17)
