@@ -62,6 +62,25 @@ func test_cell_under_a_tall_floater_is_under_a_floater() -> void:
 	expect(not ParticleStep.hydro_under_floater(phi, Vector2i(1, 6), size), "the same body with water over it")
 
 
+## A cell under full water with room left beside a dough is pulled full, as in open water: the
+## air a dough left sinking through a pool, unpulled, stayed under the liquid for good (up to
+## ~20 px at a wall, ADR 0020). Beside a body it isn't (water keeps a contact gap from a body).
+func test_room_beside_mochi_is_pulled_beside_a_body_not() -> void:
+	var phi := _pool()
+	phi[6 * COLS + 1] = Vector4(0.5, 0.0, 0.2, 0.2)  # room 0.3
+	var mochi := PackedFloat32Array()
+	mochi.resize(phi.size())
+	mochi[6 * COLS + 1] = 0.2
+	var head := SimParams.GRAVITY * ParticleStep.hydro_cell_size()
+	var open_row := 6 * COLS + 3
+	var p_mochi := _solve(phi, mochi)
+	var p_body := _solve(phi)
+	expect(p_mochi[6 * COLS + 1] < p_mochi[open_row] - 0.25 * head,
+			"beside mochi: p %.0f, open water %.0f (head %.0f)" % [p_mochi[6 * COLS + 1], p_mochi[open_row], head])
+	expect(absf(p_body[6 * COLS + 1] - p_body[open_row]) < 0.25 * head,
+			"beside a body: p %.0f, open water %.0f (head %.0f)" % [p_body[6 * COLS + 1], p_body[open_row], head])
+
+
 ## Air in the top row, water at rest density below.
 func _pool() -> PackedVector4Array:
 	var phi := PackedVector4Array()
@@ -71,13 +90,13 @@ func _pool() -> PackedVector4Array:
 	return phi
 
 
-## p after 100 frames of sweeps, from 0.
-func _solve(phi: PackedVector4Array) -> PackedFloat32Array:
+## p after 100 frames of sweeps, from 0. mochi: each cell's mochi volume (ADR 0020), none by default.
+func _solve(phi: PackedVector4Array, mochi := PackedFloat32Array()) -> PackedFloat32Array:
 	var table = MaterialTable.new()
 	table.load_file()
 	var sim = ParticleStep.new(WORLD, table)
 	var p := PackedFloat32Array()
 	p.resize(phi.size())
 	for f in 100:
-		sim._hydro_solve(phi, p, SimParams.DT)
+		sim._hydro_solve(phi, p, SimParams.DT, PackedFloat32Array(), mochi)
 	return p

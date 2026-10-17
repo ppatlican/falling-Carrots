@@ -57,20 +57,25 @@
 
 // Per coarse cell, over rest density: x liquid, y powder, z body volume, w body weight in
 // the cell's liquid (each body particle at min(density, 1), over hydro_rho of the cell).
+// Mochi counts in z and w as a body's (ADR 0017).
 layout(set = 0, binding = 20, std430) buffer HydroPhi { vec4 hydro_phi[]; };
 layout(set = 0, binding = 21, std430) buffer HydroP { float hydro_p[]; };      // pressure per coarse cell
 // Tent-weighted particle sums per coarse cell, times HYDRO_FP: [HYDRO_CHANNELS c + k] for the
 // channels of hydro_phi, then the liquid's mass over water's as its excess over the liquid
-// (density - 1; only liquids of density other than 1 add to it). hydro_splat adds, hydro_phi
-// reads and zeroes for the next frame.
+// (density - 1; only liquids of density other than 1 add to it), then the mochi volume (ADR 0020).
+// hydro_splat adds, hydro_phi reads and zeroes for the next frame.
 layout(set = 0, binding = 22, std430) buffer HydroAcc { int hydro_acc[]; };
 // Liquid density per coarse cell over water's: its liquid mass over its liquid volume, exactly 1
 // with water alone or no liquid (hydro_rho_of).
 layout(set = 0, binding = 29, std430) buffer HydroRho { float hydro_rho[]; };
+// The share of each coarse cell's body volume (hydro_phi.z) that is mochi, over rest (ADR 0020):
+// hydro_solve pulls a cell full beside mochi, not beside a body. Written by hydro_phi.
+layout(set = 0, binding = 32, std430) buffer HydroMochi { float hydro_mochi[]; };
 
 const float HYDRO_FP = 1024.0;
-const uint HYDRO_CHANNELS = 5u;
+const uint HYDRO_CHANNELS = 6u;
 const uint HYDRO_MASS_CHANNEL = 4u;
+const uint HYDRO_MOCHI_CHANNEL = 5u;
 
 // Hash cells per coarse cell along each axis. Mirror: SimParams.HYDRO_CELL.
 const int HYDRO_CELL = 4;
@@ -170,6 +175,16 @@ vec4 hydro_density(ivec2 ci, out float mass) {
 	float excess = float(hydro_acc[i + HYDRO_MASS_CHANNEL]) / HYDRO_FP;
 	mass = phi.x + excess * params.spacing * params.spacing / (a * a * inside);
 	return phi;
+}
+
+// Mochi volume of coarse cell ci over rest, scaled as hydro_density scales its channels.
+float hydro_mochi_density(ivec2 ci) {
+	float a = hydro_cell_size();
+	vec2 centre = (vec2(ci) + 0.5) * a;
+	float inside = hydro_tent_inside(centre.x, a, params.world_size.x)
+			* hydro_tent_inside(centre.y, a, params.world_size.y);
+	float sum = float(hydro_acc[HYDRO_CHANNELS * hydro_index(ci) + HYDRO_MOCHI_CHANNEL]) / HYDRO_FP;
+	return sum * params.spacing * params.spacing / (a * a * inside);
 }
 
 // Liquid density over water's from a liquid mass m and volume x: m / x, and exactly 1 where they

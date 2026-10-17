@@ -271,10 +271,11 @@ func _create_resources_rt() -> String:
 	if not image.is_valid():
 		return "could not create the %dx%d render texture" % [size.x, size.y]
 	bindings.append([specs.size(), RenderingDevice.UNIFORM_TYPE_IMAGE, image])  # binding 19
-	# Liquid density projection grid (hydro.glslinc), bindings 20 to 22 and 29.
+	# Liquid density projection grid (hydro.glslinc), bindings 20 to 22, 29 and 32.
 	# [binding, name, bytes per cell]: phi and acc hold liquid, powder, body volume and weight;
-	# acc also the liquid's mass over water's; hydro_rho holds each cell's liquid density (ADR 0010).
-	for spec in [[20, "hydro_phi", 16], [21, "hydro_p", 4], [22, "hydro_acc", 20], [29, "hydro_rho", 4]]:
+	# acc also the liquid's mass over water's and the mochi volume; hydro_rho holds each cell's liquid
+	# density (ADR 0010), hydro_mochi its mochi volume (ADR 0020).
+	for spec in [[20, "hydro_phi", 16], [21, "hydro_p", 4], [22, "hydro_acc", 24], [29, "hydro_rho", 4], [32, "hydro_mochi", 4]]:
 		var hydro_bytes: int = _hydro_cells() * spec[2]
 		var hrid: RID = _ctx.create_buffer_rt(spec[1], hydro_bytes, PackedByteArray())
 		if not hrid.is_valid():

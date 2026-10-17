@@ -58,6 +58,7 @@ var materials: Dictionary
 var rest_density: float
 ## Liquid density per coarse cell over water's, from the last _hydro_density (ADR 0010).
 var _hydro_rho := PackedFloat32Array()
+var _hydro_mochi := PackedFloat32Array()  # each cell's mochi volume over rest (ADR 0020; hydro_mochi)
 ## _contact_delta's part that pushes a body member away from other bodies (contacts and
 ## push-out), as powder.glslinc's body_out.
 var _body_out := Vector2.ZERO
@@ -265,7 +266,7 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	var phi := PackedVector4Array()
 	if not dry:
 		phi = _hydro_density(pred, mat, body)
-		_hydro_solve(phi, hydro_p, dt, _hydro_rho)
+		_hydro_solve(phi, hydro_p, dt, _hydro_rho, _hydro_mochi)
 	# Contact impulses between rigid bodies (ADR 0015, impulse.glslinc): a corner hit turns into spin.
 	_contact_impulses(pos, vel, pred, mat, body, bodies, members, neighbours, dt)
 	# Swept contacts: each body that went into another this substep rewound along its path to
@@ -1741,7 +1742,8 @@ static func hydro_tent_inside(c: float, a: float, w: float) -> float:
 ## Per coarse cell, over rest density: liquid (x), powder (y), body volume (z) and body weight
 ## in water (w: each body particle counts min(density, 1), ADR 0003). Each particle's tent
 ## weight on the four nearest cell centres (hydro_splat), over the weight at rest spacing of
-## the part of the tent inside the world (hydro_density).
+## the part of the tent inside the world (hydro_density). Each cell's mochi volume goes to
+## _hydro_mochi (ADR 0020).
 func _hydro_density(pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array) -> PackedVector4Array:
 	var size := hydro_size(world_size)
 	var a := hydro_cell_size()
@@ -1751,6 +1753,8 @@ func _hydro_density(pred: PackedVector2Array, mat: PackedInt32Array, body: Packe
 	# density other than 1 add to it, so with water alone mass == phi.x exactly.
 	var excess := PackedFloat32Array()
 	excess.resize(size.x * size.y)
+	_hydro_mochi.resize(size.x * size.y)
+	_hydro_mochi.fill(0.0)
 	for i in pred.size():
 		var channel: Vector4
 		var extra := 0.0
@@ -1773,6 +1777,8 @@ func _hydro_density(pred: PackedVector2Array, mat: PackedInt32Array, body: Packe
 					continue
 				var tent := (f.x if dx == 1 else 1.0 - f.x) * (f.y if dy == 1 else 1.0 - f.y)
 				sum[c.y * size.x + c.x] += channel * tent
+				if _cls[i] == MOCHI:
+					_hydro_mochi[c.y * size.x + c.x] += tent
 				if extra != 0.0:
 					excess[c.y * size.x + c.x] += extra * tent
 	_hydro_rho.resize(sum.size())
@@ -1781,6 +1787,7 @@ func _hydro_density(pred: PackedVector2Array, mat: PackedInt32Array, body: Packe
 		var inside := hydro_tent_inside(centre.x, a, world_size.x) * hydro_tent_inside(centre.y, a, world_size.y)
 		var scale := SimParams.SPACING * SimParams.SPACING / (a * a * inside)
 		sum[c] *= scale
+		_hydro_mochi[c] *= scale
 		var rho := hydro_rho_of(sum[c].x + excess[c] * scale, sum[c].x)
 		_hydro_rho[c] = rho
 		if rho != 1.0:
@@ -1819,9 +1826,10 @@ static func _face_rho(rho: PackedFloat32Array, phi: PackedVector4Array, c: int, 
 ## Each face between liquid cells weighs 1 / hydro_face_rho (the mass-weighted Poisson equation,
 ## ADR 0010), so the push over a particle's mass removes each cell's compression whatever its
 ## liquid; the floor's and bodies' flux stays head, as (1/rho) dp/dn = g at rest. rho: each cell's
-## liquid density; none (hand-made cells): water everywhere.
+## liquid density; none (hand-made cells): water everywhere. mochi: each cell's mochi volume
+## (ADR 0020); none: no mochi.
 func _hydro_solve(phi: PackedVector4Array, p: PackedFloat32Array, dt: float,
-		rho := PackedFloat32Array()) -> void:
+		rho := PackedFloat32Array(), mochi := PackedFloat32Array()) -> void:
 	var size := hydro_size(world_size)
 	var a := hydro_cell_size()
 	var offs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
@@ -1891,9 +1899,11 @@ func _hydro_solve(phi: PackedVector4Array, p: PackedFloat32Array, dt: float,
 		# Never in the floor row: half outside the world, it reads a little short of full.
 		# Nor where a body partly fills the cell (HYDRO_BODY_CELL): water keeps a contact gap from
 		# it, so the cell reads short of full with no air in it. Pulled, a pinned cork's cells flipped
-		# between p 0 and squeezed, and the whole pool's p with them.
+		# between p 0 and squeezed, and the whole pool's p with them. Mochi doesn't count there (ADR 0020):
+		# liquid lies on a dough at its own packing, so room beside it is air, and unpulled, the air a
+		# dough left sinking through a pool stayed under the liquid.
 		var covered := ci.y > 0 and ci.y < size.y - 1 and phi[c - size.x].x + phi[c - size.x].y * SimParams.HYDRO_POWDER_VOL + phi[c - size.x].z >= SimParams.HYDRO_FULL \
-				and phi[c].z < SimParams.HYDRO_BODY_CELL
+				and phi[c].z - (0.0 if mochi.is_empty() else mochi[c]) < SimParams.HYDRO_BODY_CELL
 		# Compression counts body volume too, so water squeezed under or into a body is pushed out.
 		var err := maxf(phi[c].x + phi[c].z - 1.0, 0.0)
 		var room := minf(phi[c].x + phi[c].y * SimParams.HYDRO_POWDER_FULL + phi[c].z - 1.0, 0.0)

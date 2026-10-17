@@ -241,10 +241,15 @@ HydroRow hydro_row(ivec2 ci, ivec2 size) {
 	// few frames between short of full (p pulled to 0 under ~170 px of water: its faces read
 	// 0 and it fell) and squeezed (p 2-3x hydrostatic once water rushed in: it shot up), and
 	// the whole pool's p swung with them: the sea jumped (owner report, 2026-10-13).
+	// Mochi doesn't count there (ADR 0020): liquid lies on a dough at its own packing (ADR 0018), so
+	// room beside a dough is air, and unpulled, the air a dough leaves sinking through a pool stayed
+	// under the liquid for good (up to ~20 px at a wall, owner report, 2026-10-17), as did the thin
+	// layer of air over the dips of a dough's top (ADR 0018 Known limits). Pulled only past a slack
+	// (0.08 of a cell) or by at most 0.02 a step, neither closed.
 	vec4 own = hydro_phi[c];
 	vec4 above = ci.y > 0 ? hydro_phi[hydro_index(ci - ivec2(0, 1))] : vec4(0.0);
 	bool covered = above.x + above.y * HYDRO_POWDER_VOL + above.z >= HYDRO_FULL && ci.y < size.y - 1
-			&& own.z < HYDRO_BODY_CELL;
+			&& own.z - hydro_mochi[c] < HYDRO_BODY_CELL;
 	float err = max(own.x + own.z - 1.0, 0.0);
 	float room = min(own.x + own.y * HYDRO_POWDER_FULL + own.z - 1.0, 0.0);
 	if (covered) {

@@ -226,9 +226,13 @@
 ##            under 50 fast water from then on; PASS within 15 s, ADR 0019) and the means over the 21 s
 ##            after the fill; the second dough's jitter over the last 600 frames
 ##   doughtwice the same with no water (two "+10k dough"): the lower dough under the upper one's weight
+##   doughfall  the owner's oil report (2026-10-17): "+10k water" (liquid=oil: "+10k oil") at frame 1, "+10k
+##            dough" at 240, 1800 frames: the dough falls through the liquid onto the floor; WET lines as doughbed;
+##            PASS on the gap (median under 2.5 spacings, under 5% of columns over 3 px, ADR 0020)
 ##   doughlayer a 30x10 dough on the floor, two "+10k water" poured on it at frames 30 and 60, 1800 frames:
 ##            where the dough ends against the water's surface (with set=dough.density=0.9 it should rise
 ##            and float, at 1.1 stay down), and water inside it
+## liquid=NAME: the dough scenarios' "water" is that liquid instead (liquid=oil: the owner's oil and dough).
 ## stiff=S region=W replace the jelly row's stiffness and region for this run (tuning).
 ## frames=N runs every scenario for N frames instead of its own count (checks over "the last 60
 ## frames" move with it), e.g. to see whether a soft stack that leans over comes to rest.
@@ -316,6 +320,7 @@ var param_sets: Array = []  # from "set=" (tools/probe_params.gd)
 var param_frame := 0  # from "setat=N"
 var stroke_depth := STROKE_DEPTH  # from "depth=D" (sandstroke)
 var stroke_span := 170.0  # from "span=S" (sandstroke): half the stroke's length, px
+var liquid_name := "water"  # from "liquid=NAME": the dough scenarios' liquid
 var drop_dx := 4.0  # from "drop_dx=D" (carrotjelly): the carrot's offset right of the jelly's centre, px
 
 
@@ -347,6 +352,8 @@ func _initialize() -> void:
 			stroke_span = float(a.substr(5))
 		elif a.begins_with("drop_dx="):
 			drop_dx = float(a.substr(8))
+		elif a.begins_with("liquid="):
+			liquid_name = a.substr(7)
 		elif a in ["grid", "bare", "trace", "refs", "ptrace"]:
 			pass  # debug: water scenarios print grid columns; ptrace: plastic bodies' tightest rest pair
 		else:
@@ -388,7 +395,7 @@ func _table():
 	jelly = t.id_of("jelly")
 	cork = t.id_of("cork")
 	sand = t.id_of("sand")
-	water = t.id_of("water")
+	water = t.id_of(liquid_name)
 	dough = t.id_of("dough")
 	if jelly_stiff > 0.0:
 		t.materials[jelly].stiffness = jelly_stiff
@@ -660,11 +667,11 @@ func _start(name: String) -> void:
 			sc.every = 60
 			sc.from = 300
 			sc.target = _body(_box(Vector2(X, 200.0), 50, 40), jelly)
-		"doughslump", "doughmerge", "doughcut", "doughdrip", "doughcarrot", "doughsticks", "doughwrap", "doughwater", "doughsand", "doughsandlow", "doughcap", "doughhuge", "doughbed", "doughlayer", "doughsandwich", "doughtwice":
+		"doughslump", "doughmerge", "doughcut", "doughdrip", "doughcarrot", "doughsticks", "doughwrap", "doughwater", "doughsand", "doughsandlow", "doughcap", "doughhuge", "doughbed", "doughlayer", "doughsandwich", "doughtwice", "doughfall":
 			sc.frames = {"doughsandlow": 1200, "doughslump": 900, "doughmerge": 600, "doughcut": 900, "doughdrip": 1200, "doughcarrot": 720, "doughwrap": 1200,
 					"doughsticks": 600, "doughwater": 600, "doughsand": 1200, "doughcap": 900, "doughhuge": 900, "doughbed": 1800,
-					"doughlayer": 1800, "doughsandwich": 2400, "doughtwice": 2400}[name]
-			sc.every = 10 if name in ["doughsand", "doughsandlow", "doughwater", "doughhuge", "doughbed", "doughlayer", "doughsandwich", "doughtwice"] else 5
+					"doughlayer": 1800, "doughsandwich": 2400, "doughtwice": 2400, "doughfall": 1800}[name]
+			sc.every = 10 if name in ["doughsand", "doughsandlow", "doughwater", "doughhuge", "doughbed", "doughlayer", "doughsandwich", "doughtwice", "doughfall"] else 5
 			sc.from = 300 if name in ["doughcap", "doughhuge"] else 120
 			sc.late = []
 			sc.trace = []
@@ -701,6 +708,9 @@ func _start(name: String) -> void:
 					sc.blocks = {1: [Vector2(X, 200.0), 50, 40]}
 				"doughhuge":
 					sc.blocks = {1: [Vector2(X, 8.0 + 39.0 * sp), 250, 40]}
+				"doughfall":
+					sc.blocks = {240: [Vector2(X, 8.0 + 39.0 * sp), 250, 40]}  # "+10k water" (or oil), then "+10k dough"
+					sc.slots = SimParams.BENCH_BLOCK
 				"doughbed":
 					sc.blocks = {1: [Vector2(X, 8.0 + 39.0 * sp), 250, 40]}  # "+10k dough", then "+10k water"
 					sc.slots = SimParams.BENCH_BLOCK
@@ -874,7 +884,7 @@ func _scenario_brush(brush: Dictionary) -> void:
 		elif sc.name == "doughwater" and frame_i == 1:
 			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": water, "count": BED_COLS * POOL_ROWS, "cols": BED_COLS,
 					"pos": Vector2(1.0, FLOOR - (POOL_ROWS - 1) * SimParams.SPACING)}, true)
-		elif (sc.name in ["doughbed", "doughsandwich"] and frame_i == 240) or (sc.name == "doughlayer" and frame_i in [30, 60]):
+		elif (sc.name in ["doughbed", "doughsandwich"] and frame_i == 240) or (sc.name == "doughfall" and frame_i == 1) or (sc.name == "doughlayer" and frame_i in [30, 60]):
 			# "+10k water" as main.tscn fills it.
 			var cols := SimParams.BENCH_COLS
 			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": water, "count": SimParams.BENCH_BLOCK, "cols": cols,
@@ -1211,7 +1221,7 @@ func _sample(f: int, b: Dictionary) -> void:
 			_sample_soft(f, bodies)
 		"carrotjelly":
 			_sample_carrot_jelly(f, bodies)
-		"doughslump", "doughmerge", "doughcut", "doughdrip", "doughcarrot", "doughsticks", "doughwrap", "doughwater", "doughsand", "doughsandlow", "doughcap", "doughhuge", "doughbed", "doughlayer", "doughsandwich", "doughtwice":
+		"doughslump", "doughmerge", "doughcut", "doughdrip", "doughcarrot", "doughsticks", "doughwrap", "doughwater", "doughsand", "doughsandlow", "doughcap", "doughhuge", "doughbed", "doughlayer", "doughsandwich", "doughtwice", "doughfall":
 			_sample_dough(f, b, bodies)
 		"many", "big", "huge", "brushcap", "softcap", "softmany":
 			var max_err := 0.0
@@ -1372,10 +1382,10 @@ func _sample_dough(f: int, b: Dictionary, bodies: Dictionary) -> void:
 			% [f, n, pc.sizes.size(), big, "" if pc.sizes.size() == 1 else ", next %s" % str(pc.sizes.slice(1, 4)),
 			size.x, size.y, fastest, fast_at.x, fast_at.y, c.x, c.y, extra])
 	var wet := {}
-	if sc.name in ["doughbed", "doughlayer", "doughsandwich", "doughtwice"] and (f % 300 == 0 or f == sc.frames or (f <= 600 and f % 60 == 0)):
+	if sc.name in ["doughbed", "doughlayer", "doughsandwich", "doughtwice", "doughfall"] and (f % 300 == 0 or f == sc.frames or (f <= 600 and f % 60 == 0)):
 		wet = _dough_wet(b, d)
-		print("  WET f=%d water inside %d, under the dough's top %d; gap dough top to water over it median %.2f px, p90 %.2f (%d columns; rest spacing %.1f); dough mean y %.1f top %.1f lowest %.1f; water mean y %.1f surface %.1f"
-				% [f, wet.inside, wet.under, wet.gap_med, wet.gap_p90, wet.cols, SimParams.SPACING, wet.dough_y, wet.dough_top, hi.y,
+		print("  WET f=%d water inside %d, under the dough's top %d; gap dough top to water over it median %.2f px, p90 %.2f, max %.2f, over 3 px %.0f%% (%d columns; rest spacing %.1f); dough mean y %.1f top %.1f lowest %.1f; water mean y %.1f surface %.1f"
+				% [f, wet.inside, wet.under, wet.gap_med, wet.gap_p90, wet.gap_max, 100.0 * wet.gap_over3, wet.cols, SimParams.SPACING, wet.dough_y, wet.dough_top, hi.y,
 				wet.water_y, wet.surface])
 	if f != sc.frames:
 		return
@@ -1475,6 +1485,10 @@ func _sample_dough(f: int, b: Dictionary, bodies: Dictionary) -> void:
 			_result("%s: %d piece(s), %d of %d dough particles more than 1 px under the pile's top before it landed, %d more than 3 spacings, 99%% under %.2f px/s (last 60; fastest %.2f)"
 					% [sc.name, pc.sizes.size(), under, n, deep, late, late_max],
 					late < 5.0 and (deep < n / 20 if sc.name == "doughsandlow" else big >= 0.9 * n))
+		"doughfall":
+			_result("doughfall: %d water inside the dough, %d under its top; gap median %.2f px, p90 %.2f, max %.2f, over 3 px %.0f%%; %d piece(s), 99%% under %.2f px/s (last 60; fastest %.2f)"
+					% [wet.inside, wet.under, wet.gap_med, wet.gap_p90, wet.gap_max, 100.0 * wet.gap_over3, pc.sizes.size(), late, late_max],
+					wet.gap_med < 2.5 * sp and wet.gap_over3 < 0.05)  # liquid caught in the fall is not judged here
 		"doughbed":
 			_result("doughbed: %d water inside the dough, %d under its top; gap median %.2f px, p90 %.2f; %d piece(s), 99%% under %.2f px/s (last 60; fastest %.2f)"
 					% [wet.inside, wet.under, wet.gap_med, wet.gap_p90, pc.sizes.size(), late, late_max],
@@ -2563,9 +2577,15 @@ func _dough_wet(b: Dictionary, d: Dictionary) -> Dictionary:
 	gaps.sort()
 	tops.sort()
 	surf.sort()
+	var over3 := 0
+	for g in gaps:
+		if g > 3.0:
+			over3 += 1
 	return {"inside": _water_inside(b, d), "under": under, "cols": gaps.size(),
 			"gap_med": gaps[gaps.size() / 2] if gaps.size() > 0 else -1.0,
 			"gap_p90": gaps[int(0.9 * gaps.size())] if gaps.size() > 0 else -1.0,
+			"gap_max": gaps[gaps.size() - 1] if gaps.size() > 0 else -1.0,
+			"gap_over3": float(over3) / maxi(gaps.size(), 1),
 			"dough_y": dough_y, "dough_top": tops[tops.size() / 2] if tops.size() > 0 else -1.0,
 			"water_y": water_y / maxi(nw, 1), "surface": surf[surf.size() / 2] if surf.size() > 0 else -1.0}
 

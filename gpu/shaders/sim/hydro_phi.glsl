@@ -2,8 +2,8 @@
 #version 450
 
 // Hydro 2/4: liquid, powder and body density over rest of each coarse cell (hydro_density in
-// hydro.glslinc) and its liquid density (hydro_rho) from the splatted sums, which it zeroes for
-// the next frame.
+// hydro.glslinc), its liquid density (hydro_rho) and its mochi volume (hydro_mochi, ADR 0020) from
+// the splatted sums, which it zeroes for the next frame.
 // One thread per coarse cell.
 
 // common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
@@ -17,7 +17,8 @@ void main() {
 		return;
 	}
 	float mass;
-	vec4 phi = hydro_density(ivec2(int(c) % size.x, int(c) / size.x), mass);
+	ivec2 ci = ivec2(int(c) % size.x, int(c) / size.x);
+	vec4 phi = hydro_density(ci, mass);
 	float rho = hydro_rho_of(mass, phi.x);
 	if (rho != 1.0) {
 		// A body at its weight in the liquid that is there (hydro_level), not in water (ADR 0010).
@@ -25,6 +26,7 @@ void main() {
 	}
 	hydro_phi[c] = phi;
 	hydro_rho[c] = rho;
+	hydro_mochi[c] = hydro_mochi_density(ci);
 	for (uint k = 0u; k < HYDRO_CHANNELS; k++) {
 		hydro_acc[HYDRO_CHANNELS * c + k] = 0;
 	}
