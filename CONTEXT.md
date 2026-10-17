@@ -9,7 +9,7 @@ One row of the material table: a named substance with its behaviour class and ph
 _Avoid_: Element, substance
 
 **Behaviour class**:
-The rule set a material moves by: liquid, powder, cluster solid, gas or static. Adding a material is data; adding a behaviour class is code.
+The rule set a material moves by: liquid, powder, cluster solid, mochi, gas or static. Adding a material is data; adding a behaviour class is code.
 _Avoid_: Type, kind, category
 
 **Liquid**:
@@ -28,17 +28,21 @@ A cluster solid at stiffness 1: keeps its shape exactly (carrot, a drawn block).
 _Avoid_: Solid (ambiguous with static solid)
 
 **Soft body**:
-A cluster solid below stiffness 1: bends, wobbles and springs back (jelly), or keeps its dents if it has plasticity (dough). It is matched over regions, not as one cluster (ADR 0005), or held by pair joints if its material's soft model says so (ADR 0016).
+A cluster solid below stiffness 1: bends, wobbles and springs back (jelly), or keeps its dents if it has plasticity. It is matched over regions, not as one cluster (ADR 0005), or held by pair joints if its material's soft model says so (ADR 0016).
 _Avoid_: Deformable
 
 **Jelly**:
 The springy soft-body material, as in OE-Cake.
 
 **Dough**:
-The soft-body material with plasticity: it keeps dents and flattening instead of springing back (ADR 0012).
+The mochi material (ADR 0017): a soft, sticky lump with no rest shape that slumps, stretches into strands and merges with dough it touches. Until ADR 0017 it was a soft body with plasticity (ADR 0012).
+
+**Mochi**:
+The behaviour class of a cohesive lump with no rest shape and no body (ADR 0017, after Phyzios' Mochi): each pair of one mochi material within 4/3 spacings pushes apart where it is denser than rest and pulls together (by the material's cohesion) where it is sparser, equal and opposite. A pair further apart than that has no pull, so a strand breaks there, and particles that come back within it pull again, so torn pieces merge. Drawn with the circle brush.
+_Avoid_: Cohesive fluid, putty
 
 **Plasticity**:
-The cluster-solid parameter (0–1, soft bodies only): the share of a member's deformation past the yield (half a spacing, in its body's frame) that its rest shape takes on per 1/60 s. 0 springs back fully (jelly); 1 keeps all of it at once. Its rest lattice can't be squeezed below 0.7 of a spacing or torn, so a hard press stays partly elastic.
+The cluster-solid parameter (0–1, soft bodies only): the share of a member's deformation past the yield (half a spacing, in its body's frame) that its rest shape takes on per 1/60 s. 0 springs back fully (jelly); 1 keeps all of it at once. No shipped row has it since dough became mochi (ADR 0017). Its rest lattice can't be squeezed below 0.7 of a spacing or torn, so a hard press stays partly elastic.
 _Avoid_: Memory, creep (creep is the slow drift it must not have)
 
 **Stiffness**:
@@ -49,7 +53,7 @@ In a soft body, a member and the members of its body whose rest offsets lie with
 _Avoid_: Cluster (a region is not its own body)
 
 **Soft model**:
-How a soft material keeps its shape, the `soft_model` column: `regions` (regional shape matching, the default) or `joints` (pair joints). Jelly is on joints and dough on regions (ADR 0016).
+How a soft material keeps its shape, the `soft_model` column: `regions` (regional shape matching, the default) or `joints` (pair joints). Jelly is on joints (ADR 0016); no shipped row is on regions since dough became mochi (ADR 0017).
 
 **Pair joint**:
 In a soft body held by joints, a link between two members whose rest offsets lie within the region radius (the same pairs a region holds). Each iteration both ends move toward their rest vector, turned by the two ends' rotations, by equal and opposite amounts, so the body's momentum is kept and it can't creep (ADR 0016).
@@ -67,7 +71,7 @@ One adjustable column of a material's row (viscosity, stickiness, density, stiff
 _Avoid_: Setting (config.json holds settings), property
 
 **Stickiness**:
-How strongly a material's particles hold on: cohesion to particles of the same material, adhesion to other materials and walls. A capped force, so a sticky clump still breaks under enough weight.
+How strongly a material's particles hold on: cohesion to particles of the same material, adhesion to other materials and walls. A capped force, so a sticky clump still breaks under enough weight. A mochi material's cohesion is its mochi pull instead (ADR 0017).
 _Avoid_: Glue, friction (friction resists sliding; stickiness resists pulling apart)
 
 **Reaction**:

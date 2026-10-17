@@ -1,6 +1,6 @@
 # 0012: Plasticity, a soft body that keeps its dents (Milestone 3b)
 
-Date: 2026-10-16. Status: proposed; built and verified the same day (Results), waiting for the owner to play it and decide the dough row (item 8, Owner's call). The next 3b slice (STATUS Next item 9): dough, a soft body that keeps the shape it is pressed or dropped into, where jelly springs back.
+Date: 2026-10-16. Status: proposed; built and verified the same day (Results), waiting for the owner to play it and decide the dough row (item 8, Owner's call). **2026-10-17: the dough row is mochi now** (ADR 0017; owner: "dough will be mochi-like"), so no shipped row has plasticity. The code stays for any soft cluster row with `plasticity` above 0 (the panel's plasticity slider, `set=jelly.plasticity=`, `@plastic`); the Owner's call questions about the dough row are superseded. The next 3b slice (STATUS Next item 9): dough, a soft body that keeps the shape it is pressed or dropped into, where jelly springs back.
 
 ## Context
 What is decided already (ADR 0002 item 9, SPEC 2.2): `plasticity` is a per-material column, 0 to 1, for cluster materials, in the last free float of the material row (`Material.more.w`, so the row stays 80 bytes), and it edits `rest_offset` toward the shape the body is in now, seen in the body's frame, with no new per-particle field. Shipped materials keep plasticity 0.
