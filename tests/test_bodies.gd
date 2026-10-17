@@ -599,7 +599,9 @@ func test_box_dropped_on_sand_keeps_grains_out() -> void:
 ## jelly set on a settled 28x10 bed, 300 frames. Before ADR 0009 grains in the stretched gaps of its
 ## bottom row were pushed out of its outline every iteration, nothing pushed the member back, and it
 ## kept moving (a member at 39 px/s over the last 60 frames) and dug 9.4 px into the bed (owner
-## report 2026-10-14, body_probe sandjelly).
+## report 2026-10-14, body_probe sandjelly). ADR 0009 left it 5.30 px down; with ADR 0013 (grains
+## touch a soft member at 1.25 spacings, region members kept in order) it sits 3.12 px down, but
+## its bottom row takes until ~480 frames to settle (3.87 px/s at 300), hence 540 frames.
 func test_soft_jelly_rests_on_sand() -> void:
 	var world := Vector2(64, 80)
 	var sim = _sim(world, {"stiffness": 0.2})
@@ -609,15 +611,15 @@ func test_soft_jelly_rests_on_sand() -> void:
 	var top := _top_of(state, _sand)
 	var id: int = ParticleStep.make_body(state, _box(Vector2(32, top - SimParams.SPACING - 0.5), 12, 4), _jelly)
 	var speed := 0.0
-	for f in 300:
+	for f in 540:
 		_frame(sim, state)
-		if f >= 240:
+		if f >= 480:
 			speed = maxf(speed, _max_member_speed(state, id))
 	var sunk := _lowest(state, id) - top
-	_report("12x4 jelly (stiffness 0.2) set on a sand bed, 300 frames: fastest member over the last 60 frames %.2f px/s, lowest member %.2f px below the bed's top"
+	_report("12x4 jelly (stiffness 0.2) set on a sand bed, 540 frames: fastest member over the last 60 frames %.2f px/s, lowest member %.2f px below the bed's top"
 			% [speed, sunk])
 	expect(speed < 2.0 * REST_SPEED, "it rests, every member under %.1f px/s: %.2f" % [2.0 * REST_SPEED, speed])
-	expect(sunk < 3.0 * SimParams.SPACING, "it doesn't dig into the bed, lowest member under 3 spacings below its top: %.2f px" % sunk)
+	expect(sunk < 2.0 * SimParams.SPACING, "it doesn't dig into the bed, lowest member under 2 spacings below its top: %.2f px" % sunk)
 
 
 ## Body-body push-out (ADR 0003 item 11): without it the dropped box ended inside the other,

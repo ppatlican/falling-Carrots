@@ -50,10 +50,19 @@ float stick_hold(float x) {
 	return clamp((reach - x) / (reach - full), 0.0, 1.0);
 }
 
-// Contact distance of a pair (contact_delta's reach). Mirror: ParticleStep._touch_distance.
-float touch_distance(uint c_t, uint c_j) {
-	bool powder_liquid = (c_t == CLASS_POWDER && c_j == CLASS_LIQUID) || (c_t == CLASS_LIQUID && c_j == CLASS_POWDER);
-	return powder_liquid ? POWDER_LIQUID_REACH * params.spacing : params.spacing;
+// Contact distance of the pair t, j (sorted; contact_delta's reach). Mirror: ParticleStep._touch_distance.
+float touch_distance(uint t, uint j) {
+	uint c_t = s_class(t);
+	uint c_j = s_class(j);
+	if ((c_t == CLASS_POWDER && c_j == CLASS_LIQUID) || (c_t == CLASS_LIQUID && c_j == CLASS_POWDER)) {
+		return POWDER_LIQUID_REACH * params.spacing;
+	}
+	bool soft_t = s_body(t) != 0u && soft_material(s_material(t));
+	bool soft_j = s_body(j) != 0u && soft_material(s_material(j));
+	if ((soft_t && c_j == CLASS_POWDER) || (c_t == CLASS_POWDER && soft_j)) {
+		return SOFT_GRAIN_REACH * params.spacing;
+	}
+	return params.spacing;
 }
 
 // Share of a pair's push-out t takes in contact_delta (w_push there). The pull and the damping are
@@ -120,7 +129,7 @@ vec2 stick_velocity(uint t) {
 		vec2 rv = s_pred[j] - pt;
 		float r = length(rv);
 		if (r < MIN_DIST) continue;
-		float x = r - touch_distance(c_t, c_j);
+		float x = r - touch_distance(t, j);
 		float hold = stick_hold(x);
 		if (hold <= 0.0) continue;  // stick_shape is 0 there too
 		vec2 n = rv / r;

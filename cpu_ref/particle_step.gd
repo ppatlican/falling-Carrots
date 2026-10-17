@@ -1102,6 +1102,25 @@ func _self_contact(i: int, j: int, mat: PackedInt32Array) -> bool:
 	return _rest_now[i].distance_squared_to(_rest_now[j]) > reach * reach
 
 
+## Push on member i of a soft body from j, a member of its region (ADR 0013): along their rest
+## direction, turned by the mean of their region rotations (_member_rot) so both ends see the same
+## direction and the pair's pushes cancel, SOFT_ORDER_PUSH of how far they are closer along it than
+## SOFT_ORDER times their rest distance; 0 farther apart. Without it the upper rows of a soft body
+## landing at low stiffness fell through its bottom row (same-body pairs in a region skip the
+## contacts). Mirror: keep_order in powder.glslinc.
+func _keep_order(i: int, j: int, pred: PackedVector2Array, mat: PackedInt32Array, body: PackedInt32Array,
+		bodies: Array) -> Vector2:
+	var q := _rest_now[i] - _rest_now[j]
+	var q_len := q.length()
+	if q_len < 1e-6:
+		return Vector2.ZERO
+	var r := _member_rot(i, mat, body, bodies) + _member_rot(j, mat, body, bodies)
+	r = r.normalized() if r.length_squared() > 1e-6 else _member_rot(i, mat, body, bodies)
+	var n := _rotate(r, q) / q_len
+	var short_by := SimParams.SOFT_ORDER * q_len - (pred[i] - pred[j]).dot(n)
+	return SimParams.SOFT_ORDER_PUSH * short_by * n if short_by > 0.0 else Vector2.ZERO
+
+
 ## The rotation a member's way out of the rest shape is turned by (ADR 0005 item 6): in a soft
 ## body its region's from the last fit, so the outline bends with the body; else its body's.
 func _member_rot(j: int, mat: PackedInt32Array, body: PackedInt32Array, bodies: Array) -> Vector2:
@@ -1925,8 +1944,10 @@ static func body_stack_weight(m_i: float, m_j: float, rv_y: float, soft_i: bool,
 
 
 ## Contacts with any particle closer than SPACING (POWDER_LIQUID_REACH x SPACING for a
-## powder-liquid pair), where at least one side is a powder or a body particle of another
-## body: body particles follow the powder rule. Same-body pairs are left to shape matching.
+## powder-liquid pair, SOFT_GRAIN_REACH x SPACING for a grain and a soft body's member, ADR 0013),
+## where at least one side is a powder or a body particle of another
+## body: body particles follow the powder rule. Same-body pairs are left to shape matching, except
+## a soft body's self-contacts and the push that keeps its region members in order (_keep_order).
 ## Mass-weighted push-out, the lower side heavier by STACK_K (see stack_weight), except
 ## powder-liquid (the liquid yields) and body-liquid (by density only, ADR 0003); also
 ## static/kinetic friction on the relative sideways motion.
@@ -1961,6 +1982,8 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 		var own := b_i != 0 and b_i == b_j
 		# same body: shape matching holds it together, except a soft body's self-contacts (_self_contact)
 		if own and (not soft_i or _rest_now[i].distance_squared_to(_rest_now[j]) <= _reach[i] * _reach[i]):
+			if soft_i:
+				sum += _keep_order(i, j, pred, mat, body, bodies)  # ADR 0013
 			continue
 		var rv := pred[i] - pred[j]
 		var dist := rv.length()
@@ -1973,7 +1996,9 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 			nearest_d = dist
 		var j_liquid: bool = c_j == LIQUID
 		var powder_liquid: bool = (t_liquid and c_j == POWDER) or (j_liquid and c_i == POWDER)
-		var reach := SimParams.SPACING * (SimParams.POWDER_LIQUID_REACH if powder_liquid else 1.0)
+		var soft_grain: bool = (soft_i and c_j == POWDER) or (c_i == POWDER and _softp[j] == 1)
+		var reach := SimParams.SPACING * (SimParams.POWDER_LIQUID_REACH if powder_liquid
+				else (SimParams.SOFT_GRAIN_REACH if soft_grain else 1.0))
 		if dist >= reach:
 			continue
 		n_touch += 1.0
@@ -2188,13 +2213,16 @@ static func stick_hold(x: float) -> float:
 	return clampf((reach - x) / (reach - full), 0.0, 1.0)
 
 
-## Contact distance of a pair, as _contact_delta takes it: POWDER_LIQUID_REACH spacings between
-## a grain and a liquid, else a spacing (liquid pairs: their rest spacing).
-func _touch_distance(m_i: int, m_j: int) -> float:
-	var ci := _class(m_i)
-	var cj := _class(m_j)
+## Contact distance of the pair i, j, as _contact_delta takes it: POWDER_LIQUID_REACH spacings
+## between a grain and a liquid, SOFT_GRAIN_REACH between a grain and a member of a soft body (ADR
+## 0013), else a spacing (liquid pairs: their rest spacing). Mirror: touch_distance in stick.glslinc.
+func _touch_distance(i: int, j: int, mat: PackedInt32Array) -> float:
+	var ci := _class(mat[i])
+	var cj := _class(mat[j])
 	if (ci == POWDER and cj == LIQUID) or (ci == LIQUID and cj == POWDER):
 		return SimParams.POWDER_LIQUID_REACH * SimParams.SPACING
+	if (_softp[i] == 1 and cj == POWDER) or (ci == POWDER and _softp[j] == 1):
+		return SimParams.SOFT_GRAIN_REACH * SimParams.SPACING
 	return SimParams.SPACING
 
 
@@ -2241,7 +2269,7 @@ func _stick_pull(i: int, pred: PackedVector2Array, mat: PackedInt32Array, body: 
 		var r := rv.length()
 		if r < MIN_DIST:
 			continue
-		var w := stick_shape(r - _touch_distance(m_i, mat[j]))
+		var w := stick_shape(r - _touch_distance(i, j, mat))
 		if w <= 0.0:
 			continue
 		a += rv / r * (k * w * _contact_share(i, j, pred, mat, body, bodies))
@@ -2275,7 +2303,7 @@ func _stick_damp(i: int, pred: PackedVector2Array, vel: PackedVector2Array, mat:
 		var r := rv.length()
 		if r < MIN_DIST:
 			continue
-		var w := stick_hold(r - _touch_distance(m_i, mat[j]))
+		var w := stick_hold(r - _touch_distance(i, j, mat))
 		if w <= 0.0:
 			continue
 		var n := rv / r
@@ -2322,7 +2350,7 @@ func _stick_drag(i: int, pred: PackedVector2Array, vel: PackedVector2Array, mat:
 		var k := _stick_k(m_i, mat[j])
 		if k <= 0.0:
 			continue
-		var w := k * stick_hold(p.distance_to(pred[j]) - _touch_distance(m_i, mat[j]))
+		var w := k * stick_hold(p.distance_to(pred[j]) - _touch_distance(i, j, mat))
 		sum += (vel[j] - v) * w
 		w_sum += w
 	if adh > 0.0:

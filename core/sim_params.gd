@@ -37,6 +37,16 @@ const POWDER_LIQUID_SHARE := 0.1
 ## Contact distance of a powder-liquid pair, in spacings: water passes between grains, so a
 ## sand bed can drain and pack (see powder.glslinc).
 const POWDER_LIQUID_REACH := 0.6
+## Contact distance of a grain and a member of a soft body, in spacings: a grain doesn't fit into
+## a gap of a stretched soft lattice until it has opened to 2.5 spacings (ADR 0013).
+## Mirror: SOFT_GRAIN_REACH in powder.glslinc.
+const SOFT_GRAIN_REACH := 1.25
+## Two members of one region of a soft body closer along their rest direction than SOFT_ORDER
+## times their rest distance are each pushed apart by SOFT_ORDER_PUSH of the shortfall, so a
+## landing soft body's upper rows don't fall through its bottom row (ADR 0013).
+## Mirror: SOFT_ORDER, SOFT_ORDER_PUSH in powder.glslinc.
+const SOFT_ORDER := 0.7
+const SOFT_ORDER_PUSH := 0.25
 ## Share of a liquid's density one powder grain counts for, its solid volume: sand under
 ## water packs to ~1.1 and is ~60% grain, 40% pore, so 0.6 x HYDRO_POWDER_FULL (see
 ## liquid.glslinc).

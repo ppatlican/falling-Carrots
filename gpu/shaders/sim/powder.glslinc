@@ -1,7 +1,7 @@
 // Behaviour class: POWDER. Frictional particle contacts.
 // Mirror: cpu_ref/particle_step.gd _contact_delta. All indices are sorted indices.
-// Any pair closer than `spacing` (POWDER_LIQUID_REACH spacings for a grain and a liquid)
-// where at least one side is a powder or a body particle (ADR 0003) is pushed apart,
+// Any pair closer than `spacing` (POWDER_LIQUID_REACH spacings for a grain and a liquid,
+// SOFT_GRAIN_REACH for a grain and a soft body's member) where at least one side is a powder or a body particle (ADR 0003) is pushed apart,
 // mass-weighted by material density (heavy sand sinks through water). Powders also get
 // static/kinetic friction on their relative sideways motion this step. The sum is
 // scaled by contact_relax. It is NOT averaged over the contact count: averaging let
@@ -19,7 +19,8 @@
 // Body particles (cluster solids, ADR 0002) follow the powder rule against grains and against
 // particles of other bodies. Same-body pairs are skipped (shape matching holds a body
 // together, body_match.glsl), except in a soft body, where members further apart in the rest
-// shape than the region radius collide (self_contact, ADR 0005). In a contact with a body, the lower side is heavier by STACK_K
+// shape than the region radius collide (self_contact, ADR 0005), and members of one region are
+// kept from passing each other (keep_order, ADR 0013). In a contact with a body, the lower side is heavier by STACK_K
 // over the height between the body centroids (a grain counts at its own height), on the
 // friction as well as the push-out: with mass-weighted friction a 3-box stack swayed for good
 // (CPU reference, ADR 0002). Body-liquid pairs (ADR 0003) touch at a full spacing and share
@@ -41,6 +42,25 @@ const float POWDER_LIQUID_SHARE = 0.1;
 // on a bed (the dark strip in STATUS). Grains also fall through water more freely, which
 // POWDER_LIQUID_DRAG makes up for. Mirror: SimParams.POWDER_LIQUID_REACH.
 const float POWDER_LIQUID_REACH = 0.6;
+// Contact distance between a grain and a member of a soft body, in spacings (ADR 0013). A soft
+// body's lattice stretches where it lands or lies on a bumpy bed, and at a spacing a grain fitted
+// into a gap of its bottom row that had opened to 2 spacings: a jelly at stiffness 0.2 dropped on
+// a pile ended with sand through its lower rows (body_probe sandjelly: 691 grains inside, 528
+// members under the sand's top beside them). At 1.25 a gap has to open to 2.5 spacings first.
+// Mirror: SimParams.SOFT_GRAIN_REACH.
+const float SOFT_GRAIN_REACH = 1.25;
+// Two members of one region of a soft body are pushed apart along their rest direction (turned
+// by the mean of their region rotations) once they come closer along it than SOFT_ORDER times
+// their rest distance, each by SOFT_ORDER_PUSH of the shortfall (keep_order, ADR 0013). Same-body
+// pairs within the region radius skip the contacts (ADR 0005 item 1), so at low stiffness the
+// upper rows of a landing jelly fell through its bottom row, which the sand stopped, and the strip
+// arrived as loose members that each punched into the pile like a grain. At 0.7 a jelly squashed
+// at rest isn't touched (at 0.5 two jellies stacked read as before); a plain distance floor of
+// 0.8 spacing held soft jellies taller and two at 0.5 leaned 0.16 rad and slid apart, and half
+// the shortfall each made the members where two jellies at 0.2 touch flicker at 30-40 px/s.
+// Mirror: SimParams.SOFT_ORDER, SimParams.SOFT_ORDER_PUSH.
+const float SOFT_ORDER = 0.7;
+const float SOFT_ORDER_PUSH = 0.25;
 
 // Share of a contact's push-out that particle t takes, for rv = p_t - p_j (y down).
 float stack_weight(float m_t, float m_j, float rv_y) {
@@ -120,6 +140,23 @@ bool self_contact(uint t, uint j) {
 	return dot(d, d) > reach * reach;
 }
 
+// Push on member t of a soft body from j, a member of its region (ADR 0013): along their rest
+// direction, turned by the mean of their region rotations (member_rot) so both ends see the same
+// direction and the pair's pushes cancel, SOFT_ORDER_PUSH of how far they are closer along it than
+// SOFT_ORDER times their rest distance; 0 farther apart. Mirror: ParticleStep._keep_order.
+vec2 keep_order(uint t, uint j, uint body) {
+	vec2 q = rest_offset[sorted_ids[t]].xy - rest_offset[sorted_ids[j]].xy;
+	float q_len = length(q);
+	if (q_len < 1e-6) {
+		return vec2(0.0);
+	}
+	vec2 r = member_rot(t, body) + member_rot(j, body);
+	r = dot(r, r) > 1e-6 ? normalize(r) : member_rot(t, body);
+	vec2 n = vec2(r.x * q.x - r.y * q.y, r.y * q.x + r.x * q.y) / q_len;
+	float short_by = SOFT_ORDER * q_len - dot(s_pred[t] - s_pred[j], n);
+	return short_by > 0.0 ? SOFT_ORDER_PUSH * short_by * n : vec2(0.0);
+}
+
 // Height used for STACK_K in a contact with a body: the body's centroid from the last body
 // pass, or the particle's own height when it is in no body.
 float stack_height(uint t, uint body) {
@@ -168,6 +205,9 @@ vec2 contact_delta(uint t, out vec2 body_out, out vec2 body_share, out float reg
 		bool own = t_body != 0u && t_body == j_body;
 		if (own && !self_contact(t, j)) {
 			region_n += 1.0;
+			if (t_soft) {
+				sum += keep_order(t, j, t_body);
+			}
 			continue;  // same body: shape matching
 		}
 		vec2 rv = pt - s_pred[j];
@@ -182,7 +222,8 @@ vec2 contact_delta(uint t, out vec2 body_out, out vec2 body_share, out float reg
 			nearest_d = dist;
 		}
 		bool powder_liquid = (t_liquid && j_powder) || (j_liquid && t_powder);
-		float reach = powder_liquid ? POWDER_LIQUID_REACH * params.spacing : params.spacing;
+		bool soft_grain = (t_soft && j_powder) || (t_powder && j_body != 0u && soft_material(flags_j & MAT_MASK));
+		float reach = (powder_liquid ? POWDER_LIQUID_REACH : (soft_grain ? SOFT_GRAIN_REACH : 1.0)) * params.spacing;
 		if (dist >= reach) continue;
 		n_touch += 1.0;
 

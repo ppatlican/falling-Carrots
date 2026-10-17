@@ -9,7 +9,7 @@
 // rest_offset, and reads only its own, so no member sees another's half-written.
 // Mirror: cpu_ref/particle_step.gd _plastic_outline (the new outline and rest).
 
-// common.glslinc stamp: Params 128 B, v22. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v23. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "plastic.glslinc"
 
