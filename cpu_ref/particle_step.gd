@@ -279,9 +279,10 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 			elif body[i] != 0:
 				delta[i] = _body_pressure_delta(i, pred, mat, body, edge, bodies[body[i]], neighbours[i], phi, hydro_p, dt)
 			elif _cls[i] == MOCHI:
-				# Mochi in liquid (ADR 0018): as a liquid, over its mass, where the grid holds liquid.
+				# Mochi in liquid (ADR 0018): as a liquid, over its mass, where the grid holds liquid, at most
+				# MOCHI_PRESSURE_MAX gravities over its mass (ADR 0019).
 				var gate := smoothstep(0.0, SimParams.MOCHI_WET_FILL, _body_liquid_fill(pred[i], phi))
-				delta[i] = _hydro_delta(pred[i], phi, hydro_p, dt) * (gate / _rho[i]) if gate > 0.0 else Vector2.ZERO
+				delta[i] = mochi_pressure_push(_hydro_delta(pred[i], phi, hydro_p, dt) * gate, _rho[i], dt) if gate > 0.0 else Vector2.ZERO
 			else:
 				delta[i] = Vector2.ZERO
 			if body[i] == 0:  # a body's pushes are clamped once their rigid part is taken
@@ -2545,6 +2546,13 @@ func _mochi_wet_push(i: int, j: int, pred: PackedVector2Array, m: int) -> Vector
 	if size == 0.0:
 		return Vector2.ZERO
 	return size * (rv / r if r > MIN_DIST else pair_dir(rv, r, i, j))
+
+
+## The grid's pressure push d (over water's mass) on a mochi particle of density rho (ADR 0018), over
+## its mass and at most MOCHI_PRESSURE_MAX gravities (g dt^2) over it (ADR 0019): a little over what
+## the water it displaces holds up at rest. Mirror: the mochi branch of solve_pressure.glsl.
+static func mochi_pressure_push(d: Vector2, rho: float, dt: float) -> Vector2:
+	return (d / rho).limit_length(SimParams.MOCHI_PRESSURE_MAX * SimParams.GRAVITY * dt * dt / rho)
 
 
 ## How far liquid particle l is closed in by mochi, 0 to 1: the mochi share of its mochi-and-liquid

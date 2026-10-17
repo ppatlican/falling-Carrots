@@ -217,6 +217,15 @@
 ##   doughbed   the owner's case (ADR 0018): "+10k dough" at frame 1, "+10k water" at frame 240, 1800 frames,
 ##            timed from 120: water inside the dough, the gap between the dough's top and the water over
 ##            it (WET lines every 300 frames and every 60 to frame 600; _dough_wet), the dough at rest
+##   doughsandwich the owner's report (2026-10-17): "+10k dough" at frame 1, "+10k water" at 240, "+10k
+##            dough" at 480 (SANDWICH_AT), 2400 frames: the second dough falls into the water onto the bed;
+##            JIT lines (water faster than 100 px/s, spray: water with nothing within 4 px, air pockets
+##            under the top; for each dough rms displacement per sample, 99th percentile speed, centre and
+##            mean vy; _sample_sandwich), WET lines, JIT1 lines frame by frame over the last 20 frames; a
+##            SANDWICH line: when it calmed down (the second dough's 99th percentile under 15 px/s and
+##            under 50 fast water from then on; PASS within 15 s, ADR 0019) and the means over the 21 s
+##            after the fill; the second dough's jitter over the last 600 frames
+##   doughtwice the same with no water (two "+10k dough"): the lower dough under the upper one's weight
 ##   doughlayer a 30x10 dough on the floor, two "+10k water" poured on it at frames 30 and 60, 1800 frames:
 ##            where the dough ends against the water's surface (with set=dough.density=0.9 it should rise
 ##            and float, at 1.1 stay down), and water inside it
@@ -248,6 +257,8 @@ const SOFT_STACKS := ["stack3", "stack5", "boxstack", "jellystack", "jellydrop"]
 ## Lowest y a body particle's centre reaches: the fixed 0.5-spacing wall inset.
 const FLOOR := 360.0 - 0.5 * SimParams.SPACING
 const X := 320.0
+## doughsandwich: the frame of its second "+10k dough".
+const SANDWICH_AT := 480
 ## Fastest a body counts as at rest (px/s), as in test_bodies.gd.
 const REST_SPEED := 0.5
 ## Body records read back each sample (ids 0..RECORDS-1).
@@ -414,6 +425,7 @@ func _process(_delta: float) -> bool:
 	if frame_i in shots:
 		RenderingServer.call_on_render_thread(_shot_rt.bind(sc.name, frame_i))
 	if frame_i % sc.every == 0 or frame_i == sc.frames or frame_i == sc.get("hold", -1) \
+			or (sc.has("dense") and frame_i >= sc.dense[0] and frame_i <= sc.dense[1]) \
 			or (velocity_trace and sc.name in VTRACE):
 		if frame_i == sc.get("hold", -1):
 			waiting = true
@@ -648,11 +660,11 @@ func _start(name: String) -> void:
 			sc.every = 60
 			sc.from = 300
 			sc.target = _body(_box(Vector2(X, 200.0), 50, 40), jelly)
-		"doughslump", "doughmerge", "doughcut", "doughdrip", "doughcarrot", "doughsticks", "doughwrap", "doughwater", "doughsand", "doughsandlow", "doughcap", "doughhuge", "doughbed", "doughlayer":
+		"doughslump", "doughmerge", "doughcut", "doughdrip", "doughcarrot", "doughsticks", "doughwrap", "doughwater", "doughsand", "doughsandlow", "doughcap", "doughhuge", "doughbed", "doughlayer", "doughsandwich", "doughtwice":
 			sc.frames = {"doughsandlow": 1200, "doughslump": 900, "doughmerge": 600, "doughcut": 900, "doughdrip": 1200, "doughcarrot": 720, "doughwrap": 1200,
 					"doughsticks": 600, "doughwater": 600, "doughsand": 1200, "doughcap": 900, "doughhuge": 900, "doughbed": 1800,
-					"doughlayer": 1800}[name]
-			sc.every = 10 if name in ["doughsand", "doughsandlow", "doughwater", "doughhuge", "doughbed", "doughlayer"] else 5
+					"doughlayer": 1800, "doughsandwich": 2400, "doughtwice": 2400}[name]
+			sc.every = 10 if name in ["doughsand", "doughsandlow", "doughwater", "doughhuge", "doughbed", "doughlayer", "doughsandwich", "doughtwice"] else 5
 			sc.from = 300 if name in ["doughcap", "doughhuge"] else 120
 			sc.late = []
 			sc.trace = []
@@ -692,6 +704,12 @@ func _start(name: String) -> void:
 				"doughbed":
 					sc.blocks = {1: [Vector2(X, 8.0 + 39.0 * sp), 250, 40]}  # "+10k dough", then "+10k water"
 					sc.slots = SimParams.BENCH_BLOCK
+				"doughsandwich", "doughtwice":
+					# "+10k dough", "+10k water", "+10k dough", as main.tscn fills them (doughtwice: no water).
+					sc.blocks = {1: [Vector2(X, 8.0 + 39.0 * sp), 250, 40], SANDWICH_AT: [Vector2(X, 8.0 + 39.0 * sp), 250, 40]}
+					sc.slots = SimParams.BENCH_BLOCK
+					sc.jit = []
+					sc.dense = [sc.frames - 20, sc.frames]  # read back every frame: jitter frame to frame
 				"doughlayer":
 					sc.blocks = {1: [Vector2(X, FLOOR), 30, 10]}
 					sc.slots = 2 * SimParams.BENCH_BLOCK
@@ -856,7 +874,7 @@ func _scenario_brush(brush: Dictionary) -> void:
 		elif sc.name == "doughwater" and frame_i == 1:
 			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": water, "count": BED_COLS * POOL_ROWS, "cols": BED_COLS,
 					"pos": Vector2(1.0, FLOOR - (POOL_ROWS - 1) * SimParams.SPACING)}, true)
-		elif (sc.name == "doughbed" and frame_i == 240) or (sc.name == "doughlayer" and frame_i in [30, 60]):
+		elif (sc.name in ["doughbed", "doughsandwich"] and frame_i == 240) or (sc.name == "doughlayer" and frame_i in [30, 60]):
 			# "+10k water" as main.tscn fills it.
 			var cols := SimParams.BENCH_COLS
 			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": water, "count": SimParams.BENCH_BLOCK, "cols": cols,
@@ -1193,7 +1211,7 @@ func _sample(f: int, b: Dictionary) -> void:
 			_sample_soft(f, bodies)
 		"carrotjelly":
 			_sample_carrot_jelly(f, bodies)
-		"doughslump", "doughmerge", "doughcut", "doughdrip", "doughcarrot", "doughsticks", "doughwrap", "doughwater", "doughsand", "doughsandlow", "doughcap", "doughhuge", "doughbed", "doughlayer":
+		"doughslump", "doughmerge", "doughcut", "doughdrip", "doughcarrot", "doughsticks", "doughwrap", "doughwater", "doughsand", "doughsandlow", "doughcap", "doughhuge", "doughbed", "doughlayer", "doughsandwich", "doughtwice":
 			_sample_dough(f, b, bodies)
 		"many", "big", "huge", "brushcap", "softcap", "softmany":
 			var max_err := 0.0
@@ -1215,11 +1233,12 @@ func _sample(f: int, b: Dictionary) -> void:
 
 ## Live dough particles (body 0, the dough material): { "pos", "vel" } (PackedVector2Arrays).
 func _dough_of(b: Dictionary) -> Dictionary:
-	var out := {"pos": PackedVector2Array(), "vel": PackedVector2Array()}
+	var out := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "slot": PackedInt32Array()}
 	for i in b.mat_flags.size() / 4:
 		var f: int = b.mat_flags.decode_u32(i * 4)
 		if (f & 0x100) == 0 or (f & 0xFF) != dough or (f >> 16) != 0:
 			continue
+		out.slot.append(i)
 		out.pos.append(Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4)))
 		out.vel.append(Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4)))
 	return out
@@ -1288,6 +1307,8 @@ func _sample_dough(f: int, b: Dictionary, bodies: Dictionary) -> void:
 	var n: int = d.pos.size()
 	if n == 0:
 		return
+	if sc.name in ["doughsandwich", "doughtwice"]:
+		_sample_sandwich(f, b, d)
 	var fastest := 0.0
 	var fast_at := Vector2.ZERO
 	var c := Vector2.ZERO
@@ -1351,7 +1372,7 @@ func _sample_dough(f: int, b: Dictionary, bodies: Dictionary) -> void:
 			% [f, n, pc.sizes.size(), big, "" if pc.sizes.size() == 1 else ", next %s" % str(pc.sizes.slice(1, 4)),
 			size.x, size.y, fastest, fast_at.x, fast_at.y, c.x, c.y, extra])
 	var wet := {}
-	if sc.name in ["doughbed", "doughlayer"] and (f % 300 == 0 or f == sc.frames or (f <= 600 and f % 60 == 0)):
+	if sc.name in ["doughbed", "doughlayer", "doughsandwich", "doughtwice"] and (f % 300 == 0 or f == sc.frames or (f <= 600 and f % 60 == 0)):
 		wet = _dough_wet(b, d)
 		print("  WET f=%d water inside %d, under the dough's top %d; gap dough top to water over it median %.2f px, p90 %.2f (%d columns; rest spacing %.1f); dough mean y %.1f top %.1f lowest %.1f; water mean y %.1f surface %.1f"
 				% [f, wet.inside, wet.under, wet.gap_med, wet.gap_p90, wet.cols, SimParams.SPACING, wet.dough_y, wet.dough_top, hi.y,
@@ -1458,6 +1479,37 @@ func _sample_dough(f: int, b: Dictionary, bodies: Dictionary) -> void:
 			_result("doughbed: %d water inside the dough, %d under its top; gap median %.2f px, p90 %.2f; %d piece(s), 99%% under %.2f px/s (last 60; fastest %.2f)"
 					% [wet.inside, wet.under, wet.gap_med, wet.gap_p90, pc.sizes.size(), late, late_max],
 					wet.inside < 50 and wet.gap_med < 2.5 * sp)
+		"doughsandwich", "doughtwice":
+			# The second dough's jitter over the last 600 frames: rms displacement per sample (10 frames)
+			# and the 99th percentile speed, the most of any sample. When it calmed down: the first sample
+			# from which on its 99th percentile stays under 15 px/s and under 50 water particles move
+			# faster than 100 px/s.
+			var rms := 0.0
+			var p99 := 0.0
+			var bounce := 0.0
+			var calm := SANDWICH_AT
+			# Over the overturn, the second fill + 60 to + 1320: mean p99, mean |vy|, mean fast water,
+			# samples, mean spray, mean air pockets.
+			var mid := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+			for j in sc.jit:
+				if j[0] < sc.dense[0] and (j[2] >= 15.0 or j[4] >= 50):
+					calm = j[0] + 10
+				if j[0] > sc.frames - 600:
+					rms = maxf(rms, j[1])
+					p99 = maxf(p99, j[2])
+					bounce = maxf(bounce, absf(j[3]))
+				if j[0] > SANDWICH_AT + 60 and j[0] <= SANDWICH_AT + 1320:
+					mid[0] += j[2]
+					mid[1] += absf(j[3])
+					mid[2] += j[4]
+					mid[3] += 1.0
+					mid[4] += j[5]
+					mid[5] += j[6]
+			print("  SANDWICH calm from f=%d (%.1f s after the second fill); from f=%d to %d, second dough: mean 99%% %.2f px/s, mean |centre vy| %.2f px/s; water over 100 px/s: mean %.1f; spray (water with nothing within 4 px): mean %.1f; air pockets under the top (4 px cells): mean %.1f"
+					% [calm, (calm - SANDWICH_AT) / 60.0, SANDWICH_AT + 60, SANDWICH_AT + 1320, mid[0] / maxf(mid[3], 1.0), mid[1] / maxf(mid[3], 1.0), mid[2] / maxf(mid[3], 1.0), mid[4] / maxf(mid[3], 1.0), mid[5] / maxf(mid[3], 1.0)])
+			_result("%s: calm %.1f s after the second dough; its rms displacement per sample %.3f px, 99%% under %.2f px/s, centre |vy| up to %.2f px/s (most of any sample, last 600 frames); %d water inside the dough, %d piece(s), 99%% under %.2f px/s (all dough, last 60; fastest %.2f)"
+					% [sc.name, (calm - SANDWICH_AT) / 60.0, rms, p99, bounce, wet.inside, pc.sizes.size(), late, late_max],
+					calm <= SANDWICH_AT + 900 and rms < 0.2)
 		"doughlayer":
 			_result("doughlayer: dough mean y %.1f (top %.1f, lowest %.1f), water surface %.1f, floor %.1f; %d water inside, %d piece(s), 99%% under %.2f px/s (last 60; fastest %.2f)"
 					% [wet.dough_y, wet.dough_top, hi.y, wet.surface, FLOOR, wet.inside, pc.sizes.size(), late, late_max], true)
@@ -2338,6 +2390,126 @@ func _water_inside(b: Dictionary, d: Dictionary) -> int:
 		if over and under:
 			water_in += 1
 	return water_in
+
+
+## doughsandwich: the jitter of each dough by slot (the bed: slots live before the second fill), every
+## sample: rms displacement since the last sample, the 99th percentile speed, the centre's height and
+## mean vy. A JIT line every 30 frames from the second fill to frame +300, then every 60.
+func _sample_sandwich(f: int, b: Dictionary, d: Dictionary) -> void:
+	if f < SANDWICH_AT and f > SANDWICH_AT - 20:
+		sc.bed = {}
+		for s in d.slot:
+			sc.bed[s] = true
+	var now := {}
+	for k in d.pos.size():
+		now[d.slot[k]] = k
+	var stats := []
+	for top in [false, true]:
+		var sum2 := 0.0
+		var nd := 0
+		var speeds := PackedFloat32Array()
+		var cy := 0.0
+		var vy := 0.0
+		for k in d.pos.size():
+			if f >= SANDWICH_AT and sc.has("bed") and sc.bed.has(d.slot[k]) == top:
+				continue
+			if f < SANDWICH_AT and top:
+				continue
+			speeds.append(d.vel[k].length())
+			cy += d.pos[k].y
+			vy += d.vel[k].y
+			var prev: Dictionary = sc.get("prev", {})
+			if prev.has(d.slot[k]):
+				sum2 += d.pos[k].distance_squared_to(prev[d.slot[k]])
+				nd += 1
+		if speeds.is_empty():
+			stats.append([0.0, 0.0, 0.0, 0.0, 0])
+			continue
+		speeds.sort()
+		stats.append([sqrt(sum2 / maxi(nd, 1)), speeds[int(0.99 * (speeds.size() - 1))], cy / speeds.size(), vy / speeds.size(), speeds.size()])
+	var prev := {}
+	for k in d.pos.size():
+		prev[d.slot[k]] = d.pos[k]
+	sc.prev = prev
+	# Water thrown about: water particles faster than 100 px/s, and spray: water particles with no
+	# other live particle within 4 px.
+	var fast := 0
+	var occ := {}
+	var wpos := PackedVector2Array()
+	for i in b.mat_flags.size() / 4:
+		var fl: int = b.mat_flags.decode_u32(i * 4)
+		if (fl & 0x100) == 0:
+			continue
+		var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+		var c := Vector2i((p / 4.0).floor())
+		occ[c] = occ.get(c, 0) + 1
+		if (fl & 0xFF) == water:
+			wpos.append(p)
+			if Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4)).length() > 100.0:
+				fast += 1
+	var spray := 0
+	for p in wpos:
+		var c := Vector2i((p / 4.0).floor())
+		var n := 0
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				n += occ.get(c + Vector2i(dx, dy), 0)
+		if n <= 1:
+			spray += 1
+	# Air pockets: empty 4 px cells under the top of the bulk in their column (the first cell that has
+	# particles and particles in the cell under it), down to the floor.
+	var voids := 0
+	for cx in int(SimParams.WORLD_SIZE.x / 4.0):
+		var top := -1
+		for cy in int(SimParams.WORLD_SIZE.y / 4.0):
+			if occ.get(Vector2i(cx, cy), 0) > 0 and occ.get(Vector2i(cx, cy + 1), 0) > 0:
+				top = cy
+				break
+		if top < 0:
+			continue
+		for cy in range(top, int(SimParams.WORLD_SIZE.y / 4.0)):
+			if occ.get(Vector2i(cx, cy), 0) == 0:
+				voids += 1
+	if f > SANDWICH_AT + 30:
+		sc.jit.append([f, stats[1][0], stats[1][1], stats[1][3], fast, spray, voids])
+	var step := 30 if f >= SANDWICH_AT and f <= SANDWICH_AT + 300 else 60
+	if f > sc.dense[0]:
+		# Frame to frame at the end: the dough particles over 5 px/s, and how many of them have water
+		# within the mochi reach.
+		var reach := SimParams.MOCHI_REACH * SimParams.SPACING
+		var cells := {}
+		for i in b.mat_flags.size() / 4:
+			var fl: int = b.mat_flags.decode_u32(i * 4)
+			if (fl & 0x100) != 0 and (fl & 0xFF) == water:
+				var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+				var c := Vector2i((p / reach).floor())
+				if not cells.has(c):
+					cells[c] = PackedVector2Array()
+				cells[c].append(p)
+		var moving := 0
+		var wet := 0
+		var bands := PackedInt32Array()  # moving dough by height over the floor, 10 px bands
+		bands.resize(16)
+		var vxy := Vector2.ZERO
+		for k in d.pos.size():
+			if d.vel[k].length() <= 5.0:
+				continue
+			moving += 1
+			bands[clampi(int((FLOOR - d.pos[k].y) / 10.0), 0, 15)] += 1
+			vxy += d.vel[k].abs()
+			var c := Vector2i((d.pos[k] / reach).floor())
+			var near := false
+			for dy in range(-1, 2):
+				for dx in range(-1, 2):
+					for q in cells.get(c + Vector2i(dx, dy), PackedVector2Array()):
+						near = near or q.distance_to(d.pos[k]) < reach
+			if near:
+				wet += 1
+		print("  JIT1 f=%d bed: rms %.3f px/frame, 99%% %.2f px/s | second: rms %.3f px/frame, 99%% %.2f px/s | dough over 5 px/s: %d, %d of them with water within the reach; by 10 px over the floor %s; mean |vx| %.2f |vy| %.2f"
+				% [f, stats[0][0], stats[0][1], stats[1][0], stats[1][1], moving, wet, str(bands), vxy.x / maxi(moving, 1), vxy.y / maxi(moving, 1)])
+	elif f % step == 0:
+		print("  JIT f=%d fast water %d spray %d voids %d | bed: rms %.3f px/sample, 99%% %.2f px/s, centre y %.1f vy %.2f (%d) | second: rms %.3f, 99%% %.2f px/s, centre y %.1f vy %.2f (%d)"
+				% [f, fast, spray, voids, stats[0][0], stats[0][1], stats[0][2], stats[0][3], stats[0][4], stats[1][0], stats[1][1], stats[1][2], stats[1][3], stats[1][4]])
 
 
 ## Dough and water together (doughbed, doughlayer): water inside the dough (_water_inside) and under

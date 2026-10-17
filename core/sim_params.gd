@@ -120,12 +120,14 @@ const MOCHI_VISC := 1.0
 ## mochi-and-liquid poly6 weight is past MOCHI_ENCLOSED_LO (fully at _HI) is closed in, and trades
 ## MOCHI_EXPEL x mochi_w x enclosure gravities of momentum along gravity with each mochi neighbour, the
 ## liquid up. A mochi particle where the grid holds liquid (MOCHI_WET_FILL, bilinear) takes the grid's
-## pressure push over its density, as a liquid does.
+## pressure push over its density, as a liquid does, at most MOCHI_PRESSURE_MAX gravities over its
+## density a step (ADR 0019).
 const MOCHI_WET_MAX_PAIR := 0.5
 const MOCHI_ENCLOSED_LO := 0.5
 const MOCHI_ENCLOSED_HI := 0.9
 const MOCHI_EXPEL := 60.0
 const MOCHI_WET_FILL := 0.05
+const MOCHI_PRESSURE_MAX := 1.25
 ## Powder sleeping (velocity_update.glsl): a grain the solver stopped that moved slower
 ## than this (px/s) in a step stays put with zero velocity. 0.1 px per 1/60 s step.
 const SLEEP_SPEED := 6.0
