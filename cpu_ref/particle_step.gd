@@ -11,6 +11,7 @@
 ##               bodies: contacts as powders (powder.glslinc), then shape
 ##               matching (body_match.glsl; ADR 0002), and for soft bodies over
 ##               small regions (body_region_fit.glsl, body_region_goal.glsl; ADR 0005)
+##               mochi: a pair push and pull by density, no rest shape (mochi.glslinc; ADR 0017)
 ##   plastic  -> soft bodies with plasticity keep part of their deformation (body_plastic.glsl,
 ##               body_outline.glsl, body_rest.glsl; ADR 0012)
 ##   velocity -> v = (pred - pos) / dt, drag, XSPH, commit   (velocity_*.glsl)
@@ -23,6 +24,8 @@ const SimParams = preload("res://core/sim_params.gd")
 const LIQUID := 0
 const POWDER := 1
 const CLUSTER := 2
+## The mochi class (ADR 0017): MaterialTable.CLASSES' index, after gas (3) and static (4).
+const MOCHI := 5
 ## Below this distance two particles count as coincident (see pair_dir).
 const MIN_DIST := 1e-4
 ## Shape matching keeps a body's last rotation when |A_pq| (the length of the vector its
@@ -65,6 +68,15 @@ var _body_share := Vector2.ZERO
 ## For a member of a soft body held by pair joints, the sum of its joints' errors from _contact_delta
 ## (_joint_error; 0 for anything else): step() moves it by _joint_a of it after the contact clamp.
 var _joint_sum := Vector2.ZERO
+## For a mochi particle, the sum of its mochi pair pushes from _contact_delta (_mochi_push, ADR 0017;
+## 0 for anything else): step() adds it after the contact clamp, as the joints'.
+var _mochi_sum := Vector2.ZERO
+## Per mochi particle, this iteration's mochi density (_mochi_density, ADR 0017; GPU: lambda).
+var _mochi_rho := PackedFloat64Array()
+## The mochi density of a particle on the rest lattice (mochi_rest), and the density a pair's push
+## aims for (mochi_target).
+var _mochi_rest: float
+var _mochi_target: float
 ## This substep's soft-body regions (_find_regions), each particle's region rotation (state
 ## "region_rot") and rest offset, for the contacts and the push-out (ADR 0005 items 4 and 6).
 var _regions: Array = []
@@ -131,6 +143,8 @@ func _init(world: Vector2, material_table) -> void:
 	_poly6_zero = poly6(0.0, h)
 	_poly6_scorr = poly6(0.04 * h * h, h)
 	_spiky_k = -30.0 / (PI * pow(h, 5))
+	_mochi_rest = mochi_rest()
+	_mochi_target = mochi_target()
 	_hsize = hydro_size(world_size)
 	_hcell = hydro_cell_size()
 
@@ -292,11 +306,12 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 		if _cls[i] == LIQUID:
 			contacts[i] = 0
 			for j in nb:
-				if _cls[j] == POWDER or body[j] != 0:
+				if _cls[j] == POWDER or body[j] != 0 or _cls[j] == MOCHI:
 					contacts[i] = 1
 					break
 	_pair_g.resize(_pair_off[n])
 	_pair_w.resize(_pair_off[n])
+	_mochi_rho.resize(n)
 	for _it in iterations:
 		for i in n:
 			if _cls[i] == LIQUID:
@@ -309,9 +324,12 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 				lambda[i] = minf(_lambda(i, pred, mat, neighbours[i], h), 0.0)
 			else:
 				lambda[i] = 0.0
+				if _cls[i] == MOCHI:
+					_mochi_rho[i] = _mochi_density(i, pred, mat, neighbours[i])
 		for i in n:
 			var d := Vector2.ZERO
 			_joint_sum = Vector2.ZERO
+			_mochi_sum = Vector2.ZERO
 			if _cls[i] == LIQUID:
 				d = _liquid_delta(i, pred, mat, lambda, neighbours[i], h, dt)
 			if contacts[i] == 1:
@@ -322,8 +340,9 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 				var scale := delta[i].length() / d.length()
 				pushed[i] += _body_out * scale
 				body_push[i] = _body_share * scale
-			# Pair joints (ADR 0016) after the clamp, which would cut one end's share and not the other's.
-			delta[i] += _joint_a[i] * _joint_sum
+			# Pair joints (ADR 0016) and mochi pairs (ADR 0017) after the clamp, which would cut one
+			# end's share and not the other's.
+			delta[i] += _joint_a[i] * _joint_sum + _mochi_sum
 		_share_pushes_over_regions(delta, body_push)
 		for i in n:
 			pred[i] = _apply_delta(i, pos[i], pred[i] + delta[i], mat[i], body[i] != 0)
@@ -363,7 +382,8 @@ func step(state: Dictionary, dt: float, iterations: int) -> void:
 	for i in n:
 		new_vel[i] = vel[i] + _xsph(i, pred, vel, mat, neighbours[i], h, dt) \
 				+ _powder_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt) \
-				+ (_body_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt) if body[i] != 0 else Vector2.ZERO)
+				+ (_body_liquid_drag(i, pred, vel, mat, neighbours[i], h, dt) if body[i] != 0 or _cls[i] == MOCHI else Vector2.ZERO) \
+				+ _mochi_viscosity(i, pred, vel, mat, neighbours[i], dt)
 		if sticky:
 			new_vel[i] += _stick_pull(i, pred, mat, body, bodies, neighbours[i]) * dt \
 					+ _stick_damp(i, pred, vel, mat, body, bodies, neighbours[i], dt) \
@@ -693,10 +713,11 @@ func _clamp_to_world(p: Vector2, slot: int, in_body: bool) -> Vector2:
 ## Wall clamp. Powders and body particles pressed into a wall get friction. Floor: the
 ## sideways move is cut by their friction coefficient. Side walls: Coulomb, the vertical
 ## move cancelled is at most friction x how far the grain was pressed into the wall
-## (solve_apply.glsl). Without the side-wall part, contacts push wall grains up the wall.
+## (solve_apply.glsl). Without the side-wall part, contacts push wall grains up the wall. Mochi
+## (ADR 0017) too, so a lump doesn't skate on the floor.
 func _apply_delta(i: int, old: Vector2, p: Vector2, m: int, in_body: bool) -> Vector2:
 	var c := _clamp_to_world(p, i, in_body)
-	if _cls[i] == POWDER or in_body:  # step()'s caches: m is particle i's material
+	if _cls[i] == POWDER or _cls[i] == MOCHI or in_body:  # step()'s caches: m is particle i's material
 		var mu: float = _mu[i]
 		if p.y > c.y:
 			c.x = lerpf(c.x, old.x, mu)
@@ -768,12 +789,13 @@ func _find_neighbours(pred: PackedVector2Array, h: float) -> Array:
 
 ## Share of a liquid's density a neighbour of class c counts for when it doesn't move with
 ## the constraint: a grain its solid share (LIQUID_POWDER_SHARE), a body particle 1 (it sits
-## on the rest-spacing lattice, so it fills a water particle's room; ADR 0003). 0 for the rest.
+## on the rest-spacing lattice, so it fills a water particle's room; ADR 0003) and a mochi particle
+## 1 (ADR 0017, likewise). 0 for the rest.
 ## Mirror: displacing_share in liquid.glslinc.
 func _displacing_share(c: int) -> float:
 	if c == POWDER:
 		return SimParams.LIQUID_POWDER_SHARE
-	return 1.0 if c == CLUSTER else 0.0
+	return 1.0 if c == CLUSTER or c == MOCHI else 0.0
 
 
 ## PBF lambda. Liquid neighbours count toward density, grains and body particles at their
@@ -806,7 +828,7 @@ func _lambda(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: Packed
 		_pair_w[off + k] = w
 		var c_j := _cls[j]
 		if c_j != LIQUID:
-			var share := SimParams.LIQUID_POWDER_SHARE if c_j == POWDER else 1.0 if c_j == CLUSTER else 0.0
+			var share := SimParams.LIQUID_POWDER_SHARE if c_j == POWDER else 1.0 if c_j == CLUSTER or c_j == MOCHI else 0.0
 			density += share * w
 			grad_i += share * g / rest_density
 			continue
@@ -831,7 +853,7 @@ func _liquid_delta(i: int, pred: PackedVector2Array, mat: PackedInt32Array, lamb
 		var g := _pair_g[off + k]
 		var c_j := _cls[j]
 		if c_j != LIQUID:
-			d += lambda[i] * (SimParams.LIQUID_POWDER_SHARE if c_j == POWDER else 1.0 if c_j == CLUSTER else 0.0) * g
+			d += lambda[i] * (SimParams.LIQUID_POWDER_SHARE if c_j == POWDER else 1.0 if c_j == CLUSTER or c_j == MOCHI else 0.0) * g
 			continue
 		var w := _pair_w[off + k] / _poly6_scorr
 		d += (lambda[i] + lambda[j] + scorr_k * w * w * w * w) * (2.0 * _rho[j] / (rho_i + _rho[j])) * g
@@ -1714,7 +1736,7 @@ func _hydro_density(pred: PackedVector2Array, mat: PackedInt32Array, body: Packe
 	for i in pred.size():
 		var channel: Vector4
 		var extra := 0.0
-		if body[i] != 0:
+		if body[i] != 0 or _cls[i] == MOCHI:  # mochi counts as a body (ADR 0017)
 			channel = Vector4(0.0, 0.0, 1.0, minf(materials[mat[i]].density, 1.0))
 		elif _cls[i] == LIQUID:
 			channel = Vector4(1.0, 0.0, 0.0, 0.0)
@@ -2199,10 +2221,14 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 	var nearest := -1  # nearest particle of another body within a spacing
 	var nearest_d := SimParams.SPACING
 	var t_liquid: bool = c_i == LIQUID
+	var m_i := mat[i]
 	for j in nb:
 		var c_j := _cls[j]
 		var b_j := body[j]
-		if c_i != POWDER and c_j != POWDER and b_i == 0 and b_j == 0:
+		if c_i == MOCHI and mat[j] == m_i:
+			_mochi_sum += _mochi_push(i, j, pred, m_i)  # one mochi material: its pair rule only
+			continue
+		if c_i != POWDER and c_j != POWDER and b_i == 0 and b_j == 0 and c_i != MOCHI and c_j != MOCHI:
 			continue  # liquid-liquid: the density constraint
 		var own := b_i != 0 and b_i == b_j
 		# same body: shape matching holds it together, except a soft body's self-contacts (_self_contact)
@@ -2241,12 +2267,16 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 		var w_push := w
 		if c_i == POWDER and c_j == POWDER:
 			w_push = rho_j / (rho_i * exp(clampf(SimParams.STACK_K * rv.y, -8.0, 8.0)) + rho_j)  # stack_weight
-		elif not t_liquid and not j_liquid:
+		elif not t_liquid and not j_liquid and not ((c_i == MOCHI or c_j == MOCHI) and b_i == 0 and b_j == 0):
 			# A body (or a grain against one) is heavier by the height of its body's centroid
 			# under the other side's, so a stack of bodies holds; friction gets the same share,
 			# since a stack with mass-weighted friction swayed for good (ADR 0002).
 			var yi: float = bodies[b_i].centroid.y if b_i != 0 else pred[i].y
 			var yj: float = bodies[b_j].centroid.y if b_j != 0 else pred[j].y
+			# Mochi (ADR 0017) takes this as a grain does against a body. Against a grain (or other mochi)
+			# it shares by density: a mochi pull presses a grain between two dough particles, and with
+			# STACK_K their contacts pushed the upper one away more than the lower, so a clump of dough
+			# and sand rose in mid-air at 22 px/s (body_probe doughsand at dough friction 0).
 			w_push = body_stack_weight(rho_i, rho_j, yi - yj, soft_i, _softp[j] == 1)
 			w = w_push
 		sum += w_push * pen * normal
@@ -2286,11 +2316,13 @@ func _contact_delta(i: int, pos: PackedVector2Array, pred: PackedVector2Array, m
 		soft_near = soft_i and _softp[nearest] == 1
 		var r_near := _member_rot(nearest, mat, body, bodies)
 		out = _push_out(pred[i], pred[nearest], edge[nearest], bodies[body[nearest]], r_near)
-		if (soft_near or _joint_a[i] > 0.0 or (c_i == POWDER and _softp[nearest] == 1)) \
+		if (soft_near or _joint_a[i] > 0.0 or c_i == MOCHI or (c_i == POWDER and _softp[nearest] == 1)) \
 				and not in_lattice_cell(pred[i], pred[nearest], r_near):
 			# Outside the soft body: a corner's outline misfires (ADR 0008 item 1), and a grain in a
 			# stretched gap of its bottom row let it dig into sand (ADR 0009). A member of a body held
-			# by pair joints is gated so against a rigid body too (ADR 0016; powder.glslinc).
+			# by pair joints is gated so against a rigid body too (ADR 0016; powder.glslinc), and a mochi
+			# particle (ADR 0017): its pull draws it back to the carrot the push-out moves it off, with no
+			# reaction on the carrot, and a dough holding a carrot crept sideways with it at 0.07-0.18 px/s.
 			out = Vector2.ZERO
 		if body[i] != 0 and out.dot(pred[i] - pred[nearest]) < 0.0:
 			# Past the nearest member's edge row, that pair pushes inward: the outline decides
@@ -2399,12 +2431,104 @@ func _xsph(i: int, pred: PackedVector2Array, vel: PackedVector2Array, mat: Packe
 	return sum * (visc * dt * 60.0 / rest_density)
 
 
+# --- Mochi (ADR 0017; mochi.glslinc) --------------------------------------------------
+
+## Mochi pair weight: a linear hat, 1 - r / R, 0 from R = MOCHI_REACH spacings (Phyzios' kernel,
+## at its proportions: one kernel radius is 4/3 of the rest spacing). Mirror: mochi_w.
+static func mochi_w(r: float) -> float:
+	var reach := SimParams.MOCHI_REACH * SimParams.SPACING
+	return 1.0 - r / reach if r < reach else 0.0
+
+
+## Mochi density of a particle on the rest lattice, itself left out: rho0 (1.0 at MOCHI_REACH 4/3,
+## its four nearest neighbours at 0.25 each). Mirror: mochi_rest in mochi.glslinc.
+static func mochi_rest() -> float:
+	var sum := 0.0
+	for y in range(-2, 3):
+		for x in range(-2, 3):
+			if x != 0 or y != 0:
+				sum += mochi_w(Vector2(x, y).length() * SimParams.SPACING)
+	return sum
+
+
+## Density both ends of a mochi pair aim for: rho0 plus what makes a pair on the rest lattice push
+## by nothing, w(spacing) MOCHI_KS / (2 MOCHI_KE). With rho0 alone (Phyzios' rule) every pair of a
+## block just made pushes, the lattice grows ~7% and a 20 x 12 block spread from 38 px wide to 58
+## in half a second (CPU, ADR 0017). Mirror: mochi_target in mochi.glslinc.
+static func mochi_target() -> float:
+	return mochi_rest() + mochi_w(SimParams.SPACING) * SimParams.MOCHI_KS / (2.0 * SimParams.MOCHI_KE)
+
+
+## Mochi density of particle i: the sum of mochi_w over its neighbours of its own material.
+## Mirror: mochi_density in mochi.glslinc (solve_lambda, into lambda).
+func _mochi_density(i: int, pred: PackedVector2Array, mat: PackedInt32Array, nb: PackedInt32Array) -> float:
+	var rho := 0.0
+	for j in nb:
+		if mat[j] == mat[i]:
+			rho += mochi_w(pred[i].distance_to(pred[j]))
+	return rho
+
+
+## Size (px) of the mochi push between two particles of one mochi material r px apart, with mochi
+## densities rho_i and rho_j: f = (rho_i + rho_j - 2 target) MOCHI_KE + w MOCHI_KS, times the reach
+## (target: mochi_target);
+## > 0 pushes apart, < 0 pulls together, and a pull is scaled by MOCHI_PULL x cohesion (Phyzios'
+## Mochi, with its pull at half). Clamped to MOCHI_MAX_PAIR spacings. Both ends compute it from the
+## same values, so it is the same from both. Mirror: mochi_push in mochi.glslinc.
+static func mochi_push_size(rho_i: float, rho_j: float, r: float, target: float, cohesion: float) -> float:
+	var w := mochi_w(r)
+	if w <= 0.0:
+		return 0.0
+	var f := (rho_i + rho_j - 2.0 * target) * SimParams.MOCHI_KE + w * SimParams.MOCHI_KS
+	if f < 0.0:
+		f *= SimParams.MOCHI_PULL * cohesion
+	var most := SimParams.MOCHI_MAX_PAIR * SimParams.SPACING
+	return clampf(f * SimParams.MOCHI_REACH * SimParams.SPACING, -most, most)
+
+
+## Move of mochi particle i from j, of its own material, this iteration: mochi_push_size along the
+## pair (pair_dir, from j to i), so j's is exactly the opposite and momentum is kept.
+func _mochi_push(i: int, j: int, pred: PackedVector2Array, m: int) -> Vector2:
+	var rv := pred[i] - pred[j]
+	var r := rv.length()
+	var size := mochi_push_size(_mochi_rho[i], _mochi_rho[j], r, _mochi_target, materials[m].cohesion)
+	if size == 0.0:
+		return Vector2.ZERO
+	return size * (rv / r if r > MIN_DIST else pair_dir(rv, r, i, j))
+
+
+## Velocity change of mochi particle i from its viscosity: toward its own-material neighbours'
+## velocities, weighted by mochi_w, by viscosity x MOCHI_VISC per 1/60 s (scaled to dt) over rho0,
+## the pair weights symmetric so momentum is kept, but the whole blend at most 1 (a squeezed
+## particle's weights add up past rho0). 0 for anything else. Mirror: mochi_viscosity.
+func _mochi_viscosity(i: int, pred: PackedVector2Array, vel: PackedVector2Array, mat: PackedInt32Array,
+		nb: PackedInt32Array, dt: float) -> Vector2:
+	if _cls[i] != MOCHI:
+		return Vector2.ZERO
+	var visc: float = materials[mat[i]].viscosity
+	if visc <= 0.0:
+		return Vector2.ZERO
+	var sum := Vector2.ZERO
+	var w_sum := 0.0
+	for j in nb:
+		if mat[j] != mat[i]:
+			continue
+		var w := mochi_w(pred[i].distance_to(pred[j]))
+		sum += (vel[j] - vel[i]) * w
+		w_sum += w
+	var c := visc * SimParams.MOCHI_VISC * dt * 60.0 / _mochi_rest
+	if c * w_sum > 1.0:
+		c = 1.0 / w_sum
+	return sum * c
+
+
 # --- Stickiness (ADR 0011; stick.glslinc) ---------------------------------------------
 
 ## Whether any material has cohesion or adhesion (GPU: Params.sticky, ParticleSim).
 func has_stickiness() -> bool:
 	for m in materials:
-		if materials[m].cohesion > 0.0 or materials[m].adhesion > 0.0:
+		var cohesion: float = materials[m].cohesion if materials[m]["class"] != MOCHI else 0.0  # its pull (ADR 0017)
+		if cohesion > 0.0 or materials[m].adhesion > 0.0:
 			return true
 	return false
 
@@ -2413,7 +2537,8 @@ func has_stickiness() -> bool:
 ## larger adhesion (honey sticks to a carrot whatever the carrot's). Mirror: stick_k.
 func _stick_k(m_i: int, m_j: int) -> float:
 	if m_i == m_j:
-		return materials[m_i].cohesion
+		# A mochi material's cohesion is its pair pull instead (_mochi_push, ADR 0017).
+		return materials[m_i].cohesion if materials[m_i]["class"] != MOCHI else 0.0
 	return maxf(materials[m_i].adhesion, materials[m_j].adhesion)
 
 
@@ -2467,7 +2592,7 @@ func _contact_share(i: int, j: int, pred: PackedVector2Array, mat: PackedInt32Ar
 		return SimParams.POWDER_LIQUID_SHARE if ci == POWDER else 1.0 - SimParams.POWDER_LIQUID_SHARE
 	if ci == POWDER and cj == POWDER:
 		return stack_weight(mi.density, mj.density, pred[i].y - pred[j].y)
-	if ci != LIQUID and cj != LIQUID:
+	if ci != LIQUID and cj != LIQUID and not ((ci == MOCHI or cj == MOCHI) and body[i] == 0 and body[j] == 0):
 		var yi: float = bodies[body[i]].centroid.y if body[i] != 0 else pred[i].y
 		var yj: float = bodies[body[j]].centroid.y if body[j] != 0 else pred[j].y
 		return body_stack_weight(mi.density, mj.density, yi - yj, _soft(i, mat, body), _soft(j, mat, body))

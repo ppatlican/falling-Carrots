@@ -6,7 +6,7 @@
 // winner of each overlapping pixel followed the cell sort, which changes every frame: a
 // settled bed under water flickered between sand and water on ~20% of its pixels.
 
-// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "render.glslinc"
 
@@ -15,7 +15,7 @@ void main() {
 	if (!sorted_particle(t)) {
 		return;
 	}
-	if (s_class(t) == CLASS_POWDER || s_class(t) == CLASS_CLUSTER) {
+	if (s_class(t) == CLASS_POWDER || s_class(t) == CLASS_CLUSTER || s_class(t) == CLASS_MOCHI) {
 		draw_point(s_pred[t], grain_color(s_material(t), sorted_ids[t]));
 	}
 }

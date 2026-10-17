@@ -502,10 +502,12 @@ func update_material(material_table, id: int) -> void:
 		RenderingServer.call_on_render_thread(_update_material_rt.bind(id, row, became_soft))
 
 
-## Keeps _sticky_materials up to date with a material's row.
+## Keeps _sticky_materials up to date with a material's row. A mochi row's cohesion is its mochi pull
+## (mochi.glslinc, ADR 0017), not stickiness, so only its adhesion counts.
 func _note_sticky(material_table, id: int) -> void:
 	var row: Dictionary = material_table.materials[id]
-	if float(row.get("cohesion", 0.0)) > 0.0 or float(row.get("adhesion", 0.0)) > 0.0:
+	var cohesion := float(row.get("cohesion", 0.0)) if row.get("class", "") != "mochi" else 0.0
+	if cohesion > 0.0 or float(row.get("adhesion", 0.0)) > 0.0:
 		_sticky_materials[id] = true
 	else:
 		_sticky_materials.erase(id)

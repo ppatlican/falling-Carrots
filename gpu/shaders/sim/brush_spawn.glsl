@@ -17,7 +17,7 @@
 // from body_spawn[2t + 1].zw, puts the body id into mat_flags and its slot into the body's member range.
 // brush_finalize.glsl then lowers the free count. Mirror: cpu_ref/particle_pool.gd.
 
-// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Closest a new circle-brush particle may be to a live one, in rest spacings.

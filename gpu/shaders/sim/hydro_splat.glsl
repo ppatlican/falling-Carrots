@@ -3,9 +3,10 @@
 
 // Hydro 1/4: each liquid, powder and body particle adds its tent weight to the density sums
 // of the coarse cells around it (hydro_splat in hydro.glslinc); a body particle to its
-// volume and its weight in water; a liquid of density other than 1 also to the mass channel.
+// volume and its weight in water, and a mochi particle as a body's (ADR 0017); a liquid of density
+// other than 1 also to the mass channel.
 
-// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
 
@@ -15,7 +16,7 @@ void main() {
 		return;
 	}
 	uint cls = s_class(t);
-	if (s_body(t) != 0u) {
+	if (s_body(t) != 0u || cls == CLASS_MOCHI) {
 		// Body volume, and its weight in water (ADR 0003).
 		hydro_splat(s_pred[t], 2u, 1.0);
 		hydro_splat(s_pred[t], 3u, min(materials[s_material(t)].phys.x, 1.0));

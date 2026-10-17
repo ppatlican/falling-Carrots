@@ -1,0 +1,110 @@
+// Behaviour class: MOCHI (ADR 0017). A cohesive soft lump with no rest shape, after Phyzios' Mochi:
+// every pair of one mochi material within MOCHI_REACH spacings pushes apart where it is dense and
+// pulls together where it is sparse, so a lump holds together, keeps whatever shape it is left in,
+// stretches into strands that break past the reach, and pieces that touch again merge.
+// Include after common.glslinc and before powder.glslinc (contact_delta calls mochi_push). All
+// indices are sorted indices. Mirror: cpu_ref/particle_step.gd, the Mochi section (mochi_w,
+// mochi_rest, mochi_target, _mochi_density, mochi_push_size, _mochi_push, _mochi_viscosity); the
+// constants are SimParams.MOCHI_*.
+//
+// Per solver iteration: solve_lambda stores each mochi particle's density (the sum of mochi_w over its
+// own-material neighbours) in lambda, which only liquids use otherwise; solve_delta adds the pair
+// pushes (contact_delta) after the contact clamp, as pair joints are. The push is the same size from
+// both ends of a pair (both read the same densities and distance) and along the pair, so the moves
+// are equal and opposite: a lump's momentum is kept, and it can't creep. Velocity: viscosity blends
+// toward the own-material neighbours (velocity_xsph). A mochi particle meets every other material as
+// a grain does (powder.glslinc), sharing the push by density with what isn't soft (body_stack_weight).
+
+const float MOCHI_REACH = 4.0 / 3.0;
+const float MOCHI_KE = 0.1;
+const float MOCHI_KS = 0.2;
+const float MOCHI_PULL = 0.5;
+const float MOCHI_MAX_PAIR = 0.25;
+const float MOCHI_VISC = 1.0;
+
+bool mochi_material(uint m) { return materials[m].info.x == CLASS_MOCHI; }
+
+// Pair weight, a linear hat: 1 - r / R, 0 from R = MOCHI_REACH spacings. Mirror: ParticleStep.mochi_w.
+float mochi_w(float r) {
+	float reach = MOCHI_REACH * params.spacing;
+	return r < reach ? 1.0 - r / reach : 0.0;
+}
+
+// Density of a particle on the rest lattice, itself left out (rho0). Mirror: ParticleStep.mochi_rest.
+float mochi_rest() {
+	float sum = 0.0;
+	for (int y = -2; y <= 2; y++) {
+		for (int x = -2; x <= 2; x++) {
+			if (x != 0 || y != 0) {
+				sum += mochi_w(length(vec2(float(x), float(y))) * params.spacing);
+			}
+		}
+	}
+	return sum;
+}
+
+// Density both ends of a pair aim for: rho0 plus what makes a pair on the rest lattice push by
+// nothing, so a block just made isn't pushed apart. Mirror: ParticleStep.mochi_target.
+float mochi_target() {
+	return mochi_rest() + mochi_w(params.spacing) * MOCHI_KS / (2.0 * MOCHI_KE);
+}
+
+// Mochi density of particle t: mochi_w summed over its own-material neighbours. For solve_lambda.
+// Mirror: ParticleStep._mochi_density.
+float mochi_density(uint t) {
+	uint m = s_material(t);
+	vec2 pt = s_pred[t];
+	float rho = 0.0;
+	FOR_EACH_NEIGHBOUR(t) {
+		uint j = k;
+		if (j == t || s_material(j) != m) continue;
+		rho += mochi_w(length(pt - s_pred[j]));
+	} END_NEIGHBOURS
+	return rho;
+}
+
+// Move of mochi particle t from j, of its own material, this iteration: f = (rho_t + rho_j - 2 target)
+// MOCHI_KE + w MOCHI_KS, times the reach, along the pair (> 0 apart); a pull (f < 0) scaled by MOCHI_PULL
+// x the material's cohesion; clamped to MOCHI_MAX_PAIR spacings. The densities are this iteration's
+// (lambda, solve_lambda). Mirror: ParticleStep.mochi_push_size, _mochi_push.
+vec2 mochi_push(uint t, uint j) {
+	vec2 rv = s_pred[t] - s_pred[j];
+	float r = length(rv);
+	float w = mochi_w(r);
+	if (w <= 0.0) {
+		return vec2(0.0);
+	}
+	float f = (lambda[t] + lambda[j] - 2.0 * mochi_target()) * MOCHI_KE + w * MOCHI_KS;
+	if (f < 0.0) {
+		f *= MOCHI_PULL * materials[s_material(t)].more.y;
+	}
+	float most = MOCHI_MAX_PAIR * params.spacing;
+	return clamp(f * MOCHI_REACH * params.spacing, -most, most) * pair_dir(rv, r, t, j);
+}
+
+// Velocity change of mochi particle t from its viscosity (velocity_xsph): toward its own-material
+// neighbours' velocities, weighted by mochi_w, by viscosity x MOCHI_VISC per 1/60 s (scaled to dt) over
+// rho0, the whole blend at most 1. Mirror: ParticleStep._mochi_viscosity.
+vec2 mochi_viscosity(uint t) {
+	uint m = s_material(t);
+	float visc = materials[m].phys.z;
+	if (visc <= 0.0) {
+		return vec2(0.0);
+	}
+	vec2 pt = s_pred[t];
+	vec2 vt = s_vel[t];
+	vec2 sum = vec2(0.0);
+	float w_sum = 0.0;
+	FOR_EACH_NEIGHBOUR(t) {
+		uint j = k;
+		if (j == t || s_material(j) != m) continue;
+		float w = mochi_w(length(pt - s_pred[j]));
+		sum += (s_vel[j] - vt) * w;
+		w_sum += w;
+	} END_NEIGHBOURS
+	float c = visc * MOCHI_VISC * params.dt * 60.0 / mochi_rest();
+	if (c * w_sum > 1.0) {
+		c = 1.0 / w_sum;
+	}
+	return sum * c;
+}

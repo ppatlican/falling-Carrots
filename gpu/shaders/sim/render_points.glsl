@@ -12,7 +12,7 @@
 // spacings), much of it drew blue, and a bed of 20k sand under a pool looked full of
 // trapped water (owner screenshot, 2026-10-11).
 
-// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "render.glslinc"
 #include "hydro.glslinc"

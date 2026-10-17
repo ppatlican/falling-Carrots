@@ -2,7 +2,7 @@
 #version 450
 
 // Solve 3/3 (per iteration): apply the correction and keep particles in the world.
-// Powders and body particles (ADR 0002) pressed into the floor get floor friction
+// Powders, mochi (ADR 0017) and body particles (ADR 0002) pressed into the floor get floor friction
 // (sideways move cut by friction). Pressed into a side wall they get Coulomb friction
 // along the wall: the vertical move it cancels is at most friction x how far the grain
 // was pressed into the wall.
@@ -17,7 +17,7 @@
 // body draped over another. The region is found as body_region_goal finds it.
 // Mirror: ParticleStep._share_pushes_over_regions.
 
-// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {
@@ -45,7 +45,7 @@ void main() {
 		p += got - n * body_push[t].xy;  // n * its share is its own push
 	}
 	vec2 c = clamp_to_world(p, sorted_ids[t], in_body);
-	if (s_class(t) == CLASS_POWDER || in_body) {
+	if (s_class(t) == CLASS_POWDER || s_class(t) == CLASS_MOCHI || in_body) {
 		float mu = materials[s_material(t)].phys.y;
 		if (p.y > c.y) {
 			c.x = mix(c.x, s_pos[t].x, mu);

@@ -16,8 +16,9 @@ extends RefCounted
 const DEFAULT_PATH := "res://data/materials.json"
 ## Hard cap from the spec. IDs are 0..MAX_MATERIALS-1 and index the GPU table.
 const MAX_MATERIALS := 64
-## Class order defines the class number the shaders see (common.glslinc CLASS_*).
-const CLASSES := ["liquid", "powder", "cluster", "gas", "static"]
+## Class order defines the class number the shaders see (common.glslinc CLASS_*). "mochi" (ADR 0017)
+## came after the rest, so the older numbers stay.
+const CLASSES := ["liquid", "powder", "cluster", "gas", "static", "mochi"]
 
 ## Required numeric columns. Each is [name, min, max]. The ranges of the parameter panel's
 ## columns are its sliders' ends; each end was checked on the GPU probe (ADR 0001 decision 4,
@@ -33,7 +34,8 @@ const NUMBER_FIELDS := [
 	# 50 s, where at 5 they died down (ADR 0007).
 	["drag", 0.0, 5.0],
 	# Stickiness (ADR 0011): a pair's pull at 1 is SimParams.STICK_G x gravity, split by mass.
-	#   cohesion: between particles of one material (in no body, or in different bodies).
+	#   cohesion: between particles of one material (in no body, or in different bodies). On a
+	#   mochi row it is the mochi pull instead (ADR 0017): how hard a sparse pair pulls together.
 	#   adhesion: between different materials (the larger of the two) and toward the walls.
 	["cohesion", 0.0, 1.0],
 	["adhesion", 0.0, 1.0],
@@ -50,7 +52,8 @@ const TEMP_FIELDS := ["ignition_temp", "boil_temp", "melt_temp"]
 ##   with the members whose rest offsets lie within it. 1.5 takes its 8 lattice neighbours (the
 ##   floppiest), 2.0 (H) also the 4 two spacings out. Read only at stiffness < 1.
 ##   plasticity: how much of a soft body's deformation past the yield it keeps, per 1/60 s (ADR
-##   0012): 0 springs back (jelly), 1 keeps all of it at once (dough). Read only at stiffness < 1.
+##   0012): 0 springs back (jelly), 1 keeps all of it at once. Read only at stiffness < 1. (Dough had
+##   it until it became mochi, ADR 0017.)
 const CLUSTER_FIELDS := [
 	["region", 1.5, 2.0],
 	["plasticity", 0.0, 1.0],
@@ -72,18 +75,22 @@ const SOFT_MODELS := ["regions", "joints"]
 ##   back (body_probe wobble, squash) and its members sink into a sand bed.
 ##   liquid density: at most 4 to 1 against water either way, as FleX's two-phase liquid
 ##   (ADR 0010).
+##   mochi: see ADR 0017 Results for the ends.
 const CLASS_RANGES := {
 	"liquid": [["density", 0.5, 2.0], ["drag", 0.1, 5.0]],
 	"cluster": [["drag", 0.5, 5.0], ["stiffness", 0.2, 1.0]],
+	"mochi": [],
 }
 ## Columns the parameter panel shows, per class, in display order (ADR 0007; liquid density,
-## ADR 0010; cohesion and adhesion, ADR 0011). Nothing reads the heat, wind and lifetime columns, so they have no slider.
+## ADR 0010; cohesion and adhesion, ADR 0011; mochi, ADR 0017: viscosity is how slowly it flows,
+## cohesion how hard it holds together). Nothing reads the heat, wind and lifetime columns, so they have no slider.
 const PANEL_FIELDS := {
 	"liquid": ["density", "viscosity", "drag", "cohesion", "adhesion"],
 	"powder": ["density", "friction", "drag", "cohesion", "adhesion"],
 	"cluster": ["density", "friction", "drag", "stiffness", "region", "plasticity", "cohesion", "adhesion"],
 	"gas": [],
 	"static": [],
+	"mochi": ["density", "friction", "viscosity", "drag", "cohesion", "adhesion"],
 }
 
 ## GPU layout: one std430 struct of 5 vec4s per material (see common.glslinc Material).

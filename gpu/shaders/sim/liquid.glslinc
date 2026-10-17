@@ -83,10 +83,10 @@ const float LIQUID_POWDER_SHARE = 0.54;
 
 // Share of a liquid's density a neighbour of class c counts for when it doesn't move with the
 // constraint: a grain its solid share, a body particle 1 (it sits on the rest-spacing lattice,
-// so it fills a water particle's room; ADR 0003), anything else 0.
+// so it fills a water particle's room; ADR 0003) and a mochi particle likewise (ADR 0017), anything else 0.
 // Mirror: ParticleStep._displacing_share.
 float displacing_share(uint c) {
-	return c == CLASS_POWDER ? LIQUID_POWDER_SHARE : (c == CLASS_CLUSTER ? 1.0 : 0.0);
+	return c == CLASS_POWDER ? LIQUID_POWDER_SHARE : (c == CLASS_CLUSTER || c == CLASS_MOCHI ? 1.0 : 0.0);
 }
 
 float liquid_lambda(uint t) {

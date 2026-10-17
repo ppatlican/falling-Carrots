@@ -26,7 +26,7 @@
 // its momentum. Its translation (xy) isn't used.
 // Mirror: cpu_ref/particle_step.gd _match_regions (the fit) and _find_regions.
 
-// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 // Keeps the last rotation when |A_pq| is below this, per unit of the members' weights, in px^2.

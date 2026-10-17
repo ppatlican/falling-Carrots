@@ -7,11 +7,13 @@
 // (solve_apply, ADR 0008).
 // Liquids: density constraint. Everyone: powder contacts. Clamped to half a spacing
 // per iteration for stability. A member of a soft body held by pair joints also moves by its
-// joints' corrections (ADR 0016), outside the clamp. New behaviour classes add their term here.
+// joints' corrections (ADR 0016), and a mochi particle by its mochi pairs (ADR 0017), outside the clamp.
+// New behaviour classes add their term here.
 
-// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "liquid.glslinc"
+#include "mochi.glslinc"
 #include "powder.glslinc"
 
 void main() {
@@ -27,7 +29,8 @@ void main() {
 	vec2 body_share;
 	float region_n;
 	vec2 joint_sum;
-	d += contact_delta(t, body_out, body_share, region_n, joint_sum);
+	vec2 mochi_sum;
+	d += contact_delta(t, body_out, body_share, region_n, joint_sum, mochi_sum);
 	float len = length(d);
 	float max_len = 0.5 * params.spacing;
 	float scale = len > max_len ? max_len / len : 1.0;
@@ -38,6 +41,7 @@ void main() {
 	// What a soft member gets from other soft bodies, in the share each member of its region gets
 	// of it (solve_apply), and its region's size (body_region_fit).
 	body_push[t] = vec4(scale * body_share / region_n, region_n, 0.0);
-	// Pair joints (ADR 0016) after the clamp, which would cut one end's share and not the other's.
-	scratch[t] = d + joint_share(s_material(t)) * joint_sum;
+	// Pair joints (ADR 0016) and mochi pairs (ADR 0017) after the clamp, which would cut one end's
+	// share and not the other's.
+	scratch[t] = d + joint_share(s_material(t)) * joint_sum + mochi_sum;
 }

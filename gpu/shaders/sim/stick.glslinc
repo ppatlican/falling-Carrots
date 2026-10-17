@@ -19,10 +19,11 @@ const float STICK_CAP = 6.0;
 const float STICK_DRAG = 30.0;
 
 // Stickiness coefficient of a pair of materials: cohesion within one material, else the larger
-// adhesion (honey sticks to a carrot whatever the carrot's). Mirror: ParticleStep._stick_k.
+// adhesion (honey sticks to a carrot whatever the carrot's). A mochi material's cohesion is its pair
+// pull instead (mochi_push, ADR 0017). Mirror: ParticleStep._stick_k.
 float stick_k(uint m_t, uint m_j) {
 	if (m_t == m_j) {
-		return materials[m_t].more.y;
+		return materials[m_t].info.x != CLASS_MOCHI ? materials[m_t].more.y : 0.0;
 	}
 	return max(materials[m_t].more.z, materials[m_j].more.z);
 }
@@ -81,9 +82,9 @@ float contact_share(uint t, uint j) {
 	if (ct == CLASS_POWDER && cj == CLASS_POWDER) {
 		return stack_weight(mt.phys.x, mj.phys.x, s_pred[t].y - s_pred[j].y);
 	}
-	if (ct != CLASS_LIQUID && cj != CLASS_LIQUID) {
-		uint bt = s_body(t);
-		uint bj = s_body(j);
+	uint bt = s_body(t);
+	uint bj = s_body(j);
+	if (ct != CLASS_LIQUID && cj != CLASS_LIQUID && !((ct == CLASS_MOCHI || cj == CLASS_MOCHI) && bt == 0u && bj == 0u)) {
 		return body_stack_weight(mt.phys.x, mj.phys.x, stack_height(t, bt) - stack_height(j, bj),
 				bt != 0u && soft_material(s_material(t)), bj != 0u && soft_material(s_material(j)));
 	}

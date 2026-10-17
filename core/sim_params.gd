@@ -99,6 +99,21 @@ const STICK_REACH := 0.4
 const STICK_WALL := 0.75
 const STICK_CAP := 6.0
 const STICK_DRAG := 30.0
+## Mochi (ADR 0017; mochi.glslinc, ParticleStep._mochi_*): a cohesive soft lump with no rest shape,
+## after Phyzios' Mochi. Each pair of one mochi material within MOCHI_REACH spacings (w = 1 - r / R,
+## a linear hat, R = MOCHI_REACH x SPACING) is pushed apart per solver iteration by
+## f = (rho_i + rho_j - 2 rho0) MOCHI_KE + w MOCHI_KS, times R, along the pair (rho the sum of w over
+## a particle's own-material neighbours, rho0 that sum on the rest lattice); a negative f is a pull,
+## scaled by MOCHI_PULL x the material's cohesion. So a pair pulls only while it is sparser than
+## rest, the pull ends at R (a strand breaks there) and comes back on any new touch. Each end
+## moves at most MOCHI_MAX_PAIR spacings per pair, the same from both ends, so the moves stay equal
+## and opposite. MOCHI_VISC scales viscosity's blend toward the own-material neighbours' velocity.
+const MOCHI_REACH := 4.0 / 3.0
+const MOCHI_KE := 0.1
+const MOCHI_KS := 0.2
+const MOCHI_PULL := 0.5
+const MOCHI_MAX_PAIR := 0.25
+const MOCHI_VISC := 1.0
 ## Powder sleeping (velocity_update.glsl): a grain the solver stopped that moved slower
 ## than this (px/s) in a step stays put with zero velocity. 0.1 px per 1/60 s step.
 const SLEEP_SPEED := 6.0

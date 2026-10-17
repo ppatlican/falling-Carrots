@@ -49,8 +49,8 @@ struct Material {
 	vec4 phys;   // density, friction, viscosity, drag
 	vec4 extra;  // wind_coupling, stiffness, conductivity, heat_capacity (later milestones)
 	uvec4 info;  // class, soft_model (MaterialTable.SOFT_MODELS: 0 regions, 1 joints; ADR 0016), unused x2
-	vec4 more;   // region (cluster materials, in spacings; ADR 0005), cohesion, adhesion (ADR 0011),
-	             // plasticity (cluster materials; ADR 0012, plastic.glslinc)
+	vec4 more;   // region (cluster materials, in spacings; ADR 0005), cohesion (a mochi material's pull,
+	             // ADR 0017), adhesion (ADR 0011), plasticity (cluster materials; ADR 0012, plastic.glslinc)
 };
 layout(set = 0, binding = 14, std430) buffer Materials { Material materials[]; };
 
@@ -153,6 +153,8 @@ const uint BODY_SHIFT = 16u;  // mat_flags >> BODY_SHIFT is the body id
 const uint CLASS_LIQUID = 0u;
 const uint CLASS_POWDER = 1u;
 const uint CLASS_CLUSTER = 2u;
+// 3 and 4 are gas and static (MaterialTable.CLASSES), which have no particles yet.
+const uint CLASS_MOCHI = 5u;  // ADR 0017, mochi.glslinc
 
 const uint BRUSH_NONE = 0u;
 const uint BRUSH_CIRCLE = 1u;

@@ -1,7 +1,7 @@
 ## CPU reference: plasticity (ADR 0012). A soft body whose material has plasticity keeps the
 ## shape it is pressed or dropped into (dough), where a jelly springs back, and a resting one
 ## doesn't creep. Jelly with its stiffness and plasticity set here, as the parameter panel does,
-## so the numbers don't follow a shipped dough row, and on regions (ADR 0005) as dough is: the
+## so the numbers don't follow a shipped row, and on regions (ADR 0005) as ADR 0012's dough was (dough is mochi since ADR 0017): the
 ## shipped jelly is on pair joints (ADR 0016), not yet checked with plasticity. 2 substeps, 4 iterations (config.json).
 extends "res://tests/test_case.gd"
 

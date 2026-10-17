@@ -142,7 +142,7 @@
 ##            dropped, 900 frames, timed from 300
 ##   huge     one 125x80 box (10000 particles) dropped, 900 frames, timed from 300
 ## Soft bodies bend (ADR 0005), with the shipped jelly (pair joints, ADR 0016; set=jelly.soft_model=regions
-## runs it on regions, as dough is) or stiff= / region= (below):
+## runs it on regions, as ADR 0012's dough was) or stiff= / region= (below):
 ##   droop    a 24x6 jelly plank laid on two 6x10 carrot pillars 30 px apart (centres; a 20 px gap),
 ##            as test_jelly_plank_bends_over_a_gap, 300 frames: its middle sags over 2 px below the
 ##            columns over the pillars, stays on them (down under 10 px), and rests (every member
@@ -178,6 +178,42 @@
 ##            against its rest height, and the fastest member over the last 60 frames (ADR 0016)
 ##   softcap  one 50x40 jelly (2000 particles, as brushcap) dropped, 900 frames, timed from 300
 ##   softmany 256 8x6 jellies (as many), 1500 frames, timed from 900
+## Dough is mochi (ADR 0017): no body, no rest shape; its particles are block fills of the shipped
+## dough row (set=dough.<column>= for its sliders). Each prints the dough every 60 frames (DOUGH lines:
+## particles, pieces (particles joined by pairs within the mochi reach), the largest, its width and
+## height, the fastest particle, the centre):
+##   doughslump  a 30x20 block set on the floor, 900 frames: it slumps into a mound and holds (no rest
+##            shape to go back to): one piece, lower than made but not a puddle, how fast it still
+##            widens over the last 300 frames, the fastest particle over the last 60 frames, and how fast
+##            its centre moves sideways from frame 600 (creep; the pair rule keeps momentum)
+##   doughmerge a 16x10 block on the floor and a second dropped 40 px onto it at frame 60, 600 frames:
+##            the two merge into one piece and rest
+##   doughcut   a 30x12 block on the floor; from frame 120 a 3 px eraser dragged down its middle (20
+##            frames), then at frame 300 a 30x4 block dropped 30 px onto the cut, 900 frames: two pieces
+##            after the cut, one again once the dropped block lands across both (torn pieces merge)
+##   doughdrip  a 30x6 dough slab laid on two 6x30 carrot pillars 30 px apart (a 20 px gap, 60 px up),
+##            1200 frames: its middle sags into the gap and stretches into a strand; whether and when the
+##            strand tears (pieces), how long it got (the most a piece still on the pillars' tops hangs
+##            below them), no dough inside a carrot, the fastest particle at the end
+##   doughcarrot a 30x12 dough block on the floor, at frame 120 a 16x10 carrot dropped 60 px onto it, 720
+##            frames: the carrot stays on (it isn't pushed out sideways or swallowed), how far it sinks in,
+##            no dough inside it, both at rest at the end
+##   doughsticks a 16x10 carrot on the floor, a 12x8 dough block dropped 20 px onto it at frame 30, 600
+##            frames: how much of the dough touches the carrot and how much reached the floor (more dough
+##            on the carrot with set=dough.adhesion=1), no dough inside the carrot
+##   doughwrap a 10x6 carrot buried in dough (a 30x6 block under it, a 30x10 one dropped over it), 1200
+##            frames: the carrot stays where the dough holds it (how fast it rises or sinks from frame 300;
+##            a pull pressing it between dough particles must not lift it), nothing inside it
+##   doughwater a pool as waterjelly, at frame 120 a 16x10 dough block let go 20 px over the water, 600
+##            frames: it sinks and stays one piece, water particles inside the lump (dough over and under
+##            them within 1.5 px across, up to 12 px away), at rest at the end
+##   doughsand  "+10k sand" at frame 1, at frame 240 a 40x10 dough block let go at y 60 over the pile, 1200
+##            frames: it lands at ~300 px/s and rests, mostly in one piece; dough particles more than 1 px
+##            and 3 spacings under the pile's top as it was before the dough landed (the crater it makes)
+##   doughsandlow the same dough set 2 px over the pile's top (read at frame 239) instead of dropped: it
+##            rests on top (under a twentieth more than 3 spacings under the pile's top)
+##   doughcap   a 50x40 dough block (2000 particles, as softcap) let go, 900 frames, timed from 300
+##   doughhuge  a 250x40 dough block (10000, "+10k dough") let go from the top, 900 frames, timed from 300
 ## stiff=S region=W replace the jelly row's stiffness and region for this run (tuning).
 ## frames=N runs every scenario for N frames instead of its own count (checks over "the last 60
 ## frames" move with it), e.g. to see whether a soft stack that leans over comes to rest.
@@ -240,6 +276,7 @@ var jelly := -1
 var cork := -1
 var sand := -1
 var water := -1
+var dough := -1
 var queue: Array = []
 var sc := {}  # the running scenario
 var frame_i := 0
@@ -335,6 +372,7 @@ func _table():
 	cork = t.id_of("cork")
 	sand = t.id_of("sand")
 	water = t.id_of("water")
+	dough = t.id_of("dough")
 	if jelly_stiff > 0.0:
 		t.materials[jelly].stiffness = jelly_stiff
 	if jelly_region > 0.0:
@@ -604,6 +642,48 @@ func _start(name: String) -> void:
 			sc.every = 60
 			sc.from = 300
 			sc.target = _body(_box(Vector2(X, 200.0), 50, 40), jelly)
+		"doughslump", "doughmerge", "doughcut", "doughdrip", "doughcarrot", "doughsticks", "doughwrap", "doughwater", "doughsand", "doughsandlow", "doughcap", "doughhuge":
+			sc.frames = {"doughsandlow": 1200, "doughslump": 900, "doughmerge": 600, "doughcut": 900, "doughdrip": 1200, "doughcarrot": 720, "doughwrap": 1200,
+					"doughsticks": 600, "doughwater": 600, "doughsand": 1200, "doughcap": 900, "doughhuge": 900}[name]
+			sc.every = 10 if name in ["doughsand", "doughsandlow", "doughwater", "doughhuge"] else 5
+			sc.from = 300 if name in ["doughcap", "doughhuge"] else 120
+			sc.late = []
+			sc.trace = []
+			var sp := SimParams.SPACING
+			match name:
+				"doughslump":
+					sc.blocks = {1: [Vector2(X, FLOOR), 30, 20]}
+				"doughmerge":
+					sc.blocks = {1: [Vector2(X, FLOOR), 16, 10], 60: [Vector2(X, FLOOR - 10.0 * sp - 40.0), 16, 10]}
+				"doughcut":
+					sc.blocks = {1: [Vector2(X, FLOOR), 30, 12], 300: [Vector2(X, FLOOR - 12.0 * sp - 30.0), 30, 4]}
+				"doughdrip":
+					_body(_box(Vector2(X - 15.0, FLOOR), 6, 30), carrot)
+					_body(_box(Vector2(X + 15.0, FLOOR), 6, 30), carrot)
+					sc.pillar_top = FLOOR - 29.0 * sp
+					sc.blocks = {3: [Vector2(X, sc.pillar_top - sp), 30, 6]}
+				"doughcarrot":
+					sc.blocks = {1: [Vector2(X, FLOOR), 30, 12]}
+				"doughsticks":
+					sc.load = _body(_box(Vector2(X, FLOOR), 16, 10), carrot)
+					sc.blocks = {30: [Vector2(X, FLOOR - 10.0 * sp - 20.0), 12, 8]}
+				"doughwrap":
+					sc.load = _body(_box(Vector2(X, FLOOR - 6.0 * sp - 0.5), 10, 6), carrot)
+					sc.blocks = {2: [Vector2(X, FLOOR), 30, 6], 3: [Vector2(X, FLOOR - 12.0 * sp - 0.5), 30, 10]}
+				"doughwater":
+					sc.blocks = {120: [Vector2(X, FLOOR - (POOL_ROWS - 1) * sp - 20.0), 16, 10]}
+					sc.slots = BED_COLS * POOL_ROWS
+				"doughsand", "doughsandlow":
+					sc.blocks = {240: [Vector2(X, 60.0), 40, 10]}
+					sc.slots = SimParams.BENCH_BLOCK
+					if name == "doughsandlow":
+						sc.hold = 239  # read the pile's top under the dough, then set it 2 px over it
+				"doughcap":
+					sc.blocks = {1: [Vector2(X, 200.0), 50, 40]}
+				"doughhuge":
+					sc.blocks = {1: [Vector2(X, 8.0 + 39.0 * sp), 250, 40]}
+			for k in sc.blocks:
+				sc.slots += sc.blocks[k][1] * sc.blocks[k][2]
 		"softmany":
 			sc.frames = 1500
 			sc.every = 60
@@ -752,6 +832,26 @@ func _scenario_brush(brush: Dictionary) -> void:
 		var at := Vector2(X + dx, FLOOR - under * SimParams.SPACING - fall)
 		# An upright rest shape, so _members_inside's box is the body's own.
 		_body(_box(at, 16, 10, tilt), carrot, _box(at, 16, 10))
+	elif sc.name.begins_with("dough"):
+		if sc.blocks.has(frame_i):
+			var blk: Array = sc.blocks[frame_i]
+			var sp := SimParams.SPACING
+			var corner := Vector2(blk[0].x - 0.5 * (blk[1] - 1) * sp, blk[0].y - (blk[2] - 1) * sp)
+			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": dough, "count": blk[1] * blk[2], "cols": blk[1], "pos": corner}, true)
+			if frame_i > 1:
+				sc.made_at = frame_i
+		elif sc.name == "doughwater" and frame_i == 1:
+			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": water, "count": BED_COLS * POOL_ROWS, "cols": BED_COLS,
+					"pos": Vector2(1.0, FLOOR - (POOL_ROWS - 1) * SimParams.SPACING)}, true)
+		elif sc.name.begins_with("doughsand") and frame_i == 1:
+			var cols := SimParams.BENCH_COLS
+			brush.merge({"op": ParticleSim.BRUSH_BLOCK, "material": sand, "count": SimParams.BENCH_BLOCK, "cols": cols,
+					"pos": Vector2((SimParams.WORLD_SIZE.x - cols * SimParams.SPACING) * 0.5, 8.0)}, true)
+		elif sc.name == "doughcarrot" and frame_i == 120:
+			sc.load = _body(_box(Vector2(X, FLOOR - 12.0 * SimParams.SPACING - 60.0), 16, 10), carrot)
+		elif sc.name == "doughcut" and frame_i > 120 and frame_i <= 140:
+			var k: int = frame_i - 121
+			brush.merge({"op": ParticleSim.BRUSH_ERASE, "pos": Vector2(X, FLOOR - 30.0 + 1.6 * k), "radius": 3.0}, true)
 	elif sc.name == "carrotjelly" and frame_i == 60:
 		sc.load = _body(_box(Vector2(X + drop_dx, FLOOR - 10.0 * SimParams.SPACING - 60.0), 16, 10), carrot)
 	elif sc.name == "squash" and frame_i > sc.hold and frame_i <= sc.hold + 5:
@@ -1075,6 +1175,8 @@ func _sample(f: int, b: Dictionary) -> void:
 			_sample_soft(f, bodies)
 		"carrotjelly":
 			_sample_carrot_jelly(f, bodies)
+		"doughslump", "doughmerge", "doughcut", "doughdrip", "doughcarrot", "doughsticks", "doughwrap", "doughwater", "doughsand", "doughsandlow", "doughcap", "doughhuge":
+			_sample_dough(f, b, bodies)
 		"many", "big", "huge", "brushcap", "softcap", "softmany":
 			var max_err := 0.0
 			var max_speed := 0.0
@@ -1091,6 +1193,270 @@ func _sample(f: int, b: Dictionary) -> void:
 						% [sc.name, bodies.size(), max_err, max_speed], bodies.size() == sc.ids.size() and max_err < 0.1)
 	if f == sc.frames:
 		_finish()
+
+
+## Live dough particles (body 0, the dough material): { "pos", "vel" } (PackedVector2Arrays).
+func _dough_of(b: Dictionary) -> Dictionary:
+	var out := {"pos": PackedVector2Array(), "vel": PackedVector2Array()}
+	for i in b.mat_flags.size() / 4:
+		var f: int = b.mat_flags.decode_u32(i * 4)
+		if (f & 0x100) == 0 or (f & 0xFF) != dough or (f >> 16) != 0:
+			continue
+		out.pos.append(Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4)))
+		out.vel.append(Vector2(b.vel.decode_float(i * 8), b.vel.decode_float(i * 8 + 4)))
+	return out
+
+
+## Pieces of a set of points: groups joined by pairs closer than the mochi reach (a pair that pulls).
+## Returns each point's piece (index into the sizes, largest first) and the sizes.
+func _pieces(pos: PackedVector2Array) -> Dictionary:
+	var reach := SimParams.MOCHI_REACH * SimParams.SPACING
+	var parent := PackedInt32Array()
+	parent.resize(pos.size())
+	var cells := {}
+	for i in pos.size():
+		parent[i] = i
+		var c := Vector2i((pos[i] / reach).floor())
+		if not cells.has(c):
+			cells[c] = PackedInt32Array()
+		cells[c].append(i)
+	for i in pos.size():
+		var c := Vector2i((pos[i] / reach).floor())
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				for j in cells.get(c + Vector2i(dx, dy), PackedInt32Array()):
+					if j > i and pos[i].distance_squared_to(pos[j]) < reach * reach:
+						var a := i
+						while parent[a] != a:
+							a = parent[a]
+						var r: int = j
+						while parent[r] != r:
+							r = parent[r]
+						if a != r:
+							parent[maxi(a, r)] = mini(a, r)
+	var count := {}
+	var root := PackedInt32Array()
+	root.resize(pos.size())
+	for i in pos.size():
+		var a := i
+		while parent[a] != a:
+			a = parent[a]
+		root[i] = a
+		count[a] = count.get(a, 0) + 1
+	var roots: Array = count.keys()
+	roots.sort_custom(func(x, y): return count[x] > count[y])
+	var index := {}
+	var sizes := []
+	for k in roots.size():
+		index[roots[k]] = k
+		sizes.append(count[roots[k]])
+	var piece := PackedInt32Array()
+	piece.resize(pos.size())
+	for i in pos.size():
+		piece[i] = index[root[i]]
+	return {"piece": piece, "sizes": sizes}
+
+
+## The dough (mochi, ADR 0017) scenarios: a DOUGH line every 60 frames, each scenario's result at the end.
+func _sample_dough(f: int, b: Dictionary, bodies: Dictionary) -> void:
+	if sc.name.begins_with("doughsand") and f == sc.get("hold", 240):
+		sc.tops = {}  # the pile's top per 4 px column before the dough lands
+		for col in range(0, int(SimParams.WORLD_SIZE.x / 4.0)):
+			sc.tops[col] = _sand_top(b, col * 4.0 + 2.0, 2.0)
+		if sc.name == "doughsandlow":
+			sc.blocks[240][0].y = _sand_top(b, X, 40.0) - 2.0
+			waiting = false
+	var d := _dough_of(b)
+	var n: int = d.pos.size()
+	if n == 0:
+		return
+	var fastest := 0.0
+	var fast_at := Vector2.ZERO
+	var c := Vector2.ZERO
+	for k in n:
+		if d.vel[k].length() > fastest:
+			fastest = d.vel[k].length()
+			fast_at = d.pos[k]
+		c += d.pos[k]
+	c /= n
+	if f > sc.frames - 60:
+		# The 99th percentile: a lump that still creeps (slumps slowly) moves by single particles
+		# hopping past their neighbours, 10-25 px/s for a sample (doughcap), which the fastest reads.
+		var speeds := PackedFloat32Array()
+		for v in d.vel:
+			speeds.append(v.length())
+		speeds.sort()
+		sc.late.append(speeds[mini(n - 1, int(0.99 * n))])
+		sc.late_max = maxf(sc.get("late_max", 0.0), fastest)
+	if f >= 600 and not sc.has("c600"):
+		sc.c600 = c
+		sc.f600 = f
+	var report: bool = f % 60 == 0 or f == sc.frames
+	var hang := 0.0
+	if sc.name == "doughdrip":
+		# The most a piece touching the pillars' tops (within 2 px over them) hangs below them, every sample.
+		var pc := _pieces(d.pos)
+		var on_top := {}
+		var lowest := {}
+		for k in n:
+			var q: int = pc.piece[k]
+			if absf(d.pos[k].y - (sc.pillar_top - SimParams.SPACING)) < 2.0 and absf(absf(d.pos[k].x - X) - 15.0) < 6.0:
+				on_top[q] = true
+			lowest[q] = maxf(lowest.get(q, -INF), d.pos[k].y)
+		for q in on_top:
+			hang = maxf(hang, lowest[q] - sc.pillar_top)
+		sc.max_hang = maxf(sc.get("max_hang", 0.0), hang)
+		if pc.sizes.size() > 1 and not sc.has("torn_at"):
+			sc.torn_at = f
+		sc.most_pieces = maxi(sc.get("most_pieces", 1), pc.sizes.size())
+	if not report:
+		return
+	var pc := _pieces(d.pos)
+	var lo := Vector2(INF, INF)
+	var hi := -lo
+	for k in n:
+		if pc.piece[k] == 0:
+			lo = lo.min(d.pos[k])
+			hi = hi.max(d.pos[k])
+	var big: int = pc.sizes[0]
+	var size := hi - lo
+	sc.trace.append([f, size, c, pc.sizes.size()])
+	var extra := ""
+	if sc.name == "doughdrip":
+		extra = ", hangs %.1f px below the pillars" % hang
+	if sc.has("load") and bodies.has(sc.load):
+		var cf := _fit(bodies[sc.load])
+		extra += ", carrot at (%.2f, %.2f)" % [cf.c.x, cf.c.y]
+		if sc.name == "doughwrap" and f == 300:
+			sc.carrot300 = cf.c
+	print("  DOUGH f=%d n=%d pieces=%d (largest %d%s) w=%.1f h=%.1f fastest=%.2f px/s at (%.1f, %.1f) centre=(%.2f, %.2f)%s"
+			% [f, n, pc.sizes.size(), big, "" if pc.sizes.size() == 1 else ", next %s" % str(pc.sizes.slice(1, 4)),
+			size.x, size.y, fastest, fast_at.x, fast_at.y, c.x, c.y, extra])
+	if f != sc.frames:
+		return
+	var late := 0.0  # the 99th percentile speed, the most over the last 60 frames' samples
+	for v in sc.late:
+		late = maxf(late, v)
+	var late_max: float = sc.get("late_max", 0.0)
+	var sp := SimParams.SPACING
+	var one: bool = big >= n - 2  # one piece, a stray or two allowed
+	match sc.name:
+		"doughslump":
+			var made := Vector2(29.0, 19.0) * sp
+			var w300 := 0.0
+			for t in sc.trace:
+				if t[0] == sc.frames - 300:
+					w300 = t[1].x
+			var widen: float = (size.x - w300) / 5.0
+			var creep: float = absf(c.x - sc.c600.x) / ((f - sc.f600) / 60.0)
+			_result("doughslump: 30x20 (%.0f x %.0f px) -> %.1f x %.1f px, %d piece(s); widens %.2f px/s over the last 300 frames; 99%% under %.2f px/s (last 60; fastest %.2f); centre drifts %.4f px/s from frame 600"
+					% [made.x, made.y, size.x, size.y, pc.sizes.size(), widen, late, late_max, creep],
+					one and size.y < 0.95 * made.y and size.y > 0.35 * made.y and late < 2.0 and creep < 0.05)
+		"doughmerge", "doughcut":
+			var parts := ""
+			for t in sc.trace:
+				parts += " f%d:%d" % [t[0], t[3]]
+			_result("%s: pieces over time%s; at the end %d piece(s), largest %d of %d, 99%% under %.2f px/s (last 60; fastest %.2f)"
+					% [sc.name, parts, pc.sizes.size(), big, n, late, late_max], one and late < 2.0)
+		"doughdrip":
+			var inside := 0
+			for id in bodies:
+				inside += _inside(b, bodies[id], _fit(bodies[id]), dough)
+			_result("doughdrip: hung up to %.1f px below the pillars' tops (%.1f at the end), %s, %d piece(s) at the end (most %d), %d dough inside a carrot, 99%% under %.2f px/s (last 60; fastest %.2f)"
+					% [sc.max_hang, hang, ("torn at frame %d" % sc.torn_at) if sc.has("torn_at") else "never torn", pc.sizes.size(),
+					sc.most_pieces, inside, late, late_max], inside == 0 and late < 5.0)
+		"doughcarrot", "doughsticks":
+			if not bodies.has(sc.load):
+				_result("%s: no carrot" % sc.name, false)
+				return
+			var cb: Dictionary = bodies[sc.load]
+			var fit := _fit(cb)
+			var bottom := -INF
+			for p in cb.pos:
+				bottom = maxf(bottom, p.y)
+			var touching := 0
+			var floor_n := 0
+			for k in n:
+				if d.pos[k].y > FLOOR - 1.0:
+					floor_n += 1
+				for p in cb.pos:
+					if d.pos[k].distance_squared_to(p) < 1.44 * sp * sp:
+						touching += 1
+						break
+			var inside := _inside(b, cb, fit, dough)
+			var carrot_v := _mean_vel(cb).length()
+			if sc.name == "doughcarrot":
+				var top := INF
+				for k in n:
+					if absf(d.pos[k].x - fit.c.x) > 20.0:
+						top = minf(top, d.pos[k].y)  # the dough's top beside the carrot
+				var on: bool = absf(fit.c.x - c.x) < 15.0 and bottom < FLOOR - 2.0 * sp
+				_result("doughcarrot: carrot %s, centre %.1f px right of the dough's, its bottom %.1f px under the dough's top beside it, tilt %.3f rad, %d dough touching it, %d inside it, carrot %.2f px/s, dough 99%% under %.2f px/s (last 60; fastest %.2f)"
+						% ["on" if on else "OFF", fit.c.x - c.x, bottom - top, fit.theta, touching, inside, carrot_v, late, late_max],
+						on and inside == 0 and carrot_v < 1.0 and late < 2.0)
+			else:
+				_result("doughsticks: %d of %d dough particles touching the carrot, %d on the floor, %d inside it, %d piece(s), 99%% under %.2f px/s (last 60; fastest %.2f)"
+						% [touching, n, floor_n, inside, pc.sizes.size(), late, late_max], inside == 0 and late < 2.0)
+		"doughwrap":
+			if not bodies.has(sc.load) or not sc.has("carrot300"):
+				_result("doughwrap: no carrot", false)
+				return
+			var cb: Dictionary = bodies[sc.load]
+			var fit := _fit(cb)
+			var rate: float = (sc.carrot300.y - fit.c.y) / ((f - 300) / 60.0)  # > 0: rising
+			var over := 0
+			for k in n:
+				if d.pos[k].y < fit.c.y - 6.0 and absf(d.pos[k].x - fit.c.x) < 8.0:
+					over += 1
+			var inside := _inside(b, cb, fit, dough)
+			_result("doughwrap: carrot at y %.2f (%.2f at frame 300), rising %.4f px/s from frame 300, %d dough over it, %d inside it, %d piece(s), 99%% under %.2f px/s (last 60; fastest %.2f)"
+					% [fit.c.y, sc.carrot300.y, rate, over, inside, pc.sizes.size(), late, late_max],
+					absf(rate) < 0.05 and inside == 0 and late < 2.0)
+		"doughwater":
+			# Water inside the lump: dough both over and under it within 1.5 px across (water in a dip of
+			# the lump's top isn't inside).
+			var water_in := 0
+			var cells := {}
+			for k in n:
+				var key := Vector2i(floori(d.pos[k].x / 3.0), floori(d.pos[k].y / 3.0))
+				if not cells.has(key):
+					cells[key] = PackedVector2Array()
+				cells[key].append(d.pos[k])
+			for i in b.mat_flags.size() / 4:
+				var fl: int = b.mat_flags.decode_u32(i * 4)
+				if (fl & 0x100) == 0 or (fl & 0xFF) != water:
+					continue
+				var p := Vector2(b.pos.decode_float(i * 8), b.pos.decode_float(i * 8 + 4))
+				var key := Vector2i(floori(p.x / 3.0), floori(p.y / 3.0))
+				var over := false
+				var under := false
+				for dy in range(-4, 5):
+					for dx in range(-1, 2):
+						for q in cells.get(key + Vector2i(dx, dy), PackedVector2Array()):
+							if absf(q.x - p.x) < 1.5:
+								over = over or q.y < p.y - 1.0
+								under = under or q.y > p.y + 1.0
+				if over and under:
+					water_in += 1
+			_result("doughwater: %d piece(s), largest %d of %d, lowest dough at y %.1f (floor %.1f), %d water inside the lump, 99%% under %.2f px/s (last 60; fastest %.2f)"
+					% [pc.sizes.size(), big, n, hi.y, FLOOR, water_in, late, late_max], one and water_in < n / 8 and late < 10.0)
+		"doughsand", "doughsandlow":
+			# Against the pile's top before the dough landed (frame 240): grains splashed onto the dough at
+			# the landing would count as the sand's top beside it.
+			var under := 0
+			var deep := 0
+			for k in n:
+				var top: float = sc.tops.get(int(d.pos[k].x / 4.0), INF)
+				if d.pos[k].y > top + 1.0:
+					under += 1
+				if d.pos[k].y > top + 3.0 * sp:
+					deep += 1
+			_result("%s: %d piece(s), %d of %d dough particles more than 1 px under the pile's top before it landed, %d more than 3 spacings, 99%% under %.2f px/s (last 60; fastest %.2f)"
+					% [sc.name, pc.sizes.size(), under, n, deep, late, late_max],
+					late < 5.0 and (deep < n / 20 if sc.name == "doughsandlow" else big >= 0.9 * n))
+		"doughcap", "doughhuge":
+			_result("%s: %d particles, %d piece(s) (largest %d), %.1f x %.1f px, 99%% under %.2f px/s (last 60; fastest %.2f)"
+					% [sc.name, n, pc.sizes.size(), big, size.x, size.y, late, late_max], late < 10.0)
 
 
 ## The soft body scenarios (ADR 0005).

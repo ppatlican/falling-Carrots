@@ -626,7 +626,7 @@ func test_soft_jelly_rests_on_sand() -> void:
 
 
 ## A lopsided regions soft body doesn't creep sideways (ADR 0014): a jelly on regions (the shipped
-## jelly before ADR 0016; dough still is) at stiffness 0.2 let go turned
+## jelly before ADR 0016, and the dough before it became mochi, ADR 0017) at stiffness 0.2 let go turned
 ## 30 deg rests lopsided on a corner. With every member of a region counted the same in its fit,
 ## members near an edge (smaller regions) counted for more in the goals, which pushed the body as a
 ## whole: with no floor friction to hold it, it glided off (GPU body_probe creep: 1.8 px/s; with

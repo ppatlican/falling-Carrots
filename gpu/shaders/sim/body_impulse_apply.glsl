@@ -8,7 +8,7 @@
 // next pass's body_impulse_count (they all write 0).
 // Mirror: cpu_ref/particle_step.gd _contact_impulses.
 
-// common.glslinc stamp: Params 128 B, v25. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v26. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "impulse.glslinc"
 
