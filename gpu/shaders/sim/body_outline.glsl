@@ -9,7 +9,7 @@
 // index), PLASTIC_INNER for an inner member, for body_rest.
 // Mirror: cpu_ref/particle_step.gd _plastic_outline (the points).
 
-// common.glslinc stamp: Params 128 B, v23. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "plastic.glslinc"
 
@@ -20,13 +20,13 @@ void main() {
 	}
 	uint body = s_body(t);
 	float sp = params.spacing;
-	vec2 q = rest_offset[sorted_ids[t]].xy + body_push[t];
+	vec2 q = rest_offset[sorted_ids[t]].xy + body_push[t].xy;
 	uint count = 0u;
 	vec2 normal = vec2(0.0);
 	FOR_EACH_NEIGHBOUR(t) {
 		uint j = k;
 		if (j == t || s_body(j) != body) continue;
-		vec2 u = q - (rest_offset[sorted_ids[j]].xy + body_push[j]);
+		vec2 u = q - (rest_offset[sorted_ids[j]].xy + body_push[j].xy);
 		float d2 = dot(u, u);
 		if (d2 < 2.25 * sp * sp) {
 			count++;

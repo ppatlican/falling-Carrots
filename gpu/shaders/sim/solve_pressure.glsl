@@ -6,7 +6,7 @@
 // clamped like solve_delta. solve_apply then applies it.
 // Body particles are pushed by the pressure on their wet surface (body_pressure_delta, ADR 0003).
 
-// common.glslinc stamp: Params 128 B, v23. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 #include "hydro.glslinc"
 
@@ -159,7 +159,7 @@ void main() {
 	}
 	vec2 d = vec2(0.0);
 	uint body = s_body(t);
-	body_push[t] = vec2(0.0);  // nothing from other bodies yet this substep (solve_apply, ADR 0008)
+	body_push[t] = vec4(0.0);  // nothing from other bodies yet this substep (solve_apply, ADR 0008)
 	if (body != 0u) {
 		d = body_pressure_delta(t, body);
 	} else if (s_class(t) == CLASS_LIQUID) {

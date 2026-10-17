@@ -35,6 +35,7 @@ const GROUPS := {
 	"test_sunk_jelly_keeps_its_shape": ["bodies-water", "soft"],
 	"test_box_dropped_on_sand_keeps_grains_out": ["sand", "rigid", "quick"],
 	"test_soft_jelly_rests_on_sand": ["sand", "soft"],
+	"test_lopsided_soft_jelly_does_not_creep": ["soft"],
 	"test_box_dropped_on_box_stays_out": ["rigid", "quick"],
 	"test_fast_box_drop_stacks_off_centre": ["rigid"],
 	"test_fast_box_drop_on_plank_stays_on_top": ["rigid"],
@@ -620,6 +621,34 @@ func test_soft_jelly_rests_on_sand() -> void:
 			% [speed, sunk])
 	expect(speed < 2.0 * REST_SPEED, "it rests, every member under %.1f px/s: %.2f" % [2.0 * REST_SPEED, speed])
 	expect(sunk < 2.0 * SimParams.SPACING, "it doesn't dig into the bed, lowest member under 2 spacings below its top: %.2f px" % sunk)
+
+
+## A lopsided soft body doesn't creep sideways (ADR 0014): a jelly at stiffness 0.2 let go turned
+## 30 deg rests lopsided on a corner. With every member of a region counted the same in its fit,
+## members near an edge (smaller regions) counted for more in the goals, which pushed the body as a
+## whole: with no floor friction to hold it, it glided off (GPU body_probe creep: 1.8 px/s; with
+## friction 0.15 px/s). With FastLSM's weights the goals keep its momentum (GPU 0.06 and 0.03).
+## Friction off, so the test sees the push itself, not what friction lets through.
+func test_lopsided_soft_jelly_does_not_creep() -> void:
+	var world := Vector2(80, 60)
+	var sim = _sim(world, {"stiffness": 0.2, "friction": 0.0})
+	var state := {"pos": PackedVector2Array(), "vel": PackedVector2Array(), "material": PackedInt32Array()}
+	var pts := _box(Vector2(40, 20), 16, 10, deg_to_rad(30.0))
+	var lowest := -INF
+	for p in pts:
+		lowest = maxf(lowest, p.y)
+	for i in pts.size():
+		pts[i].y += _floor_y(world) - 1.0 - lowest
+	var id: int = ParticleStep.make_body(state, pts, _jelly)
+	var x0 := 0.0
+	for f in 300:
+		_frame(sim, state)
+		if f == 119:
+			x0 = _fit(state, id).c.x
+	var rate: float = (_fit(state, id).c.x - x0) / 3.0
+	_report("16x10 jelly (stiffness 0.2, no friction) let go turned 30 deg, 300 frames: centroid moved %.3f px/s sideways from 2 s to 5 s, turned %.3f rad"
+			% [rate, _fit(state, id).theta])
+	expect(absf(rate) < 0.3, "it doesn't creep, under 0.3 px/s: %.3f" % rate)
 
 
 ## Body-body push-out (ADR 0003 item 11): without it the dropped box ended inside the other,

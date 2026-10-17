@@ -17,7 +17,7 @@
 // body draped over another. The region is found as body_region_goal finds it.
 // Mirror: ParticleStep._share_pushes_over_regions.
 
-// common.glslinc stamp: Params 128 B, v23. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
+// common.glslinc stamp: Params 128 B, v24. Bump in every .glsl when common.glslinc changes (SPEC 2.7).
 #include "common.glslinc"
 
 void main() {
@@ -39,10 +39,10 @@ void main() {
 			if (s_body(j) != body) continue;
 			vec2 q = rest_offset[sorted_ids[j]].xy - q_t;
 			if (dot(q, q) > reach * reach) continue;
-			got += body_push[j];
+			got += body_push[j].xy;
 			n += 1.0;
 		} END_NEIGHBOURS
-		p += got - n * body_push[t];  // n * its share is its own push
+		p += got - n * body_push[t].xy;  // n * its share is its own push
 	}
 	vec2 c = clamp_to_world(p, sorted_ids[t], in_body);
 	if (s_class(t) == CLASS_POWDER || in_body) {
