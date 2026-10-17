@@ -58,7 +58,39 @@ GPU (`body_probe`, RTX 3080 Ti, `--disable-vsync`; the soft scenarios with `set=
 - **A strip draped over an edge keeps drooping** while gravity bends it past the yield (`fold`, `droop`: up to 0.9 px of rest movement in 2 s at 0.8), until it hangs or lands. Dough-like, but a plank of dough over a gap sags further than a jelly.
 - The GPU's outline sort reads only the hash window: a member whose rest neighbours are stretched more than a window away (extreme elastic stretch) can be sorted as a boundary member for a substep.
 
+## Dough on pair joints (2026-10-17, ADR 0016 Owner's call 2)
+Measured, not switched: the dough row is still on regions. **The code needs nothing for joints.** The three plastic passes (`body_plastic`, `body_outline`, `body_rest`; CPU `_plastic_flow`) don't read `soft_model`: they take the body frame (c, R, c0) that `body_match` writes for every soft body, joints or regions, and joints read their rest vectors from the rest offsets every iteration (ADR 0016 items 1 and 5), so a moved rest shape moves the joints with it.
+
+GPU (`body_probe squash,wobble,sandjelly,waterjelly,jellystack,jellydrop,erasejelly,fold,creep,softcap set=jelly.stiffness=S,jelly.plasticity=1,jelly.soft_model=M`, RTX 3080 Ti, `--disable-vsync`, one run per model and stiffness; 0.8 is the dough row):
+
+| | regions (dough today) | joints |
+|---|---|---|
+| `squash` 0.8: rest shape loaded / unloaded (made 18 px) | 14.5 / 15.0 | 16.0 / 17.5 |
+| `squash` 0.8: height 3 s after the carrot is erased, against unloaded | 12.55 / 13.14 (dent 0.59 px) | 14.86 / 16.37 (dent 1.52 px) |
+| `squash` 0.95: dent kept | 2.22 px (rest 15.0 / 17.5) | 1.76 px (rest 16.2 / 18.0, untouched) |
+| `squash` 0.2 | 0.19 px (both bake in the slump, rest 14.0) | 0.01 px (rest 14.0) |
+| `wobble` 0.8: end height, rest shape (dropped 100 px) | 12.25, 13.8 | 14.06, 15.0 |
+| squeezes or spreads: `squash` 0.8 loaded rest area against made (30 x 18) | -19% (width +0.1 px) | -10% (width +0.5 px) |
+| `creep` (px/s from frame 600) 0.2 / 0.8 / 0.95 | 0.161 / 0.117 / 0.022 | **0.011 / 0.000 / 0.000** |
+| `jellystack`, `jellydrop`: fastest member at the end, 0.2 / 0.8 / 0.95 | 33.5, 31.6 / 11.4, 0.02 / 0.56, 1.05 (4 FAIL) | **≤ 0.033 at all three** (PASS) |
+| rest moved over the last 120 frames (all scenarios but `softcap`, `fold`) | 0 at 0.8 and 0.95; up to 0.54 px at 0.2 | 0, except `waterjelly` 0.30 and `erasejelly` 0.76 at 0.2 |
+| `fold` rest moved (drooping, Known limits) 0.8 | 0.47 px | 0.47 px |
+| `softcap` (2000 members) 0.2: tightest rest pair, rest moved | 0.27 px, 1.43 px | 0.27 px, **9.49 px** |
+| `softcap` 0.8 / 0.95: shape error | 14.3 / 11.7 px | 9.8 / 7.2 px |
+| `sandjelly`: members under the top, grains inside, 0.2 / 0.8 / 0.95 | 6, 277 / 3, 230 / 0, 139 | 1, 354 / 0, 241 / 0, **600** |
+| `erasejelly` 0.8: max shape error (4.5 px mark) | 1.26 px | 4.15 px |
+| `waterjelly` | no water inside at 0.8, 0.95; FAIL at 0.2 (10.5 px/s, 10 water at a sample) | no water inside at 0.8, 0.95; FAIL at 0.2 (7.2 px/s, 8) |
+| cost, `softcap` 0.8 solo, two runs each: frame / `regions` pass / `plastic` | 2.18-2.19 ms / 496-501 / 162-168 µs | **1.89-1.90 ms / 238-244 / 142-149 µs** |
+
+- **Keeps dents: yes, better.** A joints dough keeps a dent 2.6x deeper than a regions one at 0.8 (1.52 against 0.59 px), because it doesn't bake in its own sag first (unloaded rest 17.5 px of 18, regions 15.0): the 0.8 the row picked to keep regions' slump down (Decision 8) leaves joints a near-intact dough to dent. At 0.95 both keep ~2 px; at 0.2 both slump to the same rest shape and a dent doesn't show.
+- **Squeezes, still doesn't spread.** No volume normalisation either way; a joints dough loses half the area (10% against 19%) and widens a little more. The area-keeping option (Known limits) is still the fix.
+- **Creep: gone**, as for jelly (ADR 0016). A regions dough creeps more than regions jelly (0.117 px/s at 0.8; jelly with FastLSM 0.028 at 0.2): the flow bakes each step of the drift into the rest shape.
+- **Stacks: rest.** Every dough-on-dough stack rests on joints; on regions 4 of 6 end with a member over 1 px/s.
+- **Worse on joints:** a 2000-member dough at 0.2 (`softcap`, the intermittent squeeze in Known limits, one run each) went on moving its rest shape (9.5 px in 2 s, regions 1.4); its centroid rests (0.08 px/s). At 0.95 a sand strip has 600 grains inside its outline (regions 139; jelly on joints 28, ADR 0016): its rest shape grew 18 -> 23.9 px tall over the pile's bumps, so the outline is fat, not grains in the body (0 members under the sand's top). `erasejelly` halves are 4.15 px off their shape (joint jelly 4.10, regions 1.26).
+- Not run: `main.tscn` screenshots of a joints dough; 2-3 runs of `softcap` 0.2 (noisy on regions, Known limits); CPU tests (no code changed).
+
 ## Owner's call
+- **Dough on joints?** (2026-10-17, above) Recommended: yes, `"soft_model": "joints"` on the dough row. It keeps dents deeper, doesn't creep, rests in stacks and costs less; the risks are a 2000-member dough at 0.2 (not the row's 0.8) and a fat outline after sand at 0.95. It is a one-line data change, and then ADR 0014 (FastLSM) serves no shipped row.
 - Keep the `dough` row (id 6, stiffness 0.8, plasticity 1) in the toolbar now, or wait for Milestone 7's flour + water?
 - Is a dent that squeezes (no sideways spread) enough for now, or build the area-keeping option above?
 - Play: dough as shipped; jelly with plasticity 0.3 (keeps big dents slowly) and 1; dough at stiffness 0.95 (springier, small dents spring back) and 0.6 (keeps its slump); drop a carrot on dough, erase the carrot; dough strip on sand and in water.
